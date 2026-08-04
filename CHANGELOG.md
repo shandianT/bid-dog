@@ -1,5 +1,12 @@
 # 更新日志
 
+## [0.11.2] - 2026-08-04
+
+### 修复
+
+- 修复旧版标书助手引擎持续占用端口时，新版误连旧接口导致“打开文件”和“打开任务文件夹”失败的问题。
+- 新版使用独立端口，并在连接前校验文件打开能力；缺少能力的旧引擎不会再被当作可用引擎。
+
 ## [0.11.1] - 2026-08-04
 
 ### 新增
@@ -35,5 +42,6 @@
 
 - 修复任务删除、重跑和素材清空操作。
 
+[0.11.2]: https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.11.2
 [0.11.1]: https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.11.1
 [0.11.0]: https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.11.0
