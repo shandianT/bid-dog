@@ -7,7 +7,6 @@
   [![Release](https://img.shields.io/badge/release-v0.11.0-0a63c9)](https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.11.0)
   [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.0/bid-dog_0.11.0_aarch64.dmg)
   [![Windows](https://img.shields.io/badge/Windows-x64-0078D4?logo=windows)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.0/bid-dog_0.11.0_x64-setup.exe)
-  ![Closed source](https://img.shields.io/badge/source-closed-6e6e73)
 </div>
 
 ## 中标狗是什么？
@@ -15,8 +14,6 @@
 中标狗是一款 AI Agent 驱动的标书生成桌面应用。上传招标文件后，它会按照真实投标工作的顺序完成预检、需求分析、评分项梳理、废标风险检查、任务拆分、分章撰写、逐条响应、汇总成册和出件检查，并把过程、问题与产物集中在一个任务工作台中。
 
 它不是“一句话盲目生成整本标书”的写作工具。中标狗会在关键节点向你提问，对缺失资料明确标记，并把投标人名称、报价、资质、签章等高风险内容留给人工确认。
-
-> 本仓库是中标狗的公开产品展示与安装包发布页，不包含产品源代码。中标狗是闭源软件，版权所有。
 
 ## 适合谁用？
 
