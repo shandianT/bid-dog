@@ -4,9 +4,9 @@
   <p><strong>把招标文件交给 AI Agent，从读标、拆解、撰写到 Word 出件，一套流程完成。</strong></p>
   <p>面向投标团队的桌面标书助手 · macOS / Windows</p>
 
-  [![Release](https://img.shields.io/badge/release-v0.11.1-0a63c9)](https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.11.1)
-  [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.1/bid-dog_0.11.1_aarch64.dmg)
-  [![Windows](https://img.shields.io/badge/Windows-x64-0078D4?logo=windows)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.1/bid-dog_0.11.1_x64-setup.exe)
+  [![Release](https://img.shields.io/badge/release-v0.11.2-0a63c9)](https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.11.2)
+  [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.2/bid-dog_0.11.2_aarch64.dmg)
+  [![Windows](https://img.shields.io/badge/Windows-x64-0078D4?logo=windows)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.2/bid-dog_0.11.2_x64-setup.exe)
 </div>
 
 ## 中标狗是什么？
@@ -49,12 +49,12 @@
 
 ## 下载
 
-当前版本：**v0.11.1（预发布版）**
+当前版本：**v0.11.2（预发布版）**
 
 | 系统 | 下载 | 适用环境 |
 |---|---|---|
-| macOS | [下载 Apple Silicon 版 DMG](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.1/bid-dog_0.11.1_aarch64.dmg) | M1 / M2 / M3 / M4 系列 Mac |
-| Windows | [下载 Windows x64 安装程序](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.1/bid-dog_0.11.1_x64-setup.exe) | Windows 10 / 11 64 位 |
+| macOS | [下载 Apple Silicon 版 DMG](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.2/bid-dog_0.11.2_aarch64.dmg) | M1 / M2 / M3 / M4 系列 Mac |
+| Windows | [下载 Windows x64 安装程序](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.11.2/bid-dog_0.11.2_x64-setup.exe) | Windows 10 / 11 64 位 |
 
 安装包暂未进行商业代码签名。macOS 若提示“已损坏”，请按 [Mac 安装说明](docs/Mac安装说明.md) 放行；Windows SmartScreen 提示时选择“更多信息 → 仍要运行”。
 
@@ -87,12 +87,11 @@
 - 涉密材料请先确认组织的数据安全要求。
 - AI 产物必须人工复核，尤其是报价、资质、技术偏离、承诺和签章内容。
 
-## v0.11.1 亮点
+## v0.11.2 亮点
 
-- 桌面端产物一键用系统默认应用打开，不再重复下载副本。
-- 任务完成后可直接打开最终 Word 或整个任务文件夹。
-- 每个文件都显示用途，并按最终交付、检查报告、分析依据和过程稿件分组。
-- 完成消息给出清晰查看顺序，不再堆叠全部文件名。
+- 修复旧版引擎仍在运行时，打开文件或任务文件夹失败的问题。
+- 新版使用独立端口，并校验引擎能力，不再误连旧版接口。
+- 保留产物直达、文件用途说明和清晰分组体验。
 
 完整记录见 [更新日志](CHANGELOG.md)。
 
