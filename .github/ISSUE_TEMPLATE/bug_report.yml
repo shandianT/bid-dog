@@ -1,0 +1,42 @@
+name: 问题反馈
+description: 报告安装、运行或生成功能问题
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 请先删除 API Key、客户名称、报价、证件和其他敏感信息；不要上传完整招标文件或标书。
+  - type: input
+    id: version
+    attributes:
+      label: 中标狗版本
+      placeholder: v0.11.0
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: 操作系统
+      options: [macOS Apple Silicon, Windows 11 x64, Windows 10 x64, 其他]
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: 生成引擎
+      options: [内置演示流程, Claude Code, Codex CLI, 自定义命令, 不确定]
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题现象与复现步骤
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私确认
+      options:
+        - label: 我确认反馈中不包含 API Key、客户机密、个人证件或完整投标文件。
+          required: true
