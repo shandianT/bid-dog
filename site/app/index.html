@@ -40,6 +40,8 @@ aside{background:var(--panel);border-right:1px solid var(--line);padding:14px 12
 .newbtn .nb-t b{font:600 12.5px/1.3 inherit}
 .newbtn .nb-t i{font:400 11px/1.3 inherit;font-style:normal;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lbl{font:500 11px/1 inherit;color:var(--faint);letter-spacing:.07em;padding:2px 6px 6px}
+.lnk{font:500 11px/1 inherit;color:var(--blue);cursor:pointer;letter-spacing:0}
+.lnk:hover{text-decoration:underline}
 .task{display:flex;flex-direction:column;gap:5px;padding:9px 10px;border-radius:var(--r-s);cursor:pointer;transition:background var(--tr)}
 .task:hover{background:var(--hover)}
 .task.on{background:var(--active)}
@@ -394,8 +396,14 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
     <button class="btn gy" style="padding:6px 12px;font-size:12px" onclick="el('filein').click()">+ 文件</button>
     <button class="btn gy" style="padding:6px 12px;font-size:12px" onclick="el('foldin').click()">+ 文件夹</button></div>
   <div id="njList" style="max-height:150px;overflow:auto;border:1px solid var(--line-d);border-radius:10px;padding:8px 10px;font:400 12.5px/1.7 inherit;color:var(--sub)"></div>
-  <div class="lbl">你的要求(选填,会作为生成指令的一部分)</div>
-  <textarea id="njReq" class="f" rows="3" style="resize:vertical;min-height:64px" placeholder="例如:重点展开数据安全章节;报价部分留空;文风稳重…(不填也能生成)"></textarea>
+  <div class="lbl" style="display:flex;align-items:baseline;gap:8px">
+    <span>你的要求(已预填一份专家提示词,可直接改)</span>
+    <span style="flex:1"></span>
+    <span class="lnk" onclick="njReqDefault()">恢复默认</span>
+    <span class="lnk" onclick="el('njReq').value='';el('njReq').focus()">清空</span>
+  </div>
+  <textarea id="njReq" class="f" rows="7" style="resize:vertical;min-height:110px;font:400 12.5px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="不填也能生成"></textarea>
+  <div style="font:400 11.5px/1.6 inherit;color:var(--dim)">这段会原样存成任务里的《你的要求.md》,agent 开工先读它,自检报告里逐条回执。想加什么直接在上面写,比如「重点展开数据安全章节」「报价部分留空」。</div>
   <div id="njMsg" style="font:400 12.5px/1.6 inherit;color:var(--sub);display:none"></div>
   <div style="display:flex;gap:9px;justify-content:flex-end">
     <button class="btn gy" onclick="closeAll()">取消</button>
@@ -471,6 +479,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       <button class="btn" id="qkBtn" onclick="quickS2()">一键接入并测试</button>
     </div>
     <div id="qkModeHint" style="font:400 11.5px/1.6 inherit;color:var(--dim)">标准:用 senseaudio-s2 写正式标书,篇幅与细节更足。识图模型自动挑,不用你操心。</div>
+    <div id="qkNow" style="font:500 11.5px/1.6 inherit;color:var(--sub)"></div>
     <div id="qkMsg" style="font:400 12.5px/1.8 inherit;color:var(--sub);display:none;white-space:pre-line"></div>
   </div>
   <div id="pList"></div>
@@ -1203,10 +1212,32 @@ async function addRef(file){
 /* ---------- 新建任务向导:先放文件(可多选/整文件夹)→ 选填要求 → 点「开始生成」才启动 ---------- */
 const NJ = { items: [], tenderIdx: -1 };            // items: [{file, rel}]
 const DOCLIKE = f => !/\.(png|jpe?g|gif|bmp|tiff?|zip)$/i.test(f);
-function njReset(){ NJ.items = []; NJ.tenderIdx = -1; el('njReq').value=''; const m=el('njMsg'); m.style.display='none'; }
+/* 默认要求:大多数人不知道该写什么,空着写出来的就是四平八稳的通稿。
+   预填一份「投标方案专家」提示词当起点——用户改两句比从零写一段容易得多。
+   只放"怎么写"的要求;章节结构、格式门禁、图片落位、字数核验由技能包和门禁脚本负责,不在这里重复。 */
+const NJ_DEFAULT_REQ = [
+  '# 角色',
+  '你是有 30 年经验的投标方案专家,负责编写本项目的投标技术方案。',
+  '',
+  '# 目标',
+  '产出一份高得分、内容极为详尽的技术方案:整册目标 8—9 万字符,每章不少于 3500 字。',
+  '',
+  '# 写法',
+  '1. 先通读招标文件,把评分办法里的每一个得分点逐条列出来;',
+  '2. 每章开写前,先说明本章覆盖哪些得分点、打算展开到什么程度;',
+  '3. 技术上要有实施方法论、关键技术细节、交付物、风险识别与应对、工作分解(WBS);',
+  '   服务上要有服务流程、SLA 承诺、人员资质与经验、沟通机制、质量保证体系、应急预案;',
+  '4. 评分办法要求承诺函的(如违约承诺、服务期满后的服务承诺),直接写出完整承诺函正文;',
+  '5. 语言专业、严谨、自信、有说服力;',
+  '6. 质量优先于篇幅:宁可把一个点写透,也不要空话、车轱辘话和与项目无关的填充;',
+  '7. 我方身份、产品能力、资质案例一律取自素材库,素材里没有的写〔需补充〕,严禁编造。'
+].join('\n');
+function njReqDefault(){ el('njReq').value = NJ_DEFAULT_REQ; }
+function njReset(){ NJ.items = []; NJ.tenderIdx = -1; njReqDefault(); const m=el('njMsg'); m.style.display='none'; }
 function njOpen(){
   el('ovl').style.display='block'; el('newjob').style.display='flex';
   el('njLater').style.display = S.online ? '' : 'none';          // 演示模式没有"稍后开始"
+  if(!el('njReq').value.trim()) njReqDefault();   // 空着就补默认;用户改过的原样保留
   njRender();
 }
 function njAddFiles(files, isFolder){
@@ -1611,6 +1642,20 @@ async function loadAgent(){
       ? ((a.s2_key_set||a.s2_borrowed) ? ' · ✓ '+(a.s2_model_effective||'')+' · 产真实标书' : ' · 未填 Key,当前跑演示流程')
       : ((a.available||{})[a.kind==='env'?'codex':a.kind] ? ' · ✓ 已就绪' : ''));
     el('engSum').textContent = '生成引擎:' + engName + engReady + '(点开切换/高级设置)';
+    // 快速接入卡片上直说「现在真正会跑的是谁」:不是「自动」就红字点破,
+    // 否则用户在这里选了模式、实际却由别的引擎在跑(SoWork 未登录 → 任务开跑才报错)
+    if(a.kind === 's2'){
+      el('qkNow').textContent = '当前生效:自动 · 生成模型 ' + (a.s2_model_effective || '(默认)');
+      el('qkNow').style.color = 'var(--sub)';
+      const eff = a.s2_model_effective || '';
+      const want = QK_MODES[QK_MODE];
+      if(eff && want && !(eff === want.prefer || want.pick.test(eff)))
+        el('qkNow').textContent += ' —— 与所选「' + want.name + '」不一致,点一下模式按钮即可切过去';
+    }else{
+      el('qkNow').textContent = '⚠ 当前生效的生成引擎是「' + kindName(a.kind) + '」,上面的标准/极速对它不起作用。'
+                              + '粘 Key 点「一键接入并测试」即可切到「自动」。';
+      el('qkNow').style.color = 'var(--warn, #c77b00)';
+    }
     if(a.cmd) el('agCmd').value = a.cmd;
     const pth = a.paths||{};
     const kk = el('agKind').value;
@@ -1633,7 +1678,55 @@ el('qkMode').addEventListener('click', e => {
   QK_MODE = t.dataset.mode;
   [...el('qkMode').children].forEach(c => c.classList.toggle('on', c === t));
   el('qkModeHint').textContent = QK_MODES[QK_MODE].hint;
+  qkApplyMode();          // 点了就算数:已接入过的直接换模型并落盘,不用再点一次按钮
 });
+async function qkApplyMode(){
+  /* 「标准/极速」是设置,不是待提交的表单选项。已经接过 Key 的,点一下立刻生效并写进配置;
+     还没接 Key 的,只提示——绝不能让用户以为选了模式就已经切过去了(旧版就是这里造成
+     「选了极速、实际还在跑上一个引擎」)。 */
+  const m = el('qkMsg'); m.style.display = 'block';
+  let A = null;
+  try{ A = await api('/v1/agent'); }catch(e){ m.textContent = '✗ 没连上本地引擎,模式没能保存'; return; }
+  if(!(A.s2_key_set || A.s2_borrowed)){
+    m.textContent = '已选「' + QK_MODES[QK_MODE].name + '」。粘上 Key 后点「一键接入并测试」才会生效。';
+    return;
+  }
+  m.textContent = '切换到「' + QK_MODES[QK_MODE].name + '」…';
+  try{
+    let models = S.s2Models || [];
+    if(!models.length){ try{ models = (await api('/v1/relay/models')).models || []; }catch(e){} }
+    const gen = qkPick(models, QK_MODE);
+    await api('/v1/agent', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(
+      Object.assign(agentPayload(), {kind:'s2', s2_model: gen, cli_path:''}))});
+    const v = await qkVerify(gen);
+    m.textContent = v.ok ? ('✓ 已切到「' + QK_MODES[QK_MODE].name + '」· 生成模型:' + gen + ' —— 新建任务即生效')
+                         : ('✗ 没切成功:' + v.why);
+    if(v.ok) S.s2Models = models.length ? models : S.s2Models;
+    loadAgent();
+  }catch(e){ m.textContent = '✗ 切换失败:' + (e && e.message || '没连上本地引擎'); }
+}
+async function qkVerify(gen){
+  /* 回读校验:保存接口返回 ok 不等于真的生效(曾经出现过前端显示 ✓、配置里还是上一个引擎)。
+     以引擎回读到的 kind/model 为准,对不上就当失败讲清楚。 */
+  try{
+    const a = await api('/v1/agent');
+    if(a.kind !== 's2') return {ok:false, why:'当前生效的引擎仍是「' + kindName(a.kind) + '」,请在下面「生成引擎」里手动选「自动(默认)」'};
+    if(gen && a.s2_model && a.s2_model !== gen) return {ok:false, why:'模型没写进去(仍是 ' + a.s2_model + ')'};
+    if(!(a.s2_key_set || a.s2_borrowed)) return {ok:false, why:'Key 没保存成功'};
+    return {ok:true};
+  }catch(e){ return {ok:false, why:'读不回引擎状态'}; }
+}
+const KIND_NAME = {mock:'内置演示流程', s2:'自动(默认)', sowork:'SoWork(商汤)', claude:'Claude Code',
+                   codex:'Codex CLI', custom:'自定义命令', env:'环境变量 AGENT_CMD'};
+function kindName(k){ return KIND_NAME[k] || k || '未设置'; }
+function agentPayload(){
+  /* PUT /v1/agent 是整体覆盖写,漏字段等于把用户的高级设置清空——统一在这里取一次 */
+  return {kind: el('agKind').value, mode: el('agMode').value, cmd: el('agCmd').value.trim(),
+          cli_path: el('agCli').value.trim(), env: el('agEnv').value.trim(),
+          login_shell: el('agLogin').checked, sowork_agent: (el('agAgent').value.trim() || 'main'),
+          thinking: el('agThink').value, s2_base_url: el('agS2Base').value.trim(),
+          s2_model: el('agS2Model').value.trim(), s2_key: el('agS2Key').value.trim()};
+}
 function qkPick(models, mode){
   // 先认名字,再认特征,最后兜底第一个——网关里没有指定模型也不至于配不上
   const M = QK_MODES[mode];
@@ -1673,9 +1766,13 @@ async function quickS2(){
     el('agKind').value = 's2'; onKindChange();
     if(key) el('agS2Key').value = key;
     el('agS2Model').value = gen;
+    el('agCli').value = '';                    // 上一个引擎(如 SoWork)的 CLI 路径对「自动」无效,顺手清掉
     if(!el('agS2Base').value.trim() && base) el('agS2Base').value = base;
     await saveAgent(true);
-    lines[1] = '✓ 2/4 生成引擎:' + gen; flush();
+    // 回读校验:保存接口 ok ≠ 真的换过去了。不校验就会出现「界面全是 ✓,跑任务时还在用旧引擎」
+    const v2 = await qkVerify(gen);
+    if(!v2.ok){ lines[1] = '✗ 2/4 生成引擎没绑成功:' + v2.why; flush(); btn.disabled = false; return; }
+    lines[1] = '✓ 2/4 生成引擎:自动 · ' + gen; flush();
 
     lines.push('3/4 配置对话与识图…'); flush();
     if(key){
@@ -1697,13 +1794,11 @@ async function quickS2(){
   btn.disabled = false;
 }
 async function saveAgent(quiet){
-  if(!S.online){ pmsg('本地引擎未连接'); return; }
+  // 没连上引擎时必须抛错:静默 return 会让调用方(快速接入)以为存好了,配置里却还是上一个引擎
+  if(!S.online){ if(!quiet) pmsg('本地引擎未连接'); throw new Error('本地引擎未连接,设置没能保存'); }
   const kind = el('agKind').value;
   const mode = el('agMode').value;
-  await api('/v1/agent',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    kind, mode, cmd:el('agCmd').value.trim(), cli_path:el('agCli').value.trim(), env:el('agEnv').value.trim(),
-    login_shell:el('agLogin').checked, sowork_agent:(el('agAgent').value.trim()||'main'), thinking:el('agThink').value,
-    s2_base_url:el('agS2Base').value.trim(), s2_model:el('agS2Model').value.trim(), s2_key:el('agS2Key').value.trim()})});
+  await api('/v1/agent',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(agentPayload())});
   if(quiet) return;
   el('agMsg').textContent = '✓ 已保存:'+({mock:'内置演示流程',s2:'自动',sowork:'SoWork(商汤)',claude:'Claude Code',codex:'Codex CLI',custom:'自定义命令'}[kind])
     +' · '+(mode==='workflow'?'Workflow 并行':'多子 agent 逐步')+' —— 新建任务即生效';

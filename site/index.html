@@ -59,7 +59,12 @@ h1 .gr{background:linear-gradient(100deg,var(--brand) 10%,var(--brand2) 55%,#c9b
 .hsub{color:var(--sub);font-size:clamp(15px,1.7vw,18px);max-width:640px;margin:22px auto 32px;line-height:1.7}
 .hbtns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
 .cta.big{padding:14px 26px;font-size:15px;border-radius:13px}
+/* 下载按钮副标题:直接告诉用户点下去拿到的是哪个包 */
+.cta.big{flex-direction:column;gap:2px;line-height:1.25}
+.dls{font-style:normal;font-weight:500;font-size:11.5px;opacity:.72;letter-spacing:.2px}
+.cta.p .dls{opacity:.85}
 .trust{margin-top:16px;font-size:12.5px;color:var(--dim)}
+.trust a{text-decoration:underline;text-underline-offset:2px}
 
 /* ---------- 演示窗口 ---------- */
 .stage{margin-top:52px;position:relative}
@@ -278,15 +283,16 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 
 <main>
 <div class="hero"><div class="wrap">
-  <div class="badge"><i></i>v0.16.0 · 粘一串 Key 全配好 · 实时进度反馈 · 成品质检门禁(图片按锚点校正·字数·查重·覆盖率) · 发 Key 即用 S2 模型</div>
+  <div class="badge"><i></i><span id="relVer">v0.16.0</span> · 粘一串 Key 全配好 · 要求已预填专家提示词 · 实时进度反馈 · 成品质检门禁(图片按锚点校正·字数·查重·覆盖率) · 发 Key 即用 S2 模型</div>
   <h1>把招标文件交给它,<br>你只做<span class="gr">确认</span></h1>
   <p class="hsub">在你自己的电脑上,一份招标文件变成可交付的投标文件:预检 → 评分点与废标项 → 分章撰写 → 出 Word。写得快是基本功,<b style="color:var(--ink)">敢交出去</b>才是本事。</p>
   <div class="hbtns" id="get">
-    <a class="cta p big" href="https://github.com/shandianT/bid-dog/releases/latest" target="_blank">下载 macOS 版</a>
-    <a class="cta g big" href="https://github.com/shandianT/bid-dog/releases/latest" target="_blank">下载 Windows 版</a>
+    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.16.0/bid-dog_0.16.0_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片 · dmg</em></a>
+    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.16.0/bid-dog_0.16.0_x64-setup.exe">下载 Windows 版<em class="dls">64 位 · exe</em></a>
     <a class="cta g big" href="app/index.html?demo=1">在线体验(不用装)</a>
   </div>
-  <div class="trust">安装即用 · 内置演示模式,不填任何配置也能完整体验 · 数据全程留在本机</div>
+  <div class="trust">安装即用 · 内置演示模式,不填任何配置也能完整体验 · 数据全程留在本机 ·
+    <a href="https://github.com/shandianT/bid-dog/releases" target="_blank" rel="noopener" style="color:inherit">全部版本</a></div>
 </div></div>
 
 <!-- ============ 自动播放的产品演示 ============ -->
@@ -422,8 +428,8 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   <h2 style="margin-top:0">下一册标书,试试只做确认</h2>
   <p class="lead center" style="margin:0 auto 26px">安装即用 · 内置演示 · 数据不出你的电脑</p>
   <div class="hbtns">
-    <a class="cta p big" href="https://github.com/shandianT/bid-dog/releases/latest" target="_blank">下载 macOS 版</a>
-    <a class="cta g big" href="https://github.com/shandianT/bid-dog/releases/latest" target="_blank">下载 Windows 版</a>
+    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.16.0/bid-dog_0.16.0_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片 · dmg</em></a>
+    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.16.0/bid-dog_0.16.0_x64-setup.exe">下载 Windows 版<em class="dls">64 位 · exe</em></a>
     <a class="cta g big" href="app/index.html?demo=1">在线体验</a>
   </div>
 </div></div></section>
@@ -435,6 +441,43 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 </div></footer>
 
 <script>
+/* ========== 下载:按访客系统排序 + 自动指向最新安装包 ==========
+   href 在 HTML 里写死为当前已发布版本的直链,禁用脚本/接口不通也能正常下载;
+   JS 只做两件加分的事:①把访客系统的包排到第一 ②问一次 Releases 接口,有更新版就换掉链接
+   (这样发新版只要 CI 跑完,官网自己就跟上了,不用再改这个文件) */
+(function(){
+  const ua = navigator.userAgent;
+  const win = /Windows|Win64|WOW64/i.test(ua);
+  const mac = /Mac OS X|Macintosh/i.test(ua) && !/iPhone|iPad/i.test(ua);
+  if(win || mac) document.querySelectorAll('.hbtns').forEach(box => {
+    const m = box.querySelector('.dl-mac'), w = box.querySelector('.dl-win');
+    if(!m || !w) return;
+    const first = win ? w : m, second = win ? m : w;
+    first.classList.remove('g'); first.classList.add('p');
+    second.classList.remove('p'); second.classList.add('g');
+    box.insertBefore(first, box.firstChild);
+    first.after(second);
+  });
+
+  fetch('https://api.github.com/repos/shandianT/bid-dog/releases?per_page=5')
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(list => {
+      const rel = (list || []).find(x => x && !x.draft && (x.assets || []).length);
+      if(!rel) return;
+      const pick = re => (rel.assets.find(a => re.test(a.name)) || {}).browser_download_url;
+      const dmg = pick(/\.dmg$/i), exe = pick(/\.exe$/i);
+      const ver = (rel.tag_name || '').replace(/^desktop-v?/, '');
+      document.querySelectorAll('.dl-mac').forEach(a => { if(dmg) a.href = dmg; });
+      document.querySelectorAll('.dl-win').forEach(a => { if(exe) a.href = exe; });
+      if(ver){
+        document.querySelectorAll('.dl-mac .dls').forEach(e => e.textContent = 'Apple 芯片 · dmg · v' + ver);
+        document.querySelectorAll('.dl-win .dls').forEach(e => e.textContent = '64 位 · exe · v' + ver);
+        const vb = document.getElementById('relVer'); if(vb) vb.textContent = 'v' + ver;
+      }
+    })
+    .catch(() => {});      // 接口不通/限流:静默,保留 HTML 里写死的直链
+})();
+
 /* ========== 滚动进场 ========== */
 const io = new IntersectionObserver(es => es.forEach(e => { if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } }), {threshold:.12});
 document.querySelectorAll('.rv').forEach((el,i) => { el.style.transitionDelay = (i%3)*70 + 'ms'; io.observe(el); });

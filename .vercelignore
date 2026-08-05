@@ -1,0 +1,11 @@
+# 站点只需要 site/ —— 其余目录不用上传到 Vercel(构建更快、体积更小)
+app/
+server/
+deploy/
+docs/
+design/
+playbook/
+.github/
+*.zip
+BUILD.md
+CHANGELOG.md

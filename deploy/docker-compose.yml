@@ -1,0 +1,18 @@
+services:
+  bid-assistant:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: bid-assistant-web:0.9.3
+    restart: unless-stopped
+    ports:
+      - "8080:8080"          # 生产建议只绑本机 "127.0.0.1:8080:8080",由 Caddy/Nginx 接 HTTPS
+    environment:
+      BID_PASSWORD: "${BID_PASSWORD:?请先设置访问口令,例如 export BID_PASSWORD=你的口令}"
+      BID_MULTIUSER: "1"     # 每位访客独立工作区,互不可见
+      # BID_ALLOW_AGENT_CONFIG: "1"   # 仅内网可信环境才开:允许网页端改生成引擎命令
+    volumes:
+      - bid-data:/data       # 任务、素材库、配置持久化
+
+volumes:
+  bid-data:

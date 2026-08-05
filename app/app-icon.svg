@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1274e0"/><stop offset="1" stop-color="#0a55aa"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <g fill="#ffffff">
+    <!-- 立耳:头顶偏内,圆角三角,柴犬感 -->
+    <path d="M 344 332 L 322 172 Q 318 140 350 152 L 472 218 Q 430 252 344 332 Z"/>
+    <path d="M 680 332 L 702 172 Q 706 140 674 152 L 552 218 Q 594 252 680 332 Z"/>
+    <!-- 脸:略宽椭圆 -->
+    <ellipse cx="512" cy="490" rx="270" ry="250"/>
+  </g>
+  <!-- 五官 -->
+  <g fill="#0a55aa">
+    <circle cx="418" cy="448" r="32"/>
+    <circle cx="606" cy="448" r="32"/>
+    <ellipse cx="512" cy="560" rx="50" ry="38"/>
+  </g>
+  <!-- 吐舌:狗的身份证 -->
+  <path d="M 512 596 L 512 640 Q 512 706 470 706 Q 442 706 442 676 Q 442 662 452 654" fill="none"/>
+  <path d="M 456 618 Q 456 700 512 700 Q 568 700 568 618 Q 540 636 512 636 Q 484 636 456 618 Z" fill="#ff8da1"/>
+  <!-- 中标印章:右下角绿章 + 对勾 -->
+  <g>
+    <circle cx="768" cy="752" r="148" fill="#23a55a" stroke="#ffffff" stroke-width="26"/>
+    <path d="M 700 752 L 750 806 L 840 692" stroke="#ffffff" stroke-width="42" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -1,0 +1,23 @@
+node_modules/
+app/src-tauri/target/
+app/src-tauri/gen/
+__pycache__/
+*.pyc
+.DS_Store
+dist/
+build/
+*.spec
+app/src-tauri/binaries/
+server/dist/
+server/build/
+# 合并/编辑残留,别混进公开仓库
+*.orig
+# 本机环境与虚拟环境
+.env
+.venv/
+# 定制发包用的预置配置:可能带客户 Key,公开仓库严禁携带
+preset_config.json
+# 本地开发的 agent 权限白名单,不是产品的一部分
+server/agent_settings.json
+# Vercel 本地链接目录
+.vercel/

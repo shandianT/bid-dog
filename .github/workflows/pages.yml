@@ -1,0 +1,47 @@
+name: deploy-site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个上线任务;不打断正在进行的部署
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: configure pages
+        uses: actions/configure-pages@v5
+        with:
+          # enablement 需要比 GITHUB_TOKEN 更高的权限:
+          # 配了 PAGES_PAT(repo scope)就全自动开启 Pages;
+          # 没配就回落到 GITHUB_TOKEN —— 此时需先在
+          # Settings → Pages → Source 手动选一次 "GitHub Actions"
+          token: ${{ secrets.PAGES_PAT || github.token }}
+          enablement: true
+
+      - name: upload site/
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

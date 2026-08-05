@@ -7,8 +7,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
-// v0.10.x 的旧引擎可能在退出异常后长期占用 8848；新端口避免新版误连旧接口。
-const ENGINE_PORT: u16 = 8849;
+// 应用自带引擎用专属端口:8080 上若有旧版/手动引擎也绝不会被误用
+const ENGINE_PORT: u16 = 8848;
 
 fn port_busy(port: u16) -> bool {
     TcpStream::connect_timeout(
@@ -20,12 +20,7 @@ fn port_busy(port: u16) -> bool {
 
 fn data_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    let docs = PathBuf::from(home).join("Documents");
-    let dir = docs.join("中标狗");
-    let old = docs.join("标书助手");
-    if !dir.exists() && old.exists() {
-        let _ = fs::rename(&old, &dir);
-    }
+    let dir = PathBuf::from(home).join("Documents").join("标书助手");
     fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }

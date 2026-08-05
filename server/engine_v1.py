@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTM
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-ENGINE_VERSION = '0.16.0'
+ENGINE_VERSION = '0.17.0'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
@@ -200,12 +200,15 @@ def _mock_agent(job):
 
 DELIVER_EXT = ('.md', '.docx', '.xlsx', '.pdf')
 
+NOT_DELIVERABLE = ('你的要求.md',)   # 输入件,不是产出:算进交付物会让「跑完却没产出」的告警失灵
+
 def list_deliverables(job):
     meta = read_json(os.path.join(job, '任务.json'), {})
     tender = meta.get('tender', '')
     out = []
     for fn in sorted(os.listdir(job)):
-        if fn.endswith(DELIVER_EXT) and not fn.startswith(('_', '.')) and fn != tender:
+        if fn.endswith(DELIVER_EXT) and not fn.startswith(('_', '.')) \
+                and fn != tender and fn not in NOT_DELIVERABLE:
             out.append(fn)
     return out
 
@@ -772,6 +775,23 @@ def real_agent(job, cmd):
                                '等套餐额度窗口重置后点「重跑本任务」即可续做;急用可先换另一个引擎。',
                        'actions': [{'act': 'open_engine', 'label': '去换生成引擎'},
                                    {'act': 'mock_rerun', 'label': '先用内置演示跑通流程'}]})
+        elif any(k in low for k in ('no api key found for provider', 'auth-profiles', 'auth profile',
+                                    'not logged in', 'unauthorized', 'please login', 'please log in',
+                                    'agents add', 'no credentials')):
+            # 外部 CLI 自己的登录态失效(最典型:SoWork 的 openclaw 找不到 auth-profiles)。
+            # 原文是英文 + 本机路径,客户看不懂也不知道能做什么 → 讲清是哪个引擎、为什么、以及一键换成我们的 Key。
+            eng_now = (read_json(conf_path(), {}).get('engine') or {}).get('kind', 's2')
+            who = {'sowork': 'SoWork(商汤)', 'claude': 'Claude Code', 'codex': 'Codex CLI'}.get(eng_now, '当前生成引擎')
+            emit(job, {'type': 'error',
+                       'text': '**%s 没有可用的登录/授权**,所以任务没能开跑(不是标书内容的问题)。\n\n'
+                               '两条路,任选一条:\n'
+                               '① **改用我们发给你的 Key**(推荐,不用登录任何账号):到「设置 · 模型接入」'
+                               '把 Key 粘进最上面的快速接入卡,点「一键接入并测试」,然后重跑本任务。\n'
+                               '② 继续用 %s:先在它自己的客户端里重新登录,再回到「设置 · 生成引擎」点「测试连接」确认通了,然后重跑。\n\n'
+                               '原始日志:%s' % (who, who, tail[-260:].strip() or '(空)'),
+                       'actions': [{'act': 'open_engine', 'label': '去改用我们的 Key'},
+                                   {'act': 'mock_rerun', 'label': '先用内置演示跑通流程'},
+                                   {'act': 'open_log', 'label': '查看运行日志'}]})
         else:
             emit(job, {'type': 'error', 'text': 'agent 异常退出(退出码 %s)。可点「重跑本任务」再试;日志尾部:%s' % (rc, tail[-300:].strip() or '(空)')})
         emit(job, {'type': 'progress', 'stage': '已停止(agent 异常退出)', 'pct': 0, 'step': 0, 'total': 12})
@@ -796,7 +816,11 @@ AGENT_PROMPT = ('你是标书生成 agent。先完整阅读 {skill}/SKILL.md,然
     '**每章正文≥3500 字**,每章写完用 wc -m 自查,不达标就地扩写该章再继续;'
     '9) **出 Word 之前必跑质检脚本**:python3 {skill}/references/quality_gate.py <交付稿.md> '
     '--materials {materials} --fix ——它会按图片索引的锚点自动校正图片位置、补插漏图、剔除不存在的图片ID、'
-    '折叠重复段落,并产出《成品质检报告.md》;跑完再出 Word。图片ID 只准用图片索引里登记过的,严禁自造。')
+    '折叠重复段落,并产出《成品质检报告.md》;跑完再出 Word。图片ID 只准用图片索引里登记过的,严禁自造。'
+    '10) **开工第一件事:读 outDir/你的要求.md**(存在的话)——那是本次客户自己写的要求,'
+    '优先级仅次于招标文件的强制条款与格式门禁,高于你自己的写作习惯;'
+    '里面的角色设定、篇幅目标、章节侧重、语气风格、必须生成的承诺函等,逐条落实,'
+    '并在《投标文件自检报告》里逐条说明落实情况(未落实的必须写明原因)。')
 
 # 生成方式:agents=主控编排(SKILL.md 路径B,稳;分析与撰写环节并行提速);workflow=一条流水线并行(快,但更易半路失败)
 MODE_AGENTS = ('**必须走 SKILL.md 的【路径 B】:由你作为主控编排子 agent 并亲自验收**,'
@@ -1095,6 +1119,11 @@ def agent_test():
     elif any(k in low for k in ('connection refused', 'gateway', 'econnrefused', 'timed out', 'tls', 'certificate')):
         hint = ('连不上本机网关。App 是双击启动的,拿不到你终端里的环境变量——'
                 '请保持「用登录 shell 启动」勾选;仍不行就在「附加环境变量」里指定网关地址/配置路径。')
+    elif 'no api key found for provider' in low or 'auth-profiles' in low or 'agents add' in low:
+        # SoWork 的 openclaw 找不到该 agent 的授权档:原文是英文+本机路径,这里翻成人话并给出唯一省事的出路
+        hint = ('这个引擎在本机没有可用的登录/授权(它把授权存在自己的 auth-profiles 里,现在是空的)。'
+                '最省事的做法:回到「模型接入」最上面的快速接入卡,粘我们发给你的 Key 点「一键接入并测试」,'
+                '切到「自动」引擎——不需要登录任何账号。要继续用它,就先在它自己的客户端里重新登录。')
     elif any(k in low for k in ('unauthorized', 'not logged in', 'login', '401')):
         hint = '未登录或授权失效,请先在对应 App/CLI 里登录后重试。'
     elif any(k in low for k in ('usage limit', 'quota', 'rate limit', '429')):
@@ -1156,8 +1185,11 @@ async def create_job(tender: UploadFile = File(None), materials: UploadFile = Fi
         try: zipfile.ZipFile(z).extractall(_mk(mdir))
         except Exception: pass
     write_json(os.path.join(job, '任务.json'), {'name': name or tname, 'created_at': now(),
-               'paused': False, 'staged': start == '0', 'tender': tname})
-    if prompt: emit(job, {'type': 'message', 'role': 'user', 'text': prompt})
+               'paused': False, 'staged': start == '0', 'tender': tname, 'prompt': prompt})
+    if prompt:
+        # 落盘成文件,agent 才真的看得到(以前只发了一条聊天消息,界面写着「会作为生成指令的一部分」其实没进指令)
+        open(os.path.join(job, '你的要求.md'), 'w', encoding='utf-8').write(prompt)
+        emit(job, {'type': 'message', 'role': 'user', 'text': prompt})
     if start == '0':
         emit(job, {'type': 'progress', 'stage': '待开始(素材已就位,点「开始生成」)', 'pct': 0, 'step': 0, 'total': 12})
         return {'job_id': jid, 'mode': 'staged'}
@@ -1375,8 +1407,11 @@ async def rerun_job(jid: str):
     shutil.copy2(tpath, os.path.join(nj, tname))
     ref = os.path.join(old, '参考资料')
     if os.path.isdir(ref): shutil.copytree(ref, os.path.join(nj, '参考资料'))
+    req = os.path.join(old, '你的要求.md')       # 重跑要沿用同一份要求,否则第二遍产出会和第一遍不是一个东西
+    if os.path.isfile(req): shutil.copy2(req, os.path.join(nj, '你的要求.md'))
     write_json(os.path.join(nj, '任务.json'),
-               {'name': (meta.get('name', '') or tname) + ' · 重跑', 'created_at': now(), 'paused': False, 'tender': tname})
+               {'name': (meta.get('name', '') or tname) + ' · 重跑', 'created_at': now(), 'paused': False,
+                'tender': tname, 'prompt': meta.get('prompt', '')})
     agent_cmd = config_agent_cmd()
     use_mock = not agent_cmd
     if use_mock:
