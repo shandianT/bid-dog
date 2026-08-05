@@ -7,17 +7,21 @@
 真实 agent:环境变量 AGENT_CMD 命令模板(占位符 {tender}/{out}/{materials}),不配则跑内置 mock 流程。
 打包:pyinstaller -F engine_v1.py → 作为 Tauri sidecar 随安装包分发(见 BUILD.md)。
 """
-import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, urllib.request, urllib.error
+import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, urllib.request, urllib.error
+from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-ENGINE_VERSION = '0.12.1'
+ENGINE_VERSION = '0.16.0'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
-                   's2_engine', 'responses_relay', 'codex_bundled', 'agent_provision', 'preset_config']
+                   's2_engine', 'responses_relay', 'codex_bundled', 'agent_provision', 'preset_config',
+                   'quality_gate', 'job_start', 'multi_file_job', 'models_cache', 'async_sse', 's2_quick_setup',
+                   'opencode_engine', 'relay_chat_passthrough', 'opencode_bundled', 'dual_shell_provision',
+                   'worklog_stream', 'stage_eta']
 HERE = os.path.dirname(os.path.abspath(__file__))
 def _data_root():
     env = os.environ.get('BID_HOME')
@@ -171,6 +175,8 @@ def _mock_agent(job):
                 time.sleep(1)
         pct = int((i + 0.5) / len(STAGES) * 100)
         emit(job, {'type': 'progress', 'stage': st, 'pct': pct, 'step': i + 1, 'total': len(STAGES)})
+        emit(job, {'type': 'worklog', 'lines': ['[%s] 开始:读取上一步产物,校验输入齐全' % st,
+                                                '$ 正在执行 %s 相关脚本与分析…' % st]})
         if st == '评分废标':
             emit(job, {'type': 'question', 'id': 'q1', 'text': '评分表要求安全生产许可证在有效期内;素材库那份 2026-06 到期。等你上传新证,还是按「即将换证」写?',
                        'options': ['等我上传新证', '按即将换证写']})
@@ -259,6 +265,47 @@ def artifact_summary(job, names=None):
     actions.append({'act': 'open_job_folder', 'label': '打开任务文件夹'})
     return '\n'.join(lines), actions
 
+# 12 步默认预估秒数(没有本机历史时的参考值;有历史后用滚动平均逐步替代)
+STAGE_DEFAULT_S = [60, 120, 150, 60, 150, 150, 900, 300, 180, 60, 120, 150]
+
+def stage_stats_path(): return os.path.join(DATA, 'stage_stats.json')
+
+def record_stage(step, dur):
+    """某一步真实耗时入库:EWMA 滚动平均,预计时间越用越准"""
+    if not (1 <= step <= 12) or dur <= 0 or dur > 3 * 3600: return
+    st = read_json(stage_stats_path(), {})
+    k = str(step)
+    cur = st.get(k) or {}
+    avg = cur.get('avg')
+    st[k] = {'avg': round(dur if avg is None else 0.6 * avg + 0.4 * dur, 1), 'n': int(cur.get('n', 0)) + 1}
+    try: write_json(stage_stats_path(), st)
+    except Exception: pass
+
+@app.get('/v1/stats/stages')
+def stage_stats():
+    """前端算「预计还剩」用:每步平均耗时(本机历史优先,缺的用默认参考值)"""
+    st = read_json(stage_stats_path(), {})
+    avgs = []
+    for i in range(1, 13):
+        h = st.get(str(i))
+        avgs.append({'step': i, 'avg_s': (h or {}).get('avg') or STAGE_DEFAULT_S[i - 1],
+                     'from_history': bool(h)})
+    return {'stages': avgs}
+
+# 工作台词过滤:agent 的原始输出噪声很大,只留人能看懂的动作行
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+_WORKLOG_SKIP = re.compile(r'^(session id|reasoning|workdir|model:|provider|approval|sandbox|tokens used|'
+                           r'-{5,}|> build|user$|codex$|exec$|thinking$|mcp|WARNING|warning:|To view this session)')
+
+def worklog_clean(chunk):
+    out = []
+    for ln in chunk.splitlines():
+        ln = _ANSI_RE.sub('', ln).strip()
+        if not ln or _WORKLOG_SKIP.match(ln): continue
+        if len(ln) > 160: ln = ln[:157] + '…'
+        out.append(ln)
+    return out
+
 RUNNING = set()   # 正在跑 agent 的任务(mock 与真实都算,用于判断对话有没有人接收)
 CANCEL = set()    # 用户删除的任务:通知执行线程立即收工
 PROCS = {}        # jid → 真实 agent 的 Popen 句柄(删除任务时用来杀进程)
@@ -297,10 +344,10 @@ SOWORK_GLOBS = [
     os.path.join(os.environ.get('APPDATA', '') or '_', '**', 'openclaw.exe'),
 ]
 
-def bundled_codex():
-    """安装包内置的 codex(Tauri externalBin,打包后去掉平台三元组后缀,与引擎同目录):
-    优先级最高的"客户免装 Node"来源;其次是「一键安装」下载到数据目录的那份(版本我们钉过,测过兼容)"""
-    exe = 'codex-cli' + ('.exe' if os.name == 'nt' else '')
+def bundled_cli(base):
+    """安装包内置的执行外壳(Tauri externalBin,打包后去掉平台三元组后缀,与引擎同目录):
+    优先级最高的"客户免装任何东西"来源;其次是「一键安装」下载到数据目录的那份(版本钉过、测过兼容)"""
+    exe = base + ('.exe' if os.name == 'nt' else '')
     dirs = [os.path.dirname(os.path.abspath(sys.executable)),   # PyInstaller sidecar:与主程序同目录
             os.path.dirname(os.path.abspath(sys.argv[0] or '.')), HERE]
     for d in dirs:
@@ -309,13 +356,27 @@ def bundled_codex():
     c = os.path.join(DATA, 'bin', exe)                          # 「一键安装」落点
     return c if os.path.isfile(c) else None
 
+def bundled_codex():
+    return bundled_cli('codex-cli')
+
+CLI_FAMILY = {'codex': ('codex',), 'claude': ('claude',), 'opencode': ('opencode',),
+              'sowork': ('openclaw', 'sowork'), 'openclaw': ('openclaw', 'sowork')}
+
 def resolve_cli(name, eng=None):
-    """找 CLI 的绝对路径:显式配置 > 内置/一键安装(仅 codex)> 增补 PATH > 常见安装位置;找不到返回 None"""
+    """找 CLI 的绝对路径:显式配置(仅当文件名与工具同族)> 内置/一键安装 > 增补 PATH > 常见安装位置。
+    显式路径带族校验的原因:「CLI 路径」是共享字段,切换引擎后旧路径会指向另一个工具——
+    曾把 codex 二进制当 opencode 跑出 unexpected argument '--auto'(真机事故)。名字对不上就当没填。"""
     if eng and (eng.get('cli_path') or '').strip():
         p = os.path.expanduser(eng['cli_path'].strip())
-        if os.path.isfile(p): return p
+        fam = CLI_FAMILY.get(name)
+        base = os.path.basename(p).lower()
+        if os.path.isfile(p) and (not fam or any(k in base for k in fam)):
+            return p
     if name == 'codex':
-        b = bundled_codex()
+        b = bundled_cli('codex-cli')
+        if b: return b
+    if name == 'opencode':
+        b = bundled_cli('opencode-cli')
         if b: return b
     if name in ('sowork', 'openclaw'):
         for pat in SOWORK_GLOBS:
@@ -369,6 +430,9 @@ def agent_env(eng=None):
     if (eng.get('kind') or '') == 's2':
         try: env.update(s2_env(eng))                           # S2 引擎:换成我们自己的 CODEX_HOME 与 Key
         except Exception: pass
+    if (eng.get('kind') or '') == 'opencode':
+        try: env.update(opencode_env(eng))                     # opencode 外壳:隔离 XDG + 直通端点口令
+        except Exception: pass
     for ln in (eng.get('env') or '').splitlines():
         ln = ln.strip()
         if not ln or ln.startswith('#') or '=' not in ln: continue
@@ -394,6 +458,105 @@ def ensure_line_ts(job):
         try: write_json(tsf, index)
         except Exception: pass
     return index
+
+def _skill_module(name):
+    """从技能包 references/ 里加载确定性脚本(quality_gate / build_tender_docx 等)。
+    单一事实来源:引擎不复制这些逻辑,升级技能包 = 引擎门禁同步升级。"""
+    sd = skill_dir_conf()
+    if not os.path.isfile(os.path.join(sd, 'SKILL.md')): sd = ensure_skill()
+    path = os.path.join(sd, 'references', name + '.py')
+    if not os.path.isfile(path): return None
+    try:
+        import importlib.util
+        refs = os.path.dirname(path)
+        if refs not in sys.path: sys.path.insert(0, refs)   # 脚本之间互相 import(tender_images 等)
+        spec = importlib.util.spec_from_file_location('skillref_' + name, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+def _job_find(job, *pats):
+    """在任务目录(含一层子目录)找第一个命中文件"""
+    for base in [job] + [os.path.join(job, d) for d in sorted(os.listdir(job))
+                         if os.path.isdir(os.path.join(job, d)) and not d.startswith(('.', '_'))]:
+        for pat in pats:
+            hits = sorted(glob.glob(os.path.join(base, pat)))
+            if hits: return hits[0]
+    return None
+
+def quality_audit(job, known):
+    """完成后的确定性质检 + 自动修复 + 重出 Word(引擎兜底,不管模型有没有自觉跑过):
+    图片按索引锚点搬正/补插/剔除、重复段折叠、按章字数、应答覆盖率 → 《成品质检报告》。
+    修复动作真实发生时,用修复稿重建 docx(build_tender_docx,零 token)——给客户看的必须是修好的 Word。"""
+    qg = _skill_module('quality_gate')
+    if not qg: return content_gate(job, known)          # 老技能目录没有质检脚本:退回旧内容门禁
+    mdir = os.path.join(job, '素材')
+    mat = mdir if os.path.isdir(mdir) else assets_dir()
+    score = _job_find(job, '评分点响应矩阵.md')
+    devs = [p for p in [_job_find(job, '技术应答偏离表.md'), _job_find(job, '商务偏离表.md')] if p]
+    mds = [fn for fn in sorted(known) if fn.endswith('.md') and fn.startswith('投标')
+           and not any(k in fn for k in ('自检', '清洗', '报告', '.bak'))]
+    if not mds: return content_gate(job, known)
+    worst, fixed_total, lines = 'green', 0, []
+    order = {'green': 0, 'yellow': 1, 'red': 2}
+    for fn in mds:
+        mp = os.path.join(job, fn)
+        try:
+            res = qg.audit(mp, materials=mat, min_chapter=3500, score=score, deviations=devs)
+            fixed, pre_images = None, None
+            if res['plan'] or any(l == 'red' and ('打散' in t or '重复' in t) for l, t in res['items']):
+                pre_images = res['images']
+                fixed = qg.apply_fix(mp, res)
+                fixed_total += fixed or 0
+                res = qg.audit(mp, materials=mat, min_chapter=3500, score=score, deviations=devs)
+            try: qg.write_report(os.path.join(job, '成品质检报告.md'), fn, res, fixed, images_pre=pre_images)
+            except TypeError: qg.write_report(os.path.join(job, '成品质检报告.md'), fn, res, fixed)
+            if order[res['level']] > order[worst]: worst = res['level']
+            icon = {'green': '✅', 'yellow': '🟡', 'red': '🔴'}[res['level']]
+            lines.append('%s %s:%d 章共 %d 字' % (icon, fn, len(res['chapters']), res['total_chars']))
+            for l, t in res['items'][:4]:
+                lines.append(('  🔴 ' if l == 'red' else '  🟡 ') + t)
+            if fixed: lines.append('  🔧 已自动修复 %d 处(图片落位/重复段),原稿备份 *.bak.md' % fixed)
+        except Exception as e:
+            lines.append('⚠ %s 质检异常:%s' % (fn, e)); continue
+    emit(job, {'type': 'artifact', 'name': '成品质检报告.md'})
+    # 修复真的动了内容 → 用修复稿重建 Word(客户拿到手的必须是修好的那份)
+    if fixed_total:
+        bt = _skill_module('build_tender_docx')
+        spec_f = _job_find(job, 'word_format_spec.json')
+        meta = read_json(os.path.join(job, '任务.json'), {})
+        for fn in mds:
+            stem = os.path.splitext(fn)[0]
+            # 目标 docx:同名优先;唯一一个 docx 交付物也认(模型常把 投标文件_技术标.md 出成 技术标.docx)
+            docxs = [x for x in known if x.endswith('.docx')]
+            target = (stem + '.docx') if (stem + '.docx') in known else (docxs[0] if len(docxs) == 1 else stem + '.docx')
+            if not bt: break
+            try:
+                argv = [os.path.join(job, fn), os.path.join(job, target),
+                        '--title', str(meta.get('name') or stem), '--images-dir', mat]
+                if spec_f: argv += ['--format-spec', spec_f]
+                sub = (meta.get('name') or '')
+                old_argv = sys.argv
+                sys.argv = ['build_tender_docx.py'] + argv
+                try: bt.main()
+                finally: sys.argv = old_argv
+                emit(job, {'type': 'artifact', 'name': target})
+                lines.append('🔁 已用修复稿重新导出 %s(图片已按锚点落位)' % target)
+            except SystemExit:
+                pass
+            except Exception as e:
+                lines.append('⚠ 重建 %s 失败:%s(md 修复稿仍有效)' % (target, e))
+    verdict = {'green': '✅ 成品质检通过', 'yellow': '🟡 成品质检:有建议项(见《成品质检报告.md》)',
+               'red': '🔴 成品质检:有必须处理项——按报告处理或对相应章节「定向重做」后再交付'}[worst]
+    emit(job, {'type': 'message', 'role': 'agent', 'text': verdict + '\n\n' + '\n'.join(lines[:14]),
+               'actions': [{'act': 'open_artifact', 'label': '打开质检报告', 'file': '成品质检报告.md'}]
+                          + ([{'act': 'open_redo', 'label': '定向重做不达标章节'}] if worst == 'red' else [])})
+    if worst == 'red':
+        emit(job, {'type': 'health', 'level': 'red', 'summary': '成品质检有必须处理项',
+                   'gaps': [{'level': 'red', 'title': '见《成品质检报告.md》',
+                             'detail': '字数/图片落位/重复段/应答覆盖率的逐项详情都在报告里'}]})
 
 def content_gate(job, names):
     """内容门禁:格式自检只管版式,这里管正文是否被逐字打散/重复灌注,坏了不静默交付"""
@@ -490,15 +653,35 @@ def real_agent(job, cmd):
     emit(job, {'type': 'message', 'role': 'agent', 'text': '真实 agent 已启动,进度见事件流。'})
     stop = threading.Event(); known = set(list_deliverables(job))
     def watcher():
-        """运行中桥接:新交付物→artifact 事件;agent 直写 events.jsonl 的 progress→同步 progress.json"""
+        """运行中桥接:新交付物→artifact 事件;progress→progress.json;
+        run.log 增量→流式「工作台词」事件(用户最缺的就是'它此刻在干嘛'的文字反馈);
+        步进切换→上一步真实耗时入库(预计等待时间的数据来源)。"""
         ev_path = os.path.join(job, 'events.jsonl')
+        log_path = os.path.join(job, 'run.log')
+        log_off = [0]; cur_step = [0]; step_t0 = [time.time()]
         while not stop.wait(4):
             try:
                 ensure_line_ts(job)      # agent 写的进度行实时打戳
                 for ln in reversed(open(ev_path, encoding='utf-8').read().splitlines()):
                     e = json.loads(ln)
                     if e.get('type') == 'progress':
-                        write_json(os.path.join(job, 'progress.json'), e); break
+                        write_json(os.path.join(job, 'progress.json'), e)
+                        stp = int(e.get('step') or 0)
+                        if stp != cur_step[0]:
+                            if cur_step[0]: record_stage(cur_step[0], time.time() - step_t0[0])
+                            cur_step[0] = stp; step_t0[0] = time.time()
+                        break
+                # 工作台词:run.log 新增内容清洗后流出(每轮最多 8 行,防刷屏;单块事件,前端聚合显示)
+                try:
+                    sz = os.path.getsize(log_path)
+                    if sz > log_off[0]:
+                        with open(log_path, 'rb') as lf:
+                            lf.seek(log_off[0]); chunk = lf.read(min(sz - log_off[0], 65536))
+                        log_off[0] += len(chunk)
+                        lines = worklog_clean(chunk.decode('utf-8', 'ignore'))
+                        if lines:
+                            emit(job, {'type': 'worklog', 'lines': lines[-8:]})
+                except Exception: pass
                 for fn in list_deliverables(job):
                     if fn not in known:
                         known.add(fn); emit(job, {'type': 'artifact', 'name': fn})
@@ -560,7 +743,9 @@ def real_agent(job, cmd):
                                          {'act': 'open_log', 'label': '查看运行日志'}]
         emit(job, {'type': 'message', 'role': 'agent', 'text': summary, 'actions': actions})
         emit(job, {'type': 'skill_used', 'ok': used['ok'], 'hits': used['hits'], 'why': used['why']})
-        content_gate(job, known)
+        try: quality_audit(job, known)
+        except Exception as e:
+            emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 成品质检未能执行:%s' % e})
     elif rc == 0 and not known:
         # 正常退出却一个交付物都没有:以前这里静默,任务永远卡在最后一步
         tail = read_tail(os.path.join(job, 'run.log'), 700)
@@ -607,12 +792,20 @@ AGENT_PROMPT = ('你是标书生成 agent。先完整阅读 {skill}/SKILL.md,然
     '7) **必须配图**:若 materialsDir/图片索引.md 存在,撰写时在讲到对应能力/架构/资质处独立成行打标 {{图:图片ID}}'
     '(ID 只能用索引里登记过的,按索引的"落位锚点"插),出 Word 时给 build_tender_docx.py 传 --images-dir "<materialsDir>",'
     '让图片真正插进文档;索引不存在则在正文标注〔配图建议:说明〕;'
-    '8) **正文必须是完整段落**:严禁把一句话拆成一行一个字、严禁同一段落反复灌注多次(会被内容门禁判定为废稿)。')
+    '8) **正文必须是完整段落**:严禁把一句话拆成一行一个字、严禁同一段落反复灌注多次(会被内容门禁判定为废稿);'
+    '**每章正文≥3500 字**,每章写完用 wc -m 自查,不达标就地扩写该章再继续;'
+    '9) **出 Word 之前必跑质检脚本**:python3 {skill}/references/quality_gate.py <交付稿.md> '
+    '--materials {materials} --fix ——它会按图片索引的锚点自动校正图片位置、补插漏图、剔除不存在的图片ID、'
+    '折叠重复段落,并产出《成品质检报告.md》;跑完再出 Word。图片ID 只准用图片索引里登记过的,严禁自造。')
 
-# 生成方式:agents=主控逐角色编排(SKILL.md 路径B,稳);workflow=一条流水线并行(快,但更易半路失败)
-MODE_AGENTS = ('**必须走 SKILL.md 的【路径 B】:由你作为主控,逐个角色顺序召唤子 agent 并亲自验收**,'
+# 生成方式:agents=主控编排(SKILL.md 路径B,稳;分析与撰写环节并行提速);workflow=一条流水线并行(快,但更易半路失败)
+MODE_AGENTS = ('**必须走 SKILL.md 的【路径 B】:由你作为主控编排子 agent 并亲自验收**,'
     '禁止调用 Workflow 工具跑 multiagent_workflow.js(并行流水线中途失败会整条断掉,产出不稳定)。'
-    '每步做完先核对产物文件是否真的写入、用 wc -m 核字数,不达标就对该步重做一次再往下走;'
+    '**提速纪律(不许串行磨洋工):三个前置分析员必须一次性并行召唤;分章撰写必须并行召唤'
+    '(每章一个子 agent 同时派出,平台不支持并行才逐章)——逐章串行是首要的时间浪费**。'
+    '每步做完先核对产物文件是否真的写入、用 wc -m 核字数,不达标只重做那一章;'
+    '汇总必须用 {skill}/references/assemble_tender.py 脚本拼装(禁止让模型整文重写输出),'
+    '配图复核不再单独召唤子 agent——用第 9 条的 quality_gate.py 脚本替代(秒级、零 token);'
     '汇总成册和出 Word 必须由你亲自触发,不要假设子 agent 会自动汇总。')
 MODE_WORKFLOW = ('可用 Workflow 工具跑 {skill}/references/multiagent_workflow.js(并行更快,但中途失败易整条中断);'
     '跑完必须逐项核对交付物是否齐全,缺什么就自己补做。')
@@ -622,7 +815,7 @@ def skill_dir_conf(conf=None):
     custom = eng.get('skill_dir') or os.environ.get('SKILL_DIR')
     return custom or ensure_skill()   # 托管默认目录必须走 ensure_skill:带版本标记,升级后自动刷新存量目录
 
-SKILL_VERSION = '5.5'   # 技能包内容版本:已解压目录比它旧(或无标记)时,用内置 zip 自动刷新
+SKILL_VERSION = '5.6'   # 技能包内容版本:已解压目录比它旧(或无标记)时,用内置 zip 自动刷新
 
 def ensure_skill():
     """内置技能包:首次运行自动解压到数据目录;版本升级后老目录自动刷新,修复能到存量用户手里"""
@@ -630,12 +823,14 @@ def ensure_skill():
     ver = os.path.join(dst, '.skill_version')
     try: cur = open(ver, encoding='utf-8').read().strip()
     except Exception: cur = ''
-    if os.path.isfile(os.path.join(dst, 'SKILL.md')) and cur == SKILL_VERSION: return dst
+    # 版本标记之外再验一个关键文件:曾出过"旧 zip 抢先解压却打上新版本标记"的事故,标记从此不可全信
+    if (os.path.isfile(os.path.join(dst, 'SKILL.md')) and cur == SKILL_VERSION
+            and os.path.isfile(os.path.join(dst, 'references', 'quality_gate.py'))): return dst
     cands = []
     meipass = getattr(sys, '_MEIPASS', None)           # PyInstaller 打包版:zip 嵌在二进制里
-    if meipass: cands.append(os.path.join(meipass, 'bidmultiagenttao_v5.5.zip'))
-    cands += [os.path.join(HERE, 'bidmultiagenttao_v5.5.zip'),
-              os.path.join(HERE, '..', 'bidmultiagenttao_v5.5.zip')]
+    if meipass: cands.append(os.path.join(meipass, 'bidmultiagenttao_v5.3.zip'))
+    cands += [os.path.join(HERE, 'bidmultiagenttao_v5.3.zip'),
+              os.path.join(HERE, '..', 'bidmultiagenttao_v5.3.zip')]
     for z in cands:
         if os.path.isfile(z):
             try:
@@ -677,6 +872,37 @@ def codex_home_s2(eng=None):
     open(os.path.join(d, 'config.toml'), 'w', encoding='utf-8').write(toml)
     return d, base, direct
 
+def opencode_home_s2(eng=None):
+    """opencode 的隔离配置:provider 指向本机直通端点,Key 用 {env:} 引用中转口令。
+    与用户自己的 opencode(XDG 目录)完全隔离,每次运行重写保持与界面一致。"""
+    eng = eng or (read_json(conf_path(), {}).get('engine') or {})
+    d = _mk(os.path.join(ws_root(), 'opencode_s2'))
+    up = s2_conf()
+    direct = (eng.get('s2_wire') or 'auto') == 'responses' and (eng.get('s2_direct') is True)
+    base = (up['base_url'] if direct else relay_base())
+    conf = {
+        '$schema': 'https://opencode.ai/config.json',
+        'provider': {'biddog-s2': {
+            'npm': '@ai-sdk/openai-compatible', 'name': '中标狗 · S2',
+            'options': {'baseURL': base, 'apiKey': '{env:BIDDOG_S2_KEY}'},
+            'models': {up['model']: {'name': up['model']}}}},
+        # 标书生成要跑脚本/写文件:bash 与 edit 放行;webfetch 关掉(素材是唯一事实来源,不允许上网编)
+        'permission': {'edit': 'allow', 'bash': 'allow', 'webfetch': 'deny'},
+    }
+    write_json(os.path.join(d, 'opencode.json'), conf)
+    return d, base, direct
+
+def opencode_env(eng):
+    d, _base, direct = opencode_home_s2(eng)
+    up = s2_conf()
+    home = _mk(os.path.join(d, 'home'))
+    no = ','.join(x for x in ['127.0.0.1', 'localhost', os.environ.get('NO_PROXY', ''), os.environ.get('no_proxy', '')] if x)
+    return {'OPENCODE_CONFIG': os.path.join(d, 'opencode.json'),
+            'BIDDOG_S2_KEY': (up['api_key'] if direct else relay_token()),
+            'XDG_DATA_HOME': os.path.join(home, 'data'), 'XDG_CONFIG_HOME': os.path.join(home, 'cfg'),
+            'XDG_CACHE_HOME': os.path.join(home, 'cache'),
+            'NO_PROXY': no, 'no_proxy': no}
+
 def s2_env(eng):
     """S2 引擎专用环境:指向我们自己的 CODEX_HOME;直连时给真 Key,走中转时只给本机中转口令(真 Key 不出引擎进程)"""
     d, _base, direct = codex_home_s2(eng)
@@ -691,9 +917,11 @@ def config_agent_cmd():
     if env: return env
     conf = read_json(conf_path(), {})
     eng = conf.get('engine') or {}
-    kind = eng.get('kind', 'mock')
+    kind = eng.get('kind', 's2')      # 默认「自动」:没 Key 时下一行会回落演示
     if kind == 'custom': return eng.get('cmd', '')
-    if kind not in ('claude', 'codex', 'sowork', 's2'): return ''
+    # 「自动」的语义:有 Key 才产真实标书,没 Key 就返回空 → 上层自动回落内置演示流程(不报错、不空跑)
+    if kind in ('s2', 'opencode') and not s2_conf(conf)['api_key']: return ''
+    if kind not in ('claude', 'codex', 'sowork', 's2', 'opencode'): return ''
     sd = skill_dir_conf(conf)
     if not os.path.isfile(os.path.join(sd, 'SKILL.md')): sd = ensure_skill()
     mode = MODE_WORKFLOW if eng.get('mode') == 'workflow' else MODE_AGENTS   # 默认稳健的多子 agent
@@ -714,6 +942,12 @@ def config_agent_cmd():
                 '--thinking', (eng.get('thinking') or 'off'),
                 '--timeout', str(int(eng.get('timeout') or 1800)),
                 '--message', prompt]
+    if kind == 'opencode':
+        # opencode 原生 OpenAI 兼容:baseURL 指本机直通端点即可,零协议翻译。--auto=非交互放行
+        up = s2_conf(conf)
+        # --dir {out}:把 opencode 的工作目录钉死在任务目录(它默认会向上找"项目根",可能钉错层)
+        return [resolve_cli('opencode', eng) or 'opencode', 'run', '--auto', '--dir', '{out}',
+                '-m', 'biddog-s2/' + up['model'], prompt]
     # --skip-git-repo-check:任务目录不是 git 仓库也能跑
     # --dangerously-bypass-approvals-and-sandbox:非交互执行,免"信任目录/审批"卡住(本机自有目录)
     # s2 与 codex 共用同一个 CLI,区别只在环境变量(CODEX_HOME 指向我们生成的配置),见 s2_env
@@ -725,11 +959,11 @@ def agent_status():
     eng = conf.get('engine') or {}
     sd = skill_dir_conf(conf)
     if not os.path.isfile(os.path.join(sd, 'SKILL.md')): sd = ensure_skill()
-    cl, cx, sw = resolve_cli('claude', eng), resolve_cli('codex', eng), resolve_cli('sowork', eng)
-    return {'kind': 'env' if os.environ.get('AGENT_CMD') else eng.get('kind', 'mock'), 'mode': eng.get('mode', 'agents'),
+    cl, cx, sw, oc = resolve_cli('claude', eng), resolve_cli('codex', eng), resolve_cli('sowork', eng), resolve_cli('opencode', eng)
+    return {'kind': 'env' if os.environ.get('AGENT_CMD') else eng.get('kind', 's2'), 'mode': eng.get('mode', 'agents'),
             'cmd': eng.get('cmd', ''), 'skill_dir': sd, 'skill_ok': os.path.isfile(os.path.join(sd, 'SKILL.md')),
-            'available': {'claude': bool(cl), 'codex': bool(cx), 'sowork': bool(sw)},
-            'paths': {'claude': cl or '', 'codex': cx or '', 'sowork': sw or ''},
+            'available': {'claude': bool(cl), 'codex': bool(cx), 'sowork': bool(sw), 'opencode': bool(oc)},
+            'paths': {'claude': cl or '', 'codex': cx or '', 'sowork': sw or '', 'opencode': oc or ''},
             'cli_path': eng.get('cli_path', ''), 'env': eng.get('env', ''),
             'login_shell': eng.get('login_shell', True), 'sowork_agent': eng.get('sowork_agent', 'main'),
             'thinking': eng.get('thinking', 'off'), 'timeout': eng.get('timeout', 1800),
@@ -738,7 +972,8 @@ def agent_status():
             's2_wire': eng.get('s2_wire', 'auto'), 's2_verify_ssl': eng.get('s2_verify_ssl', True),
             's2_defaults': {'base_url': S2_DEFAULT_BASE, 'model': S2_DEFAULT_MODEL},
             's2_borrowed': (not (eng.get('s2_key') or '').strip()) and bool(s2_conf(conf)['api_key']),
-            'codex_bundled': bool(bundled_codex())}
+            'codex_bundled': bool(bundled_codex()), 'opencode_bundled': bool(bundled_cli('opencode-cli')),
+            's2_model_effective': s2_conf(conf)['model']}
 
 @app.put('/v1/agent')
 async def set_agent(req: Request):
@@ -769,7 +1004,7 @@ def agent_test():
     客户不用开终端——这是「终端能跑、App 里不行」类问题的自助排查入口。"""
     conf = read_json(conf_path(), {})
     eng = conf.get('engine') or {}
-    kind = 'env' if os.environ.get('AGENT_CMD') else eng.get('kind', 'mock')
+    kind = 'env' if os.environ.get('AGENT_CMD') else eng.get('kind', 's2')
     if kind == 'mock':
         return {'ok': True, 'note': '当前是内置演示流程,无需外部 CLI(要产真实标书请选一个生成引擎)'}
     probe = '只回复六个字:中标狗连接成功'
@@ -788,12 +1023,31 @@ def agent_test():
         cli = resolve_cli('codex', eng)
         if not cli: return {'ok': False, 'error': '没找到 codex 命令,请先安装 Codex CLI 并登录'}
         cmd = [cli, 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', probe]
+    elif kind == 'opencode':
+        up = s2_conf(conf)
+        if not up['api_key']:
+            return {'ok': False, 'error': '还没填 S2 API Key(和「S2 模型」引擎共用同一串 Key)。'}
+        try:
+            _openai_req(up['base_url'], up['api_key'], '/models', timeout=20, verify=up['verify_ssl'])
+        except urllib.error.HTTPError as e:
+            msg = {401: 'Key 不对或已停用', 403: 'Key 没有权限', 429: '额度/频率超限'}.get(e.code, 'HTTP %s' % e.code)
+            return {'ok': False, 'error': '连不上 S2 网关:%s。地址:%s' % (msg, up['base_url'])}
+        except Exception as e:
+            return {'ok': False, 'error': '连不上 S2 网关:%s' % net_hint(e)}
+        cli = resolve_cli('opencode', eng)
+        if not cli:
+            return {'ok': False, 'need_provision': True,
+                    'error': 'S2 网关是通的,只差 OpenCode 外壳。点「一键安装执行外壳」(约 80MB);'
+                             '或手动:npm i -g opencode-ai。装完都不用登录。'}
+        cmd = [cli, 'run', '--auto', '-m', 'biddog-s2/' + up['model'], probe]
     elif kind == 's2':
         # 三层分开验:①Key/网关能不能通 ②Codex CLI 在不在 ③整条链路(Codex→中转→S2)能不能跑通。
         # 分层报错是为了让客户自己看得懂卡在哪一层,而不是只看到一句"异常退出"。
         up = s2_conf(conf)
         if not up['api_key']:
-            return {'ok': False, 'error': '还没填 S2 API Key。填我们发给你的那串 Key(sk-…),或先在「模型接入」里加好接入点,这里会自动借用。'}
+            return {'ok': False, 'error': '还没填 API Key——现在新建任务会跑内置演示流程(样例稿)。'
+                                          '把你收到的那串 Key(sk-…)填进来即产真实标书;'
+                                          '或先在「模型接入」里加好接入点,这里会自动借用。'}
         try:
             data = _openai_req(up['base_url'], up['api_key'], '/models', timeout=20, verify=up['verify_ssl'])
             ids = [m.get('id') for m in (data.get('data') or []) if m.get('id')]
@@ -845,39 +1099,112 @@ def agent_test():
         hint = '未登录或授权失效,请先在对应 App/CLI 里登录后重试。'
     elif any(k in low for k in ('usage limit', 'quota', 'rate limit', '429')):
         hint = '该 CLI 的订阅额度用完了(与「模型接入」的 API Key 是两个独立额度)。'
+    elif 'openclaw doctor' in low or ('mismatch' in low and 'config uses' in low):
+        hint = ('这是 SoWork 本机安装自身的配置问题(插件配置不一致),与中标狗无关:'
+                '终端跑一次 openclaw doctor 按提示修复,或重启/重装 SoWork;'
+                '急用的话先把生成引擎切成「S2 模型」(不依赖 SoWork)。')
     if kind == 's2' and RELAY_LAST.get('error'):
         hint = '中转层报告:%s' % RELAY_LAST['error']      # 真实原因往往在上游,别让客户只看到 codex 的退出码
     return {'ok': False, 'error': ('退出码 %s。%s' % (r.returncode, hint)).strip(), 'reply': out[-300:]}
 
 @app.post('/v1/jobs')
-async def create_job(tender: UploadFile = File(...), materials: UploadFile = File(None),
-                     prompt: str = Form(''), name: str = Form(''), mock: str = Form('auto')):
+async def create_job(tender: UploadFile = File(None), materials: UploadFile = File(None),
+                     files: List[UploadFile] = File(None), relpaths: str = Form(''),
+                     prompt: str = Form(''), name: str = Form(''), mock: str = Form('auto'),
+                     start: str = Form('1')):
+    """建任务(向导版约定):
+    - tender = 招标文件(主件,永远落任务根目录——绝不进 素材/,素材库污染是内容变薄的根源之一)
+    - files + relpaths = 参考素材(多文件/整文件夹,保留目录结构,落 素材/;相对路径做穿越防护)
+    - start='0' 只暂存(任务状态=待开始),等 /v1/jobs/{jid}/start 再跑
+    兼容旧调用:只传 tender(+materials zip)行为不变。"""
+    fl = [f for f in (files or []) if f and f.filename]
+    if not (tender and tender.filename) and not fl:
+        return JSONResponse({'error': '至少要有一个文件(招标文件)'}, 400)
+    try: rels = json.loads(relpaths or '[]')
+    except Exception: rels = []
+    rels = [str(r or '') for r in rels] if isinstance(rels, list) else []
+    while len(rels) < len(fl): rels.append('')
+    doc_like = lambda fn: not fn.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.zip'))
+    if not (tender and tender.filename) and fl:
+        # 前端没显式指定主件时,从 files 里挑:优先文件名像招标文件的文档,其次任意文档;挑走后从素材里移除
+        pick = next((i for i, f in enumerate(fl)
+                     if re.search(r'招标|采购|磋商|询价|tender|rfp', os.path.basename(f.filename), re.I)
+                     and doc_like(f.filename)), None)
+        if pick is None: pick = next((i for i, f in enumerate(fl) if doc_like(f.filename)), 0)
+        tender = fl.pop(pick); rels.pop(pick)
     jid = datetime.datetime.now().strftime('%m%d-%H%M%S-') + uuid.uuid4().hex[:4]
     job = jpath(jid); os.makedirs(job)
-    tname = tender.filename or '招标文件.pdf'
-    write_json(os.path.join(job, '任务.json'), {'name': name or tender.filename, 'created_at': now(), 'paused': False, 'tender': tname})
-    tpath = os.path.join(job, tname)
-    open(tpath, 'wb').write(await tender.read())
-    mdir = os.path.join(job, '素材')
+    tname = os.path.basename(tender.filename or '招标文件.pdf')
+    open(os.path.join(job, tname), 'wb').write(await tender.read())
+    mdir = os.path.join(job, '素材')          # 注意:没有素材就不建目录,空 素材/ 会顶掉全局素材库的回落
+    for i, f in enumerate(fl):
+        rel = (rels[i] or f.filename or 'file').replace('\\', '/')
+        rel = os.path.normpath(rel).replace(os.sep, '/')
+        if rel.startswith(('..', '/')) or os.path.isabs(rel): rel = os.path.basename(f.filename or '') or 'file'
+        while rel.startswith('./'): rel = rel[2:]
+        parts = [x for x in rel.split('/') if x not in ('', '.', '..')]
+        # 只剥一层:显式的 素材/ 前缀剥掉后其余层级原样保留;否则视为"拖入的文件夹名"剥掉顶层。
+        # (曾经两条规则叠加把 素材/图片/x.png 剥成 x.png,图片索引全部失配——图不见了就是这来的)
+        if parts and parts[0] == '素材': parts = parts[1:]
+        elif len(parts) > 1: parts = parts[1:]
+        rel = '/'.join(parts)
+        dest = os.path.join(mdir, rel or os.path.basename(f.filename or 'file'))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        open(dest, 'wb').write(await f.read())
     if materials and materials.filename:
         z = os.path.join(job, '_m.zip'); open(z, 'wb').write(await materials.read())
-        try: zipfile.ZipFile(z).extractall(mdir)
+        try: zipfile.ZipFile(z).extractall(_mk(mdir))
         except Exception: pass
+    write_json(os.path.join(job, '任务.json'), {'name': name or tname, 'created_at': now(),
+               'paused': False, 'staged': start == '0', 'tender': tname})
     if prompt: emit(job, {'type': 'message', 'role': 'user', 'text': prompt})
+    if start == '0':
+        emit(job, {'type': 'progress', 'stage': '待开始(素材已就位,点「开始生成」)', 'pct': 0, 'step': 0, 'total': 12})
+        return {'job_id': jid, 'mode': 'staged'}
+    return _launch_job(jid, job, mock)
+
+def _launch_job(jid, job, mock='auto'):
+    """按当前引擎配置启动生成。主件路径只信 任务.json 的 tender 字段(建任务时就定死,不做猜测)。"""
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    tpath = os.path.join(job, os.path.basename(meta.get('tender') or ''))
+    if not os.path.isfile(tpath):
+        emit(job, {'type': 'error', 'text': '找不到招标文件「%s」,请删除本任务重新创建。' % meta.get('tender')})
+        return {'job_id': jid, 'mode': 'error'}
     agent_cmd = config_agent_cmd()
     use_mock = (mock == '1') or (mock == 'auto' and not agent_cmd)
     if use_mock:
+        conf0 = read_json(conf_path(), {})
+        if (conf0.get('engine') or {}).get('kind', 's2') in ('s2', 'opencode') and not s2_conf(conf0)['api_key']:
+            emit(job, {'type': 'message', 'role': 'agent',
+                       'text': '当前还没填 API Key,先用**内置演示流程**把全流程跑给你看(产出为样例稿)。'
+                               '到「设置 · 模型接入」把 Key 填上再重跑本任务,产出的就是真实标书。',
+                       'actions': [{'act': 'open_engine', 'label': '去填 Key'}]})
         threading.Thread(target=mock_agent, args=(job,), daemon=True).start()
     else:
+        mdir = os.path.join(job, '素材')
         mat = mdir if os.path.isdir(mdir) else assets_dir()
         sd_path = skill_dir_conf(read_json(conf_path(), {}))
         if not os.path.isfile(os.path.join(sd_path, 'SKILL.md')): sd_path = ensure_skill()
-        sub = lambda s: (s.replace('{tender}', tpath).replace('{out}', job)
+        sub = lambda x: (x.replace('{tender}', tpath).replace('{out}', job)
                           .replace('{materials}', mat).replace('{jobid}', jid).replace('{skill}', sd_path))
         cmd = [sub(a) for a in agent_cmd] if isinstance(agent_cmd, list) else sub(agent_cmd)
         cmd = login_shell_wrap(cmd, (read_json(conf_path(), {}).get('engine') or {}))
         threading.Thread(target=real_agent, args=(job, cmd), daemon=True).start()
     return {'job_id': jid, 'mode': 'mock' if use_mock else 'agent'}
+
+@app.post('/v1/jobs/{jid}/start')
+def start_job(jid: str, mock: str = 'auto'):
+    """启动「待开始」的暂存任务(向导里点「稍后开始」建出来的)"""
+    job = jpath(jid)
+    if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    base = os.path.basename(jid)
+    if not meta.get('staged') and (base in RUNNING):
+        return {'ok': True, 'note': '任务已在运行'}
+    meta['staged'] = False
+    write_json(os.path.join(job, '任务.json'), meta)
+    r = _launch_job(jid, job, mock)
+    return {'ok': r.get('mode') != 'error', **r}
 
 @app.delete('/v1/jobs/{jid}')
 def del_job(jid: str):
@@ -902,7 +1229,8 @@ def list_jobs():
         meta = read_json(os.path.join(job, '任务.json'), {})
         prog = read_json(os.path.join(job, 'progress.json'), {})
         out.append({'job_id': jid, 'name': meta.get('name', jid), 'created_at': meta.get('created_at', ''),
-                    'stage': prog.get('stage', '启动中'), 'pct': prog.get('pct', 0)})
+                    'stage': prog.get('stage', '启动中'), 'pct': prog.get('pct', 0),
+                    'staged': bool(meta.get('staged'))})
     return out
 
 @app.get('/v1/jobs/{jid}/events')
@@ -924,18 +1252,24 @@ def events(jid: str, offset: int = 0):
             except Exception: pass
         e['ts'] = index[key]
         return json.dumps(e, ensure_ascii=False)
-    def gen():
-        sent = 0
+    async def gen():
+        # async 生成器:网页端每个连接不再占死一条线程池线程(多标签页/多次重连曾把线程池耗干,
+        # 表现为"页面转半天然后断开、agent 请求全部卡住")。空转时 10 秒一个心跳防反代掐线。
+        sent, idle = 0, 0
         index = read_json(tsf, {})
-        for _ in range(3600 * 4):
+        for _ in range(3600 * 8):
+            burst = False
             if os.path.isfile(path):
-                lines = open(path, encoding='utf-8').read().splitlines()
+                try: lines = open(path, encoding='utf-8').read().splitlines()
+                except Exception: lines = []
                 while sent < len(lines):
                     if sent >= offset: yield 'data: %s\n\n' % stamp(sent, lines[sent], index)
-                    sent += 1
-            yield ': ping\n\n'
-            time.sleep(1)
-    return StreamingResponse(gen(), media_type='text/event-stream')
+                    sent += 1; burst = True
+            idle = 0 if burst else idle + 1
+            if idle and idle % 10 == 0: yield ': ping\n\n'
+            await asyncio.sleep(1)
+    return StreamingResponse(gen(), media_type='text/event-stream',
+                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 def job_context(job, limit=9000):
     """把任务的关键产出摘要拼成上下文,供任务结束后的问答使用"""
@@ -1339,10 +1673,14 @@ async def probe_models(req: Request):
     """不落库:用 base_url+key 拉取该网关可用模型列表(供添加前选择你套餐里的模型)"""
     body = await req.json()
     if not body.get('base_url'): return JSONResponse({'ok': False, 'error': '缺 base_url', 'models': []}, 400)
+    base, key, verify = body['base_url'], body.get('api_key', ''), body.get('verify_ssl', True)
+    hit = _models_cached(base, key, verify)
+    if hit: return hit
     try:
-        data = _openai_req(body['base_url'], body.get('api_key', ''), '/models', timeout=15,
-                           verify=body.get('verify_ssl', True))
+        # 阻塞网络请求丢线程池:这是 async 端点,直接跑会卡住整个事件循环(页面全体转圈的元凶之一)
+        data = await asyncio.to_thread(_openai_req, base, key, '/models', timeout=15, verify=verify)
         ids = [m.get('id') for m in (data.get('data') or []) if m.get('id')]
+        _models_store(base, key, verify, ids)
         return {'ok': True, 'models': ids}
     except urllib.error.HTTPError as e:
         return {'ok': False, 'error': 'HTTP %s %s' % (e.code, e.read()[:200].decode('utf-8', 'ignore')), 'models': []}
@@ -1380,6 +1718,24 @@ S2_DEFAULT_BASE = 'https://api.senseaudio.cn/v1'
 S2_DEFAULT_MODEL = 'senseaudio-s2'
 SELF_PORT = int(os.environ.get('PORT', 8080))
 RELAY_LAST = {}      # 最近一次中转的结果:出问题时「测试连接」和运行日志能说清卡在哪一层
+
+# 模型列表短缓存:重复打开设置面板不再反复打网关(慢且费额度);TTL 默认 120s,BID_MODELS_TTL=0 关闭
+_MODELS_CACHE, _MODELS_LOCK = {}, threading.Lock()
+_MODELS_TTL = int(os.environ.get('BID_MODELS_TTL', 120))
+
+def _models_cached(base, key, verify):
+    if _MODELS_TTL <= 0: return None
+    k = (base or '').rstrip('/') + '|' + hashlib.sha1((key or '').encode()).hexdigest()[:12] + '|' + str(bool(verify))
+    with _MODELS_LOCK:
+        v = _MODELS_CACHE.get(k)
+        if v and time.time() - v[0] < _MODELS_TTL:
+            return {'ok': True, 'models': list(v[1]), 'cached': True}
+    return None
+
+def _models_store(base, key, verify, ids):
+    k = (base or '').rstrip('/') + '|' + hashlib.sha1((key or '').encode()).hexdigest()[:12] + '|' + str(bool(verify))
+    with _MODELS_LOCK:
+        _MODELS_CACHE[k] = (time.time(), list(ids))
 
 def relay_token():
     """本机中转口令:只有我们自己拉起的 Codex 拿得到,别的进程调不动你的 Key"""
@@ -1614,18 +1970,89 @@ async def relay_responses(req: Request):
     return StreamingResponse(gen, media_type='text/event-stream',
                              headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
+@app.post('/v1/relay/chat/completions')
+async def relay_chat(req: Request):
+    """纯直通(零翻译):opencode 等原生 OpenAI 兼容外壳 → 这里 → S2 网关。
+    存在的唯一理由是 Key 托管:子进程只拿本机随机口令,真 Key 不出引擎进程;顺带统一记账 RELAY_LAST。"""
+    if (req.headers.get('authorization') or '').replace('Bearer ', '').strip() != relay_token():
+        return JSONResponse({'error': {'message': 'relay token 不匹配', 'type': 'auth_error'}}, 401)
+    body = await req.json()
+    up = s2_conf()
+    if not up['api_key']:
+        return JSONResponse({'error': {'message': '还没填 S2 API Key(设置 · 生成引擎)', 'type': 'config_error'}}, 400)
+    body['model'] = up['model'] or body.get('model')
+    RELAY_LAST.update({'ts': now(), 'mode': 'chat-pass', 'model': body.get('model'),
+                       'msgs': len(body.get('messages') or []), 'tools': len(body.get('tools') or []), 'error': ''})
+    def gen(r):
+        try:
+            while True:
+                c = r.read(8192)
+                if not c: break
+                yield c
+        except Exception:
+            return
+    try:
+        r = await asyncio.to_thread(_upstream, up['base_url'], up['api_key'], '/chat/completions', body, 900, up['verify_ssl'])
+    except urllib.error.HTTPError as e:
+        det = e.read()[:400].decode('utf-8', 'ignore')
+        RELAY_LAST['error'] = 'HTTP %s %s' % (e.code, det)
+        try: return JSONResponse(json.loads(det), e.code)
+        except Exception:
+            return JSONResponse({'error': {'message': 'HTTP %s %s' % (e.code, det), 'type': 'upstream_error'}}, e.code)
+    except Exception as e:
+        RELAY_LAST['error'] = net_hint(e)
+        return JSONResponse({'error': {'message': '中转层:' + net_hint(e), 'type': 'upstream_error'}}, 502)
+    ct = r.headers.get('Content-Type') or 'application/json'
+    return StreamingResponse(gen(r), media_type=ct,
+                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
 @app.get('/v1/relay/models')
 def relay_models():
     up = s2_conf()
+    hit = _models_cached(up['base_url'], up['api_key'], up['verify_ssl'])
+    if hit: return hit
     try:
         d = _openai_req(up['base_url'], up['api_key'], '/models', timeout=15, verify=up['verify_ssl'])
-        return d
+        ids = [m.get('id') for m in (d.get('data') or []) if m.get('id')]
+        _models_store(up['base_url'], up['api_key'], up['verify_ssl'], ids)
+        return {'ok': True, 'models': ids}
     except Exception as e:
         return JSONResponse({'error': net_hint(e)}, 502)
 
 # ---------- 一键安装执行外壳(Codex CLI):没内置、没装 Node 的机器,点一下按钮就好 ----------
 # 版本钉死在我们测过兼容的那个:S2 中转是按它的 Responses 行为实测的,随手升级可能翻车
 CODEX_PIN = os.environ.get('BID_CODEX_VERSION', '0.146.0')
+OPENCODE_PIN = os.environ.get('BID_OPENCODE_VERSION', '1.18.13')   # 与直连实测配套的版本
+# opencode 平台包是普通 npm 包名(非别名):tarball = {reg}/{pkg}/-/{pkg}-{ver}.tgz,包内 package/bin/opencode[.exe]
+OPENCODE_PLAT = {
+    ('darwin', 'arm64'):  'opencode-darwin-arm64',
+    ('darwin', 'x86_64'): 'opencode-darwin-x64',
+    ('win32',  'amd64'):  'opencode-windows-x64',
+    ('win32',  'arm64'):  'opencode-windows-arm64',
+    ('linux',  'x86_64'): 'opencode-linux-x64',
+    ('linux',  'aarch64'): 'opencode-linux-arm64',
+}
+
+def _plat_key():
+    import platform as _pl
+    mach = (_pl.machine() or '').lower()
+    mach = {'x86_64': 'x86_64', 'amd64': 'amd64' if sys.platform == 'win32' else 'x86_64',
+            'arm64': 'arm64', 'aarch64': 'arm64' if sys.platform == 'darwin' else 'aarch64'}.get(mach, mach)
+    return (sys.platform if sys.platform != 'cygwin' else 'win32', mach)
+
+def _shell_meta(which):
+    # 外壳下载参数:('codex'|'opencode') -> (url构造器, 包内路径, 目标文件名, 手装提示);不支持的平台返回 None
+    ext = '.exe' if os.name == 'nt' else ''
+    if which == 'opencode':
+        pkg = OPENCODE_PLAT.get(_plat_key())
+        if not pkg: return None
+        return (lambda reg: '%s/%s/-/%s-%s.tgz' % (reg.rstrip('/'), pkg, pkg, OPENCODE_PIN),
+                'package/bin/opencode' + ext, 'opencode-cli' + ext, 'npm i -g opencode-ai')
+    plat = CODEX_PLAT.get(_plat_key())
+    if not plat: return None
+    suffix, triple = plat
+    return (lambda reg: '%s/@openai/codex/-/codex-%s-%s.tgz' % (reg.rstrip('/'), CODEX_PIN, suffix),
+            'package/vendor/%s/bin/codex%s' % (triple, ext), 'codex-cli' + ext, 'npm i -g @openai/codex')
 # 平台 → (npm 版本后缀, 包内 vendor 三元组)。npm 的平台包是别名:@openai/codex@<版本>-<平台>
 CODEX_PLAT = {
     ('darwin', 'arm64'):  ('darwin-arm64',  'aarch64-apple-darwin'),
@@ -1647,21 +2074,19 @@ def codex_platform():
             'arm64': 'arm64', 'aarch64': 'arm64' if sys.platform == 'darwin' else 'aarch64'}.get(mach, mach)
     return CODEX_PLAT.get((sys.platform if sys.platform != 'cygwin' else 'win32', mach))
 
-def _provision_codex():
-    plat = codex_platform()
-    if not plat:
-        PROV.update({'state': 'error', 'error': '暂不支持这个系统架构,请手动安装:npm i -g @openai/codex'}); return
-    suffix, triple = plat
-    exe = 'codex-cli' + ('.exe' if os.name == 'nt' else '')
-    inner = 'package/vendor/%s/bin/codex%s' % (triple, '.exe' if os.name == 'nt' else '')
+def _provision_codex(which='codex'):
+    meta = _shell_meta(which)
+    if not meta:
+        PROV.update({'state': 'error', 'error': '暂不支持这个系统架构,请手动安装外壳'}); return
+    mk_url, inner, exe, manual = meta
     dstdir = _mk(os.path.join(DATA, 'bin'))
     dst = os.path.join(dstdir, exe)
-    tmp = os.path.join(dstdir, '_codex.tgz')
+    tmp = os.path.join(dstdir, '_shell.tgz')
     last = ''
     for reg in CODEX_REGISTRIES:
-        url = '%s/@openai/codex/-/codex-%s-%s.tgz' % (reg.rstrip('/'), CODEX_PIN, suffix)
+        url = mk_url(reg)
         try:
-            PROV.update({'state': 'running', 'pct': 0, 'note': '正在下载执行外壳(%s)…' % suffix, 'error': ''})
+            PROV.update({'state': 'running', 'which': which, 'pct': 0, 'note': '正在下载执行外壳(%s)…' % which, 'error': ''})
             req = urllib.request.Request(url, headers={'User-Agent': 'bid-dog/' + ENGINE_VERSION})
             with urllib.request.urlopen(req, timeout=60) as r, open(tmp, 'wb') as f:
                 total = int(r.headers.get('Content-Length') or 0)
@@ -1691,14 +2116,17 @@ def _provision_codex():
             last = net_hint(e)
             try: os.remove(tmp)
             except Exception: pass
-    PROV.update({'state': 'error', 'error': '下载失败(镜像与官源都试过):%s。也可手动安装:npm i -g @openai/codex' % last})
+    PROV.update({'state': 'error', 'error': '下载失败(镜像与官源都试过):%s。也可手动安装:%s' % (last, manual)})
 
 @app.post('/v1/agent/provision')
-def agent_provision():
-    """一键安装 Codex 执行外壳到数据目录(约 130MB 下载)。不碰系统目录,不需要管理员权限。
+async def agent_provision(req: Request):
+    """一键安装执行外壳到数据目录(codex 约 130MB / opencode 约 80MB)。不碰系统目录,免管理员权限。
     已有可用外壳(内置或此前装过)则直接返回;文件坏了(跑不动 --version)会自动删掉重下。"""
+    try: which = ((await req.json()).get('which') or 'codex')
+    except Exception: which = 'codex'
+    if which not in ('codex', 'opencode'): which = 'codex'
     if PROV['state'] == 'running': return PROV
-    b = bundled_codex()
+    b = bundled_cli('opencode-cli' if which == 'opencode' else 'codex-cli')
     if b:
         try:
             r = subprocess.run([b, '--version'], capture_output=True, text=True, timeout=30,
@@ -1711,8 +2139,8 @@ def agent_provision():
         if os.path.dirname(b) == os.path.join(DATA, 'bin'):   # 只清我们自己下的,不动安装包内置的
             try: os.remove(b)
             except Exception: pass
-    threading.Thread(target=_provision_codex, daemon=True).start()
-    time.sleep(0.3)   # 让状态先落到 running,前端第一次轮询就有数
+    threading.Thread(target=_provision_codex, args=(which,), daemon=True).start()
+    await asyncio.sleep(0.3)   # 让状态先落到 running,前端第一次轮询就有数
     return PROV
 
 @app.get('/v1/agent/provision')
@@ -2046,7 +2474,26 @@ def health():
     return {'ok': True, 'data_dir': DATA, 'agent': bool(config_agent_cmd()),
             'version': ENGINE_VERSION, 'author': AUTHOR, 'features': ENGINE_FEATURES}
 
+def migrate_conf():
+    """存量配置迁移:界面撤下 opencode 选项后,存过 kind=opencode 的用户会遇到空白下拉+裸值摘要。
+    opencode 与 s2 本就共用 Key/网关/模型字段 → 直接归并到 s2;未知 kind 一律落安全值。"""
+    cp = os.path.join(DATA, 'config.json')
+    conf = read_json(cp, None)
+    if not conf: return
+    eng = conf.get('engine') or {}
+    kind = eng.get('kind')
+    known = ('mock', 's2', 'sowork', 'claude', 'codex', 'custom')
+    if kind == 'opencode':
+        eng['kind'] = 's2'
+    elif kind and kind not in known:
+        eng['kind'] = 's2' if (eng.get('s2_key') or '').strip() else 'mock'
+    else:
+        return
+    conf['engine'] = eng
+    write_json(cp, conf)
+
 ensure_preset()   # 预置配置种子(定制发包用),必须在任何请求处理前完成
+migrate_conf()    # 存量引擎配置归并(撤下的选项不能把老用户晾在空白下拉上)
 
 web = os.environ.get('BID_WEB_DIR') or os.path.join(HERE, '..', 'app', 'src')
 if os.path.isdir(web): app.mount('/', StaticFiles(directory=web, html=True), name='web')
@@ -2055,4 +2502,8 @@ if __name__ == '__main__':
     import uvicorn
     # 云端容器需监听 0.0.0.0;桌面/本机默认只听回环,不对外暴露
     host = os.environ.get('HOST') or ('0.0.0.0' if MULTIUSER else '127.0.0.1')
-    uvicorn.run(app, host=host, port=int(os.environ.get('PORT', 8080)))
+    _port = int(os.environ.get('PORT', 8080))
+    print('[中标狗] 引擎 v%s 启动:http://127.0.0.1:%d  数据目录:%s' % (ENGINE_VERSION, _port, DATA), flush=True)
+    # access_log 关掉:SSE 每秒一次轮询把日志刷成瀑布,网页端长跑时 IO 白白吃 CPU
+    uvicorn.run(app, host=host, port=_port, access_log=os.environ.get('BID_ACCESS_LOG') == '1',
+                log_level='warning', timeout_keep_alive=65)

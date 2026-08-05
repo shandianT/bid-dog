@@ -266,6 +266,19 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   font:400 12.5px/1.4 inherit;padding:10px 16px;border-radius:10px;opacity:0;pointer-events:none;
   transition:opacity .2s,transform .2s;z-index:60;box-shadow:var(--sh-lg)}
 #toast.show{opacity:.97;transform:translateX(-50%) translateY(0)}
+.mdrop{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:40;background:var(--bg, #fff);
+  border:1px solid var(--line-d);border-radius:10px;max-height:230px;overflow:auto;display:none;
+  box-shadow:0 12px 34px rgba(0,0,0,.14)}
+.mdrop div{padding:7px 12px;cursor:pointer;font:400 12.5px/1.5 inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mdrop div:hover{background:var(--soft)}
+.mdrop .mnone{color:var(--faint);cursor:default}
+#engDet[open] #engSum{color:var(--ink)}
+.wl{margin:10px 0 4px;border:1px solid var(--line-d);border-radius:11px;background:var(--soft);overflow:hidden}
+.wl summary{cursor:pointer;font:500 12px/2.2 inherit;color:var(--sub);padding:0 12px;user-select:none}
+.wl pre{margin:0;padding:8px 12px 10px;max-height:190px;overflow:auto;font:400 11px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--sub);white-space:pre-wrap;word-break:break-all;border-top:1px solid var(--line-d)}
+.segbar{display:inline-flex;border:1px solid var(--line-d);border-radius:999px;overflow:hidden;background:var(--bg,#fff)}
+.segbar .seg{padding:6px 13px;font:500 12px/1.4 inherit;color:var(--sub);cursor:pointer;user-select:none;white-space:nowrap}
+.segbar .seg.on{background:var(--blue);color:#fff}
 </style>
 </head>
 <body>
@@ -314,9 +327,10 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       <span class="pill" id="stopBtn" style="display:none" onclick="stopJob()">停止</span>
       <span class="pill" id="redoBtn" style="display:none" onclick="openRedo()">定向重做</span>
       <span class="pill" id="logBtn" onclick="openLog()">运行日志</span>
+      <span class="pill on" id="startBtn" style="display:none" onclick="startStaged()">▶ 开始生成</span>
       <span class="pill" id="hAct" onclick="openCheck()">出件前检查</span>
     </div></div>
-    <div id="chat"><div class="cwrap" id="chatWrap"></div></div>
+    <div id="chat"><div class="cwrap" id="chatWrap"></div><div class="cwrap" id="wlHost"></div></div>
 
     <div class="compose" id="composer">
       <div class="cbox">
@@ -357,7 +371,8 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 </div>
 
 <div class="statusbar"><span id="sbL">完成后系统通知</span><span>· 作者 FDE-家涛</span><span style="flex:1"></span><span id="sbR"></span></div>
-<input type="file" id="filein" style="display:none" onchange="createJob(this.files[0])">
+<input type="file" id="filein" style="display:none" multiple onchange="njAddFiles(Array.from(this.files)); this.value='';">
+<input type="file" id="foldin" style="display:none" webkitdirectory onchange="njAddFiles(Array.from(this.files), true); this.value='';">
 <input type="file" id="refin" style="display:none" accept=".docx,.md,.txt,.pdf" onchange="addRef(this.files[0])">
 
 <!-- 拖放遮罩:明确两个去处 -->
@@ -367,6 +382,27 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 </div>
 
 <div class="ovl" id="ovl" onclick="closeAll()"></div>
+
+<div class="sheet" id="newjob" style="width:640px;gap:13px;z-index:52">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2>新建任务</h2>
+    <div class="desc" style="margin-top:6px">确认招标文件,补充素材和要求(都可跳过),点「开始生成」。</div></div>
+    <span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+  <div class="lbl">招标文件(主件)</div>
+  <select class="f" id="njTender" onchange="NJ.tenderIdx=+this.value"></select>
+  <div class="lbl" style="display:flex;align-items:center;gap:9px">参考素材(公司资料/资质/图片,可整个文件夹拖入)
+    <span style="flex:1"></span>
+    <button class="btn gy" style="padding:6px 12px;font-size:12px" onclick="el('filein').click()">+ 文件</button>
+    <button class="btn gy" style="padding:6px 12px;font-size:12px" onclick="el('foldin').click()">+ 文件夹</button></div>
+  <div id="njList" style="max-height:150px;overflow:auto;border:1px solid var(--line-d);border-radius:10px;padding:8px 10px;font:400 12.5px/1.7 inherit;color:var(--sub)"></div>
+  <div class="lbl">你的要求(选填,会作为生成指令的一部分)</div>
+  <textarea id="njReq" class="f" rows="3" style="resize:vertical;min-height:64px" placeholder="例如:重点展开数据安全章节;报价部分留空;文风稳重…(不填也能生成)"></textarea>
+  <div id="njMsg" style="font:400 12.5px/1.6 inherit;color:var(--sub);display:none"></div>
+  <div style="display:flex;gap:9px;justify-content:flex-end">
+    <button class="btn gy" onclick="closeAll()">取消</button>
+    <button class="btn gy" id="njLater" onclick="njStart(false)">先存着,稍后开始</button>
+    <button class="btn" id="njGo" onclick="njStart(true)">开始生成</button>
+  </div>
+</div>
 
 <div class="sheet" id="redo" style="width:520px;gap:14px;z-index:52">
   <h2 style="font-size:16px">定向重做</h2>
@@ -423,31 +459,52 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 
 <div class="sheet" id="providers">
   <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2>模型接入</h2><div class="desc" style="margin-top:7px">自有模型填 base_url + key 即可,OpenAI 兼容协议。</div></div><span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+  <div style="border:1.5px solid var(--blue);border-radius:12px;padding:13px 14px;display:flex;flex-direction:column;gap:10px;background:var(--soft)">
+    <div style="font:600 13.5px/1.4 inherit">⚡ 快速接入(推荐):粘一串 Key,生成 / 对话 / 识图全部配好</div>
+    <input class="f" id="qkKey" type="password" placeholder="粘贴你收到的 Key(sk-…)">
+    <div style="display:flex;gap:9px;align-items:center">
+      <div class="segbar" id="qkMode">
+        <span class="seg on" data-mode="quality">标准(默认)</span>
+        <span class="seg" data-mode="fast">极速</span>
+      </div>
+      <span style="flex:1"></span>
+      <button class="btn" id="qkBtn" onclick="quickS2()">一键接入并测试</button>
+    </div>
+    <div id="qkModeHint" style="font:400 11.5px/1.6 inherit;color:var(--dim)">标准:用 senseaudio-s2 写正式标书,篇幅与细节更足。识图模型自动挑,不用你操心。</div>
+    <div id="qkMsg" style="font:400 12.5px/1.8 inherit;color:var(--sub);display:none;white-space:pre-line"></div>
+  </div>
   <div id="pList"></div>
-  <div style="display:flex;flex-direction:column;gap:9px">
+  <details id="manDet" style="border:1px solid var(--line-d);border-radius:11px;padding:2px 12px 10px">
+  <summary id="manSum" style="cursor:pointer;font:500 13px/2.4 inherit;color:var(--sub);user-select:none">高级 · 手动接入其他网关(一般用不到)</summary>
+  <div style="display:flex;flex-direction:column;gap:9px;margin-top:6px">
     <input class="f" id="pName" placeholder="名称" value="senseaudio">
     <input class="f" id="pUrl" placeholder="Base URL" value="https://api.senseaudio.cn/v1">
     <input class="f" id="pKey" placeholder="API Key(sk-…)" type="password">
     <div style="display:flex;gap:9px">
-      <input class="f" id="pModel" list="modelOpts" placeholder="模型 ID,如 senseaudio-s2" style="flex:1">
+      <div style="position:relative;flex:1">
+        <input class="f" id="pModel" placeholder="模型 ID,如 senseaudio-s2" style="width:100%;box-sizing:border-box" autocomplete="off">
+        <div class="mdrop" id="pModelDrop"></div>
+      </div>
       <button class="btn gy" onclick="fetchModels()">获取模型列表</button>
     </div>
-    <datalist id="modelOpts"></datalist>
-    <input class="f" id="pVision" list="modelOpts" placeholder="视觉模型(选填,用于图片 OCR 打标,如 senseaudio-vl-1.0-260319)">
+    <div style="position:relative">
+      <input class="f" id="pVision" placeholder="视觉模型(选填,用于图片 OCR 打标,如 senseaudio-vl-1.0-260319)" style="width:100%;box-sizing:border-box" autocomplete="off">
+      <div class="mdrop" id="pVisionDrop"></div>
+    </div>
     <label style="display:flex;align-items:center;gap:7px;font:400 12px/1.5 inherit;color:var(--sub);cursor:pointer">
       <input type="checkbox" id="pInsecure" style="cursor:pointer">跳过 HTTPS 证书校验(仅用于内网自签名网关或公司代理拦截时)
     </label>
     <div id="pMsg" style="font:400 12.5px/1.7 inherit;color:var(--sub);display:none"></div>
     <div style="display:flex;gap:9px;justify-content:flex-end"><button class="btn" onclick="addProvider()">添加并测试</button></div>
   </div>
-  <div class="lbl" style="padding:8px 0 0">生成引擎(真实标书生成用哪个 agent)</div>
-  <div style="display:flex;gap:9px;align-items:center">
+  </details>
+  <details id="engDet" style="border:1px solid var(--line-d);border-radius:11px;padding:2px 12px 10px">
+  <summary id="engSum" style="cursor:pointer;font:500 13px/2.4 inherit;color:var(--sub);user-select:none">生成引擎:加载中…(点开切换/高级设置)</summary>
+  <div style="display:flex;gap:9px;align-items:center;margin-top:6px">
     <select class="f" id="agKind" style="flex:1" onchange="onKindChange()">
-      <option value="mock">内置演示流程(默认)</option>
-      <option value="s2">S2 模型 · 用我们发的 Key(推荐给同事/客户)</option>
-      <option value="sowork">SoWork(商汤)· 用本机已登录账号</option>
-      <option value="claude">Claude Code(需本机装 claude CLI)</option>
-      <option value="codex">Codex CLI(需本机装 codex,走你自己的订阅额度)</option>
+      <option value="s2">自动(默认)</option>
+      <option value="mock">内置演示流程</option>
+      <option value="sowork">SoWork(商汤)</option>
       <option value="custom">自定义命令</option>
     </select>
     <button class="btn gy" onclick="testAgent()">测试连接</button>
@@ -455,17 +512,21 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   </div>
   <div id="agS2" style="display:none;flex-direction:column;gap:9px">
     <div style="font:400 11.5px/1.7 inherit;color:var(--sub);background:var(--soft);border-radius:9px;padding:9px 11px">
-      用我们的 S2 模型和 token 套餐出标书:<b>不需要 Claude/Codex 账号,也不需要登录</b>,只要填一串我们发给你的 Key。
+      <b>填了 Key 就产真实标书,没填就跑内置演示流程</b>——不用你判断该选哪个。不需要 Claude/Codex 账号,也不需要登录任何东西,执行外壳已内置。<br>Key 由中标狗提供方发放,额度记在发放方的套餐上——没有的话找他要一串。
     </div>
-    <input class="f" id="agS2Key" type="password" placeholder="S2 API Key(我们发给你的 sk-… ;留空=沿用已保存的,或借用上面「模型接入」里的 Key)">
+    <input class="f" id="agS2Key" type="password" placeholder="API Key(你收到的 sk-… ;留空=沿用已保存的,或借用上面「模型接入」里的 Key)">
     <div style="display:flex;gap:9px">
       <input class="f" id="agS2Base" placeholder="网关地址(默认 https://api.senseaudio.cn/v1)" style="flex:2">
-      <input class="f" id="agS2Model" placeholder="模型(默认 senseaudio-s2)" style="flex:1">
+      <div style="position:relative;flex:1.4">
+        <input class="f" id="agS2Model" placeholder="生成用哪个模型(点这里选)" style="width:100%;box-sizing:border-box" autocomplete="off">
+        <div class="mdrop" id="agS2ModelDrop"></div>
+      </div>
+      <button class="btn gy" id="agS2Fetch" style="white-space:nowrap" onclick="loadS2Models(1)">取模型</button>
     </div>
     <div id="agS2Hint" style="font:400 11.5px/1.6 inherit;color:var(--dim);word-break:break-all"></div>
     <div id="agS2Shell" style="display:flex;align-items:center;gap:9px;font:400 11.5px/1.6 inherit;color:var(--dim)">
       <span id="agS2ShellSt" style="flex:1"></span>
-      <button class="btn gy" id="agS2Install" style="display:none" onclick="provisionCodex()">一键安装执行外壳(约 130MB)</button>
+      <button class="btn gy" id="agS2Install" style="display:none" onclick="provisionShell()">一键安装执行外壳</button>
     </div>
   </div>
   <input class="f" id="agCmd" placeholder="命令模板,占位符 {tender} {out} {materials} {jobid} {skill}" style="display:none">
@@ -486,12 +547,9 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
     <input class="f" id="agEnv" placeholder="附加环境变量(选填,每行 KEY=VALUE;如网关地址,或试 ELECTRON_RUN_AS_NODE=1 让 CLI 不弹 Dock 图标)">
   </div>
   <div id="agTestMsg" style="font:400 12.5px/1.7 inherit;color:var(--sub);display:none"></div>
-  <select class="f" id="agMode" onchange="saveAgent()">
-    <option value="agents">生成方式:多子 agent 逐步编排(默认,稳)</option>
-    <option value="workflow">生成方式:Workflow 并行流水线(快,易中断)</option>
-  </select>
-  <div style="font:400 11.5px/1.7 inherit;color:var(--faint)">多子 agent:每步产物落盘验收再往下走,出错只重做那一步;Workflow:并行更快,但一环失败易整条断。</div>
+  <input type="hidden" id="agMode" value="agents">
   <div id="agMsg" style="font:400 12px/1.7 inherit;color:var(--faint)"></div>
+  </details>
   <div style="font:400 11.5px/1.7 inherit;color:var(--faint)">Key 存本地引擎配置(生产版转系统钥匙串)。sowork / workbuddy 等平台内使用见 docs/使用与绑定指南.md。</div>
   <div style="font:400 11.5px/1.7 inherit;color:var(--faint)">中标狗 · 作者:FDE-家涛</div>
 </div>
@@ -540,7 +598,7 @@ const API_CANDIDATES = [localStorage.getItem('bid_api'), IS_WEB ? location.origi
 let API = API_CANDIDATES[0];
 const NEED_FEATURES = ['probe_models', 'agent_binding', 'attachments', 'artifact_open', 'job_folder_open'];
 const isWin = navigator.platform.startsWith('Win');
-let S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}, atts:{}, health:{}, chips:{}, es:null,
+let S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}, atts:{}, health:{}, chips:{}, worklog:{}, stageAvgs:null, es:null,
           typing:{}, steps:{}, names:{}, paused:{}, openGrp:{0:true, 1:true, 2:false, 3:false} };
 document.getElementById('sbL').textContent = isWin ? '任务栏显示进度 · 完成后系统通知' : 'Dock 显示进度 · 完成后系统通知 · 托盘常驻';
 
@@ -620,6 +678,7 @@ async function goOnline(h){
   S.jobs = await api('/v1/jobs');
   if(S.jobs.length){ select(S.jobs[0].job_id); }
   setInterval(async()=>{ try{ S.jobs = await api('/v1/jobs'); renderTasks(); }catch(e){} }, 4000);
+  try{ const st = await api('/v1/stats/stages'); S.stageAvgs = st.stages || null; }catch(e){}
   renderTasks(); renderMain();
 }
 async function boot(){
@@ -713,6 +772,11 @@ function select(id){
   S.active = id; renderMain(); renderTasks(); renderChat(); renderHead(); renderRail(); loadAtts(id);
   if(S.online){ attachES(id); refreshArts(id).then(()=>{ if(S.active===id) renderRail(); }); }
 }
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState !== 'visible' || !S.online) return;
+  api('/v1/jobs').then(j=>{ S.jobs=j; renderTasks(); renderHead(); }).catch(()=>{});
+  if(S.active && (!S.es || S.es.readyState === 2)) attachES(S.active);   // 流被浏览器挂起就重挂
+});
 function attachES(id){
   if(S.es) S.es.close();
   S.msgs[id]=[]; S.chips[id]=null;
@@ -734,6 +798,12 @@ function handle(id, e){
       if(e.role==='agent') notify(e.text);
     }
   }
+  if(e.type==='worklog'){
+    const wl = (S.worklog[id]=S.worklog[id]||[]);
+    for(const ln of (e.lines||[])) wl.push(ln);
+    if(wl.length > 400) wl.splice(0, wl.length - 400);
+    if(S.active===id) renderWorklog();
+  }
   if(e.type==='status'){ S.typing[id] = e.state==='thinking' && (Date.now()-ts2ms(e.ts) < 120000); }
   if(e.type==='question_closed'){ const q = S.chips[id]; if(q && (!e.id || q.qid===e.id)) S.chips[id] = null; }
   if(e.type==='progress'){
@@ -746,6 +816,9 @@ function handle(id, e){
         st[k] = ts2ms(e.ts) || Date.now();
       } else if(ts2ms(e.ts)) st[k] = Math.min(st[k], ts2ms(e.ts));
       (S.names[id]=S.names[id]||{})[k] = e.stage||'';
+      const wl = (S.worklog[id]=S.worklog[id]||[]);
+      const dv = '── 第 '+k+' 步 · '+(e.stage||'')+' ──';
+      if(wl[wl.length-1] !== dv) wl.push(dv);
     }
     if(e.pct>=100) notify('已出 Word · 待你确认');
   }
@@ -777,14 +850,26 @@ function fmtDur(ms){
 function timing(id){
   const st = S.steps[id]||{}; const keys = Object.keys(st).map(Number).sort((a,b)=>a-b);
   const p = S.prog[id]||{}; const total = p.total||12, cur = p.step||0;
-  if(!keys.length) return {elapsed:0, eta:0, total, cur};
+  if(!keys.length) return {elapsed:0, eta:0, total, cur, rough:false};
   const t0 = st[keys[0]], now = Date.now();
   const elapsed = now - t0;
-  const doneSteps = Math.max(0, cur - 1);
-  const per = doneSteps > 0 ? (st[keys[keys.length-1]] - t0) / doneSteps : 0;
-  let eta = (per > 0 && cur < total && p.pct < 100) ? per * (total - cur + 1) : 0;
+  let eta = 0, rough = false;
+  if(cur >= 1 && p.pct < 100 && S.stageAvgs){
+    // 每步均值(本机历史优先,缺的用参考值):第一步就能给预计,且不被单个超长步带偏
+    let rem = 0;
+    for(let i = cur; i <= total; i++){
+      const a = S.stageAvgs[i - 1] || {}; let sec = a.avg_s || 120;
+      if(!a.from_history) rough = true;
+      if(i === cur) sec = Math.max(sec - (now - (st[cur] || now)) / 1000, sec * 0.1);
+      rem += sec;
+    }
+    eta = rem * 1000;
+  } else if(cur > 1 && p.pct < 100){
+    const per = (st[keys[keys.length-1]] - t0) / Math.max(1, cur - 1);
+    eta = per > 0 ? per * (total - cur + 1) : 0;
+  }
   if(eta && eta < 5000) eta = 0;
-  return {elapsed, eta, total, cur};
+  return {elapsed, eta, total, cur, rough};
 }
 
 /* ================= 头部 / 对话 / 快捷 ================= */
@@ -815,6 +900,8 @@ function renderHead(){
   act.textContent = done ? (v.key==='bad' ? (v.fix?'去修复内容异常':'看必办清单') : '出件前检查') : '出件前检查';
   el('stopBtn').style.display = (!done && S.online && p.step) ? 'inline-block' : 'none';
   el('redoBtn').style.display = (done && S.online) ? 'inline-block' : 'none';
+  const jj = (S.jobs||[]).find(j=>j.job_id===S.active);
+  el('startBtn').style.display = (jj && jj.staged) ? '' : 'none';
   const pb = el('pauseBtn');
   pb.onclick = togglePause;
   if(!done && S.online && p.step){
@@ -830,6 +917,7 @@ function renderHead(){
     parts.push(p.stage ? '正在:'+p.stage : '任务启动中');
     parts.push('第 '+(p.step||1)+'/'+t.total+' 步');
     if(t.elapsed) parts.push('已用 '+fmtDur(t.elapsed));
+    if(t.eta) parts.push((t.rough?'预计还剩约 ':'预计还剩 ')+fmtDur(t.eta));
     if(t.eta) parts.push('约剩 '+fmtDur(t.eta));
     if(S.paused[S.active]) parts.push('已暂停');
   }
@@ -899,7 +987,20 @@ async function rerunJob(skipAsk){
     S.jobs = await api('/v1/jobs'); toast('已开始重跑'); select(r.job_id);
   }catch(e){ toast('重跑失败:原任务的招标文件可能已不在'); }
 }
+function renderWorklog(){
+  const host = el('wlHost'); if(!host) return;
+  const id = S.active, wl = (id && S.worklog[id]) || [];
+  if(!wl.length){ host.innerHTML=''; return; }
+  const p = S.prog[id]||{}; const live = (p.pct||0) < 100;
+  const had = el('wlBody');
+  const stick = had ? (had.scrollTop + had.clientHeight >= had.scrollHeight - 30) : true;
+  host.innerHTML = '<details class="wl"'+(live?' open':'')+'><summary>'+(live?'⚙ 它正在做什么':'⚙ 工作过程回放 · '+wl.length+' 行')+'</summary>'
+    + '<pre id="wlBody">'+wl.map(esc).join('\n')+'</pre></details>';
+  const b = el('wlBody');
+  if(b && stick) b.scrollTop = b.scrollHeight;
+}
 function renderChat(){
+  setTimeout(renderWorklog, 0);
   const box = el('chat'), wrap = el('chatWrap'); const list = S.msgs[S.active]||[];
   const nearBottom = box.scrollTop + box.clientHeight > box.scrollHeight - 90;  // 用户上翻时不打断
   let h = list.map((m,mi)=>{
@@ -998,7 +1099,7 @@ function renderRail(){
     }
     el('phases').innerHTML = rows;
   } else el('phases').innerHTML = '';
-  el('etaTop').textContent = done100 ? (t.elapsed?'共 '+fmtDur(t.elapsed):'') : (t.eta ? '约剩 '+fmtDur(t.eta) : (t.elapsed?'已用 '+fmtDur(t.elapsed):''));
+  el('etaTop').textContent = done100 ? (t.elapsed?'共 '+fmtDur(t.elapsed):'') : (t.eta ? (t.rough?'约剩~':'约剩 ')+fmtDur(t.eta) : (t.elapsed?'已用 '+fmtDur(t.elapsed):''));
   const seen = new Set(), arts = (S.arts[id]||[]).filter(a=>!seen.has(a.name) && seen.add(a.name));
   const row = a => {
     const md = /\.md$/i.test(a.name);
@@ -1099,17 +1200,70 @@ async function addRef(file){
   catch(e){ toast('参考资料上传失败'); }
   el('refin').value='';
 }
-async function createJob(file){
-  if(!file) return;
-  el('filein').value='';
+/* ---------- 新建任务向导:先放文件(可多选/整文件夹)→ 选填要求 → 点「开始生成」才启动 ---------- */
+const NJ = { items: [], tenderIdx: -1 };            // items: [{file, rel}]
+const DOCLIKE = f => !/\.(png|jpe?g|gif|bmp|tiff?|zip)$/i.test(f);
+function njReset(){ NJ.items = []; NJ.tenderIdx = -1; el('njReq').value=''; const m=el('njMsg'); m.style.display='none'; }
+function njOpen(){
+  el('ovl').style.display='block'; el('newjob').style.display='flex';
+  el('njLater').style.display = S.online ? '' : 'none';          // 演示模式没有"稍后开始"
+  njRender();
+}
+function njAddFiles(files, isFolder){
+  if(!files || !files.length) return;
+  for(const f of files){
+    const rel = (f.webkitRelativePath || f._rel || f.name);
+    NJ.items.push({file: f, rel});
+  }
+  if(el('newjob').style.display==='none' || !el('newjob').style.display) njOpen(); else njRender();
+}
+function njRender(){
+  // 主件候选:文档类文件;默认挑文件名像招标文件的,否则第一个文档
+  const docs = NJ.items.map((it,i)=>({i, n: it.rel.split('/').pop()})).filter(x=>DOCLIKE(x.n));
+  if(NJ.tenderIdx < 0 || !NJ.items[NJ.tenderIdx] || !DOCLIKE(NJ.items[NJ.tenderIdx].rel)){
+    const hit = docs.find(x=>/招标|采购|磋商|询价|tender|rfp/i.test(x.n)) || docs[0];
+    NJ.tenderIdx = hit ? hit.i : -1;
+  }
+  el('njTender').innerHTML = docs.length
+    ? docs.map(x=>'<option value="'+x.i+'"'+(x.i===NJ.tenderIdx?' selected':'')+'>'+esc(x.n)+'</option>').join('')
+    : '<option value="-1">(还没有文档,点上面「+ 文件」添加招标文件)</option>';
+  const rest = NJ.items.filter((_,i)=>i!==NJ.tenderIdx);
+  el('njList').innerHTML = rest.length
+    ? rest.map(it=>'<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escA(it.rel)+'">'+esc(it.rel)+' <span style="color:var(--faint)">'+(it.file.size>1048576?(it.file.size/1048576).toFixed(1)+' MB':Math.max(1,Math.round(it.file.size/1024))+' KB')+'</span></div>').join('')
+      + '<div style="color:var(--faint);margin-top:4px">共 '+rest.length+' 个素材文件,将进入本任务的「素材/」目录</div>'
+    : '<span style="color:var(--faint)">没有素材也能生成:会用「素材库」里的公司资料与图片(设置里可查看)</span>';
+}
+async function njStart(startNow){
+  if(NJ.tenderIdx < 0 || !NJ.items[NJ.tenderIdx]){ el('njMsg').style.display='block'; el('njMsg').textContent='还没有招标文件——点「+ 文件」把它加进来'; return; }
   if(window.Notification && Notification.permission==='default') Notification.requestPermission();
-  if(!S.online){ demoNew(file.name); return; }
-  const fd = new FormData(); fd.append('tender', file); fd.append('name', file.name.replace(/\.[^.]+$/,''));
+  const tender = NJ.items[NJ.tenderIdx];
+  const tname = tender.rel.split('/').pop();
+  if(!S.online){ closeAll(); demoNew(tname); njReset(); return; }
+  const go = el('njGo'), later = el('njLater');
+  go.disabled = later.disabled = true; go.textContent = '创建中…';
+  const fd = new FormData();
+  fd.append('tender', tender.file, tname);
+  const rest = NJ.items.filter((_,i)=>i!==NJ.tenderIdx);
+  const rels = [];
+  for(const it of rest){ fd.append('files', it.file, it.rel.split('/').pop()); rels.push(it.rel); }
+  fd.append('relpaths', JSON.stringify(rels));
+  fd.append('name', tname.replace(/\.[^.]+$/,''));
+  fd.append('prompt', el('njReq').value.trim());
+  fd.append('start', startNow ? '1' : '0');
   try{
     const r = await api('/v1/jobs', {method:'POST', body:fd});
-    S.jobs = await api('/v1/jobs'); select(r.job_id);
-  }catch(e){ toast('创建任务失败,请重试'); }
+    S.jobs = await api('/v1/jobs'); closeAll(); njReset(); select(r.job_id);
+    if(!startNow) toast('已暂存。想跑的时候点任务标题旁的「开始生成」');
+  }catch(e){ el('njMsg').style.display='block'; el('njMsg').textContent='创建失败:'+(e&&e.message||'没连上本地引擎'); }
+  go.disabled = later.disabled = false; go.textContent = '开始生成';
 }
+async function startStaged(){
+  if(!S.active) return;
+  el('startBtn').style.display='none';
+  try{ await api('/v1/jobs/'+S.active+'/start', {method:'POST'}); S.jobs = await api('/v1/jobs'); renderJobs(); }
+  catch(e){ toast('启动失败,请重试'); el('startBtn').style.display=''; }
+}
+function createJob(file){ if(file) njAddFiles([file]); }   // 兼容旧入口:一律进向导
 /* 拖放:有当前任务时给出两个明确去处;否则直接当新任务 */
 let dragN = 0, dropFile = null;
 document.body.addEventListener('dragover', e=>e.preventDefault());
@@ -1121,17 +1275,41 @@ document.body.addEventListener('dragleave', e=>{
   e.preventDefault();
   if(--dragN <= 0){ dragN = 0; el('dropzone').style.display='none'; hotDz(null); }
 });
+function walkEntries(items, done){
+  // 拖入的目录递归展开(webkitGetAsEntry);普通文件直接收
+  const out = []; let pend = 0, walked = false;
+  const finish = ()=>{ if(pend===0 && walked) done(out); };
+  const readDir = (dir, base)=>{
+    pend++;
+    const rd = dir.createReader();
+    const batch = ()=>rd.readEntries(es=>{
+      if(!es.length){ pend--; finish(); return; }
+      for(const en of es){
+        if(en.isFile){ pend++; en.file(f=>{ f._rel = base + en.name; out.push(f); pend--; finish(); }, ()=>{ pend--; finish(); }); }
+        else if(en.isDirectory) readDir(en, base + en.name + '/');
+      }
+      batch();                                   // 目录一次最多返回 100 项,要读到空为止
+    }, ()=>{ pend--; finish(); });
+    batch();
+  };
+  for(const it of (items||[])){
+    const en = it.webkitGetAsEntry && it.webkitGetAsEntry();
+    if(en && en.isDirectory) readDir(en, en.name + '/');
+    else { const f = it.getAsFile && it.getAsFile(); if(f) out.push(f); }
+  }
+  walked = true; finish();
+}
 document.body.addEventListener('drop', e=>{
   e.preventDefault(); dragN = 0;
-  const f = e.dataTransfer.files[0];
   el('dropzone').style.display='none';
-  if(!f) return;
-  if(!S.active){ createJob(f); return; }
   const t = e.target.closest && e.target.closest('.dz');
-  if(t && t.id==='dzRef') addRef(f);
-  else if(t && t.id==='dzNew') createJob(f);
-  else createJob(f);   // 没落在卡片上,按新任务处理
+  const items = e.dataTransfer.items;
+  const plainFiles = Array.from(e.dataTransfer.files||[]);
+  if(S.active && t && t.id==='dzRef'){ if(plainFiles[0]) addRef(plainFiles[0]); hotDz(null); return; }
   hotDz(null);
+  if(items && items.length && Array.from(items).some(it=>{ const en=it.webkitGetAsEntry&&it.webkitGetAsEntry(); return en&&en.isDirectory; })){
+    walkEntries(Array.from(items), fs=>{ if(fs.length) njAddFiles(fs); });
+  }else if(plainFiles.length){ njAddFiles(plainFiles); }
 });
 function hotDz(id){ ['dzNew','dzRef'].forEach(x=>el(x).classList.toggle('hot', x===id)); }
 ;['dzNew','dzRef'].forEach(id=>{
@@ -1179,7 +1357,7 @@ function notify(t){ if(window.Notification && Notification.permission==='granted
 /* ================= 弹层 ================= */
 function openSheet(id){ el('ovl').style.display='block'; el(id).style.display='flex'; if(id==='providers') loadProviders(); if(id==='assets') loadAssets(); }
 function openCheck(){ el('ovl').style.display='block'; el('check').style.display='flex'; renderCheck(); }
-function closeAll(){ cfDone(false); ['ovl','check','providers','assets','preview','confirm','redo','logSheet'].forEach(i=>el(i).style.display='none'); }
+function closeAll(){ cfDone(false); ['ovl','check','providers','assets','preview','confirm','redo','logSheet','newjob'].forEach(i=>el(i).style.display='none'); }
 /* 应用内确认(替代 window.confirm:Tauri 桌面壳里原生 confirm 静默返回 false) */
 function askConfirm(title, desc, danger){
   return new Promise(res=>{
@@ -1238,6 +1416,32 @@ el('pList').addEventListener('click', e=>{
   const t = e.target.closest('[data-test]'); if(t){ testProvider(t.dataset.test, t); return; }
   const d = e.target.closest('[data-delp]'); if(d) delProvider(d.dataset.delp);
 });
+S.models = S.models || [];
+function bindModelDrop(inpId, dropId, src){
+  const i = el(inpId), d = el(dropId);
+  let typed = false;
+  const render = () => {
+    const all = (src ? src() : S.models) || [];
+    const q = typed ? i.value.trim().toLowerCase() : '';
+    let list = q ? all.filter(m => m.toLowerCase().includes(q)) : all;
+    if (!list.length) list = all;                 // 过滤到 0 个就回退显示全部,绝不"看起来只有几款"
+    d.innerHTML = all.length
+      ? list.slice(0, 300).map(m => '<div data-v="' + escA(m) + '">' + esc(m) + '</div>').join('')
+      : '<div class="mnone">点右侧「取模型」拉取你套餐里的全部模型</div>';
+    d.style.display = 'block';
+  };
+  i.addEventListener('focus', () => { typed = false; render(); });
+  i.addEventListener('click', () => { typed = false; render(); });   // 已聚焦时再点一下=看全部
+  i.addEventListener('input', () => { typed = true; render(); });
+  i.addEventListener('blur', () => setTimeout(() => { d.style.display = 'none'; }, 160));
+  d.addEventListener('mousedown', e => {
+    const t = e.target.closest('[data-v]');
+    if (t) { i.value = t.dataset.v; d.style.display = 'none'; e.preventDefault(); i.dispatchEvent(new Event('change')); }
+  });
+}
+bindModelDrop('pModel', 'pModelDrop');
+bindModelDrop('pVision', 'pVisionDrop');
+bindModelDrop('agS2Model', 'agS2ModelDrop', () => S.s2Models || []);
 async function fetchModels(){
   if(!S.online){ pmsg('本地引擎未连接:应用刚启动时引擎需几秒,稍候重试'); return; }
   const body = {base_url: el('pUrl').value.trim(), api_key: el('pKey').value.trim(), verify_ssl: !el('pInsecure').checked};
@@ -1246,10 +1450,10 @@ async function fetchModels(){
   try{
     const r = await api('/v1/providers/probe_models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(r.ok && r.models.length){
-      el('modelOpts').innerHTML = r.models.map(m=>'<option value="'+escA(m)+'">').join('');
+      S.models = r.models.slice();          // 真下拉直接读全量,不再受输入文字过滤之害
       if(!el('pModel').value) el('pModel').value = r.models.find(m=>m.indexOf('s2')>=0) || r.models[0];
       if(!el('pVision').value){ const v = r.models.find(m=>/vl|vision/i.test(m) && !/lite/i.test(m)) || r.models.find(m=>/vl|vision/i.test(m)); if(v) el('pVision').value = v; }
-      pmsg('✓ 该网关有 '+r.models.length+' 个模型可选,点模型输入框从列表选择你套餐里的那个(或手填)');
+      pmsg('✓ 该网关有 '+r.models.length+' 个模型,点模型输入框查看全部(可输入过滤)'+(r.cached?' · 来自缓存,即时返回':''));
     } else pmsg('该网关不支持列出模型('+(r.error||'')+'),请手填模型 ID,如 senseaudio-s2');
   }catch(e){ pmsg(engineHint(e, '获取模型列表')); }
 }
@@ -1283,6 +1487,24 @@ function onKindChange(){
   el('agCmd').style.display = k==='custom' ? 'block' : 'none';
   el('agS2').style.display = k==='s2' ? 'flex' : 'none';
   el('agAdv').style.display = (k==='sowork'||k==='custom'||k==='claude'||k==='codex') ? 'flex' : 'none';
+  // 换了引擎,上一个引擎的 CLI 路径与就绪状态不再适用:按新引擎重取(引擎侧也有同族校验兜底)
+  const a = S.lastAgent;
+  if(a){
+    const key0 = (k==='sowork') ? 'sowork' : (k==='s2' ? 'codex' : k);
+    const found = (a.paths||{})[key0] || '';
+    el('agCli').value = '';
+    el('agCliHint').textContent = found ? '✓ 已自动检测到:'+found : '';
+    el('agCliHint').style.color = found ? 'var(--green)' : 'var(--dim)';
+    if(k==='s2'){
+      const bundled = a.codex_bundled;
+      const okk = (a.available||{}).codex;
+      el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
+        : (okk ? '✓ 执行外壳已就绪:'+((a.paths||{}).codex||'')
+               : '✗ 缺执行外壳(点右侧一键安装,装完不用登录)');
+      el('agS2ShellSt').style.color = (bundled||okk) ? 'var(--green)' : 'var(--warn, #c77b00)';
+      el('agS2Install').style.display = (bundled||okk) ? 'none' : 'inline-block';
+    }
+  }
 }
 async function testAgent(){
   const m = el('agTestMsg'); m.style.display='block'; m.textContent = '测试中(最多 2 分钟)…';
@@ -1294,11 +1516,29 @@ async function testAgent(){
                          : ('✗ ' + r.error + (r.reply ? '\n日志尾部:'+r.reply.slice(-200) : ''));
   }catch(e){ m.textContent = '✗ 测试请求失败:本地引擎没连上'; }
 }
-async function provisionCodex(){
+async function loadS2Models(force){
+  // 生成用的模型从网关实拉:S2、DeepSeek 等你套餐里有什么就能选什么
+  const hint = el('agS2Hint');
+  try{
+    if(force) hint.textContent = '正在取模型列表…';
+    const r = await api('/v1/relay/models');
+    const ids = r.models || (r.data||[]).map(x=>x.id).filter(Boolean);
+    if(ids && ids.length){
+      S.s2Models = ids;
+      if(force){ hint.textContent = '✓ 网关有 '+ids.length+' 个模型,点模型框选择'; hint.style.color='var(--green)'; }
+      return ids;
+    }
+    if(force){ hint.textContent = '✗ 没取到模型:先填好 Key 再试'; hint.style.color='var(--dim)'; }
+  }catch(e){ if(force){ hint.textContent = '✗ 取模型失败:先填好 Key、确认网关地址'; hint.style.color='var(--dim)'; } }
+  return null;
+}
+async function provisionShell(){
+  const which = 'codex';
   const st = el('agS2ShellSt'), btn = el('agS2Install');
   btn.disabled = true; btn.textContent = '安装中…';
   try{
-    let r = await api('/v1/agent/provision', {method:'POST'});
+    let r = await api('/v1/agent/provision', {method:'POST', headers:{'Content-Type':'application/json'},
+                       body: JSON.stringify({which})});
     // 轮询进度:下载约 130MB,慢网络可能要几分钟,把百分比一直报给用户
     while(r.state === 'running'){
       st.textContent = '⇣ ' + (r.note||'下载中…') + ' ' + (r.pct||0) + '%';
@@ -1323,7 +1563,15 @@ async function loadAgent(){
   if(!S.online) return;
   try{
     const a = await api('/v1/agent');
+    S.lastAgent = a;
+    if((a.kind==='claude'||a.kind==='codex') && !el('agKind').querySelector('option[value="'+a.kind+'"]')){
+      const o = document.createElement('option');            // 老配置仍在用本机订阅引擎:补显示,不偷改
+      o.value = a.kind; o.textContent = a.kind==='claude' ? 'Claude Code' : 'Codex CLI';
+      el('agKind').appendChild(o);
+    }
     if(a.kind !== 'env') el('agKind').value = a.kind;
+    // 撤下过的/未知的 kind 会让 select 变空白:落到 s2(有 Key)或 mock,绝不留空
+    if(!el('agKind').value) el('agKind').value = (a.s2_key_set||a.s2_borrowed) ? 's2' : 'mock';
     el('agMode').value = a.mode || 'agents';
     const kind0 = (a.kind === 'env' ? 'mock' : a.kind) || 'mock';
     const found = (a.paths || {})[kind0 === 'sowork' ? 'sowork' : kind0] || '';
@@ -1341,25 +1589,112 @@ async function loadAgent(){
     el('agS2Model').value = a.s2_model || '';
     el('agS2Key').value = '';                    // Key 只写不读:引擎从不回传,页面上也不留残影
     el('agS2Hint').textContent = a.s2_key_set ? '✓ 已保存 Key(留空即沿用,重填会覆盖)'
-      : (a.s2_borrowed ? '↺ 未单独填 Key,将借用上面「模型接入」里已配好的那个' : '✗ 还没填 Key,填完点「测试连接」');
+      : (a.s2_borrowed ? '↺ 未单独填 Key,将借用上面「模型接入」里已配好的那个'
+                       : '✗ 还没 Key:新建任务会先跑内置演示流程;填完 Key 点「测试连接」即产真实标书');
     el('agS2Hint').style.color = (a.s2_key_set || a.s2_borrowed) ? 'var(--green)' : 'var(--dim)';
     el('agS2Base').placeholder = '网关地址(默认 '+(d.base_url||'')+')';
-    el('agS2Model').placeholder = '模型(默认 '+(d.model||'')+')';
+    el('agS2Model').placeholder = '生成用哪个模型(当前 '+(a.s2_model_effective||d.model||'')+',点这里换)';
+    if((a.s2_key_set||a.s2_borrowed) && !S.s2Models) loadS2Models(0);
     // 执行外壳状态:内置(安装包自带)> 已装(路径)> 缺 → 给一键安装按钮
+    const bundled = a.codex_bundled;
     const cxOk = a.available && a.available.codex;
-    el('agS2ShellSt').textContent = a.codex_bundled ? '✓ 执行外壳已内置,开箱即用'
-      : (cxOk ? '✓ 执行外壳已就绪:'+((a.paths||{}).codex||'') : '✗ 缺执行外壳(负责跑命令写文件,装完不用登录)');
-    el('agS2ShellSt').style.color = (a.codex_bundled || cxOk) ? 'var(--green)' : 'var(--warn, #c77b00)';
-    el('agS2Install').style.display = (a.codex_bundled || cxOk) ? 'none' : 'inline-block';
+    el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
+      : (cxOk ? '✓ 执行外壳已就绪:'+((a.paths||{}).codex||'')
+              : '✗ 缺执行外壳(负责跑命令写文件,点右侧一键安装,装完不用登录)');
+    el('agS2ShellSt').style.color = (bundled || cxOk) ? 'var(--green)' : 'var(--warn, #c77b00)';
+    el('agS2Install').style.display = (bundled || cxOk) ? 'none' : 'inline-block';
+    el('agS2Install').textContent = '一键安装执行外壳(约 130MB)';
     onKindChange();
+    // 折叠摘要:平时只看这一行,展开才见全部选项
+    const engName = ({mock:'内置演示流程',s2:'自动',sowork:'SoWork(商汤)',claude:'Claude Code',codex:'Codex CLI',custom:'自定义命令'})[a.kind==='env'?'custom':a.kind] || a.kind;
+    const engReady = a.kind==='mock' ? '' : (a.kind==='s2'
+      ? ((a.s2_key_set||a.s2_borrowed) ? ' · ✓ '+(a.s2_model_effective||'')+' · 产真实标书' : ' · 未填 Key,当前跑演示流程')
+      : ((a.available||{})[a.kind==='env'?'codex':a.kind] ? ' · ✓ 已就绪' : ''));
+    el('engSum').textContent = '生成引擎:' + engName + engReady + '(点开切换/高级设置)';
     if(a.cmd) el('agCmd').value = a.cmd;
     const pth = a.paths||{};
-    el('agMsg').textContent = 'SoWork:'+(a.available.sowork?'✓ '+(pth.sowork||'已装'):'✗ 未找到(需安装并登录 SoWork)')
-      +' · claude CLI:'+(a.available.claude?'✓ 已装':'✗ 未装')
-      +' · codex CLI:'+(a.available.codex?'✓ 已装':'✗ 未装')
-      +' · 标书技能包:'+(a.skill_ok?'✓ '+a.skill_dir:'✗ 未找到(解压 bidmultiagenttao_v5.5.zip 到 '+a.skill_dir+')')
+    const kk = el('agKind').value;
+    el('agMsg').textContent = '标书技能包:'+(a.skill_ok?'✓ 已内置':'✗ 未找到(解压 bidmultiagenttao_v5.3.zip 到 '+a.skill_dir+')')
+      +(kk==='sowork' ? ' · SoWork:'+(a.available.sowork?'✓ '+(pth.sowork||'已装'):'✗ 未找到(需安装并登录 SoWork)') : '')
+      +(kk==='claude' ? ' · claude CLI:'+(a.available.claude?'✓ 已装':'✗ 未装') : '')
+      +(kk==='codex' ? ' · codex CLI:'+(a.available.codex?'✓ 已装':'✗ 未装') : '')
       +(a.kind==='env'?' · 当前由环境变量 AGENT_CMD 接管':'');
   }catch(e){}
+}
+const QK_MODES = {
+  quality: {name:'标准', prefer:'senseaudio-s2', pick:/s2|pro|max|plus/i, avoid:/flash|lite|mini|turbo|nano/i,
+            hint:'标准:用 senseaudio-s2 写正式标书,篇幅与细节更足。识图模型自动挑,不用你操心。'},
+  fast:    {name:'极速', prefer:'deepseek-v4-flash', pick:/flash|lite|turbo|mini|nano/i, avoid:null,
+            hint:'极速:用 deepseek-v4-flash,出稿快、更省额度,适合试跑与演示;正式投标建议用标准。'}
+};
+let QK_MODE = 'quality';
+el('qkMode').addEventListener('click', e => {
+  const t = e.target.closest('[data-mode]'); if(!t) return;
+  QK_MODE = t.dataset.mode;
+  [...el('qkMode').children].forEach(c => c.classList.toggle('on', c === t));
+  el('qkModeHint').textContent = QK_MODES[QK_MODE].hint;
+});
+function qkPick(models, mode){
+  // 先认名字,再认特征,最后兜底第一个——网关里没有指定模型也不至于配不上
+  const M = QK_MODES[mode];
+  if(models.includes(M.prefer)) return M.prefer;
+  const cand = models.filter(x => !/vl|vision|embed|rerank|audio|tts|whisper/i.test(x));
+  const hit = cand.find(x => M.pick.test(x) && (!M.avoid || !M.avoid.test(x)));
+  return hit || cand.find(x => !M.avoid || !M.avoid.test(x)) || cand[0] || models[0] || M.prefer;
+}
+function qkPickVision(models){
+  const vs = models.filter(x => /vl|vision|vlm/i.test(x));
+  return vs.find(x => !/lite|mini|nano/i.test(x)) || vs[0] || '';
+}
+async function quickS2(){
+  // 一串 Key 三件事:生成引擎 + 对话 + 识图,模型按所选模式自动定,识图模型自动挑
+  const key = el('qkKey').value.trim();
+  const m = el('qkMsg'); m.style.display='block';
+  const A = await api('/v1/agent').catch(()=>null);
+  if(!key && !(A && (A.s2_key_set || A.s2_borrowed))){ m.textContent='✗ 先粘贴 Key(sk- 开头那串)'; return; }
+  const btn = el('qkBtn'); btn.disabled = true;
+  const lines = []; const flush = ()=>{ m.textContent = lines.join('\n'); };
+  const d = (A && A.s2_defaults) || {};
+  const base = (A && A.s2_base_url) || d.base_url || 'https://api.senseaudio.cn/v1';
+  try{
+    lines.push('1/4 读取你套餐里的模型…'); flush();
+    let models = [];
+    try{
+      const pr = await api('/v1/providers/probe_models', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({base_url: base, api_key: key, verify_ssl: true})});
+      models = pr.models || [];
+    }catch(e){}
+    const gen = qkPick(models, QK_MODE);
+    const vis = qkPickVision(models);
+    lines[0] = '✓ 1/4 '+(models.length ? ('网关有 '+models.length+' 个模型') : '未取到列表,按默认模型配置');
+    flush();
+
+    lines.push('2/4 绑定生成引擎(' + QK_MODES[QK_MODE].name + ':' + gen + ')…'); flush();
+    el('agKind').value = 's2'; onKindChange();
+    if(key) el('agS2Key').value = key;
+    el('agS2Model').value = gen;
+    if(!el('agS2Base').value.trim() && base) el('agS2Base').value = base;
+    await saveAgent(true);
+    lines[1] = '✓ 2/4 生成引擎:' + gen; flush();
+
+    lines.push('3/4 配置对话与识图…'); flush();
+    if(key){
+      await api('/v1/providers', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name:'senseaudio', base_url: base, api_key: key, model: gen,
+                              vision_model: vis, kind:'openai_compatible', verify_ssl: true})});
+      loadProviders();
+    }
+    lines[2] = '✓ 3/4 对话:' + gen + ' · 识图:' + (vis || '(网关没有识图模型,图片打标改人工)'); flush();
+
+    lines.push('4/4 全链路测试(最多 2 分钟)…'); flush();
+    const r = await api('/v1/agent/test', {method:'POST'});
+    lines[3] = r.ok ? ('✓ 4/4 全链路通了'+(r.latency_ms?' · '+r.latency_ms+'ms':'')+' —— 现在拖入招标文件就能产真实标书')
+                    : ('✗ 4/4 测试未通过:'+(r.error||''));
+    flush();
+    el('qkKey').value=''; S.s2Models = models.length ? models : S.s2Models;
+    loadAgent();
+  }catch(e){ lines.push('✗ 出错:'+(e&&e.message||'没连上本地引擎')); flush(); }
+  btn.disabled = false;
 }
 async function saveAgent(quiet){
   if(!S.online){ pmsg('本地引擎未连接'); return; }
@@ -1370,7 +1705,7 @@ async function saveAgent(quiet){
     login_shell:el('agLogin').checked, sowork_agent:(el('agAgent').value.trim()||'main'), thinking:el('agThink').value,
     s2_base_url:el('agS2Base').value.trim(), s2_model:el('agS2Model').value.trim(), s2_key:el('agS2Key').value.trim()})});
   if(quiet) return;
-  el('agMsg').textContent = '✓ 已保存:'+({mock:'内置演示流程',s2:'S2 模型(我们的 API)',sowork:'SoWork(商汤)',claude:'Claude Code',codex:'Codex CLI',custom:'自定义命令'}[kind])
+  el('agMsg').textContent = '✓ 已保存:'+({mock:'内置演示流程',s2:'自动',sowork:'SoWork(商汤)',claude:'Claude Code',codex:'Codex CLI',custom:'自定义命令'}[kind])
     +' · '+(mode==='workflow'?'Workflow 并行':'多子 agent 逐步')+' —— 新建任务即生效';
   setTimeout(loadAgent, 1500);
 }
@@ -1448,12 +1783,48 @@ function demoBoot(){
   select('demo'); demoRun('demo');
 }
 function demoNew(name){ const id='demo'+Date.now(); S.jobs.unshift({job_id:id,name:(name||'新任务').replace(/\.[^.]+$/,''),pct:0}); renderTasks(); select(id); demoRun(id); }
+// 演示台词:与真实运行同一条展示通道,只是内容是脚本化的样例(在线体验版没有本机引擎,不这样就只剩分隔线)
+const DEMO_LOG = {
+  '体检素材':['$ python3 preflight_check.py --tender 招标文件.pdf --materials 素材/',
+             '素材库定位成功:素材/(公司介绍.md、产品资料.md、产品能力表.md、资质与案例.md、图片索引.md)',
+             '图片索引 6 张已登记,均带落位锚点 ✓','招标文件为 PDF → 转换 招标文件_解析版.md(4.2 万字)'],
+  '读懂组成':['读 招标文件_解析版.md 第三章「投标文件组成」','识别:技术标 / 商务标 / 报价标 三册分装',
+             '附件模板 5 个已登记(投标函、法人授权书、偏离表、承诺函、报价表)','写出 投标文件组成.md'],
+  '提取格式':['提取正文字体:宋体小四 / 行距 1.5 倍 / 首行缩进 2 字符','页边距 上下 2.54cm 左右 3.17cm,装订线 0.5cm',
+             '页眉带项目名,页码分节(封面目录不编页)','写出 word_format_spec.json + 格式要求摘要.md'],
+  '评分废标':['解析评分办法表:技术分 60 / 商务分 25 / 价格分 15','高分值项 4 处已标【高】:信创适配、AI 修复、并发能力、误报治理',
+             '废标条款 7 条逐条登记(★项 3 条)','写出 评分点响应矩阵.md、废标风险清单.md'],
+  '拆解分工':['以投标文件组成为骨架设计大纲(技术方案 5 章)','每章生成招标摘录切片:章节切片/第N章_招标摘录.md',
+             '写出 00_响应矩阵.md,记录各章 must_cover'],
+  '分章撰写':['并行派出 5 个撰写子 agent(每章一个,不逐章串行)','第1章 项目理解 写入 章节/第1章.md · wc -m 3862 ✓',
+             '第2章 系统架构 写入 章节/第2章.md · wc -m 4105 ✓ · 打标 {{图:产品架构图}}',
+             '第3章 信创适配 写入 章节/第3章.md · wc -m 3711 ✓ · 打标 {{图:信创适配配置}}',
+             '第4章 实施与服务 写入 章节/第4章.md · wc -m 2980 ✗ 低于 3500,对该章重派扩写',
+             '第4章 扩写完成 · wc -m 3806 ✓','第5章 售后与培训 写入 章节/第5章.md · wc -m 3644 ✓'],
+  '逐条应答':['读 产品能力表.md(15 项能力,配图列已绑定图片ID)','逐条判定招标要求 32 条:满足 28 / 部分满足 3 / 不满足 1',
+             '不满足项已注明替代方案与说明','写出 技术应答偏离表.md、商务偏离表.md'],
+  '汇总成册':['$ python3 assemble_tender.py 章节/ --out 投标文件_技术标.md',
+             '按 投标文件组成.md 顺序拼装,逐字保留各章正文','总字数 19,028(各章之和 19,028,无缩水)',
+             '文首插入全局对照表,文末生成《投标人补料清单》'],
+  '配图复核':['$ python3 quality_gate.py 投标文件_技术标.md --materials 素材/ --fix',
+             '图片核对:6 张索引图 → 打标 5 处','「缺陷检测详情」打标位置与锚点不符 → 自动搬正到「代码缺陷检测」章',
+             '「白名单管理」有锚点未打标 → 自动补插到「误报治理」段','查重:未发现重复灌注段;字数:5 章全部 ≥3500 ✓',
+             '写出 成品质检报告.md(结论:通过)'],
+  '自查体检':['对照 00_响应矩阵.md 核对交付稿','要求覆盖率 100%(32/32) · 评分点覆盖率 100%(18/18)',
+             '废标条款 7 条逐条已规避 ✓','人工确认项 3 条已列入补料清单','写出 投标文件自检报告.md'],
+  '出Word门禁':['$ python3 build_tender_docx.py 投标文件_技术标.md 技术标.docx --format-spec word_format_spec.json --images-dir 素材/',
+               '图片:自动插入 6 张,连续编号图注','$ python3 check_docx_format.py 技术标.docx',
+               '格式核验 18 项:纸张/页边距/装订线/字体/行距/缩进/页眉页脚/页码分节/目录/封面/表格 全部通过 ✓',
+               '门禁通过,交付物已就位']
+};
 function demoRun(id){
   const stages=['体检素材','读懂组成','提取格式','评分废标','拆解分工','分章撰写','逐条应答','汇总成册','配图复核','自查体检','出Word门禁'];
   let i=0; handle(id,{type:'message',role:'agent',text:'收到招标文件,开始读。读完我把结构、评分表和要你确认的事列出来。'});
+  // 台词逐行吐出:与真实运行观感一致(真实版来自引擎读 run.log 的增量)
+  let logQ = [], logT = setInterval(()=>{ if(logQ.length) handle(id,{type:'worklog',lines:[logQ.shift()]}); }, 260);
   const tm=setInterval(()=>{
     if(S.chips[id]){ return; }
-    if(i>=stages.length){ clearInterval(tm);
+    if(i>=stages.length){ clearInterval(tm); setTimeout(()=>clearInterval(logT), 3000);
       handle(id,{type:'artifact',name:'投标文件_技术标.md'}); handle(id,{type:'artifact',name:'投标文件自检报告.md'});
       handle(id,{type:'progress',stage:'完成',pct:100,step:12,total:12});
       handle(id,{type:'message',role:'agent',text:'已出 Word:全册与自检报告在交付目录。出件前有 3 项要你确认。'});
@@ -1464,9 +1835,10 @@ function demoRun(id){
         {level:'green',title:'格式门禁全部通过',detail:'字体/行距/页边距/页码合规'}]});
       return; }
     handle(id,{type:'progress',stage:stages[i],pct:Math.round((i+0.5)/stages.length*100),step:i+1,total:stages.length});
+    logQ = logQ.concat(DEMO_LOG[stages[i]] || []);
     if(stages[i]==='评分废标') handle(id,{type:'question',id:'q1',text:'安全生产许可证 2026-06 到期,等你上传新证还是按「即将换证」写?',options:['等我上传新证','按即将换证写']});
     i++;
-  },1600);
+  },2400);
 }
 
 /* 运行中的任务每秒刷新耗时/预估 */

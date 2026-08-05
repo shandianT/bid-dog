@@ -4,10 +4,10 @@
   <p><strong>把招标文件交给 AI Agent，从读标、拆解、撰写到 Word 出件，一套流程完成。</strong></p>
   <p>面向投标团队的本地桌面标书助手 · macOS / Windows</p>
 
-  [![Latest release](https://img.shields.io/badge/release-v0.12.1-0a63c9)](https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.12.1)
+  [![Latest release](https://img.shields.io/badge/release-v0.13.1-0a63c9)](https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.13.1)
   [![Build installers](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
-  [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.12.1/bid-dog_0.12.1_aarch64.dmg)
-  [![Windows](https://img.shields.io/badge/Windows-x64-0078D4?logo=windows)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.12.1/bid-dog_0.12.1_x64-setup.exe)
+  [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.13.1/bid-dog_0.13.1_aarch64.dmg)
+  [![Windows](https://img.shields.io/badge/Windows-x64-0078D4?logo=windows)](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.13.1/bid-dog_0.13.1_x64-setup.exe)
 </div>
 
 ## 中标狗是什么？
@@ -56,13 +56,13 @@
 
 ## 下载与安装
 
-当前版本：**v0.12.1（预发布版）**
+当前版本：**v0.13.1（预发布版）**
 
 | 系统 | 下载 | 说明 |
 |---|---|---|
-| macOS | [下载 Apple Silicon 版 DMG](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.12.1/bid-dog_0.12.1_aarch64.dmg) | 适用于 M1 / M2 / M3 / M4 系列 Mac |
-| Windows | [下载 Windows x64 安装程序](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.12.1/bid-dog_0.12.1_x64-setup.exe) | Windows 10 / 11 64 位 |
-| 源码 | [下载完整源码本地运行版](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.12.1/%E4%B8%AD%E6%A0%87%E7%8B%97_v0.12.1_%E6%BA%90%E7%A0%81%E6%9C%AC%E5%9C%B0%E8%BF%90%E8%A1%8C%E7%89%88.zip) | 解压后使用根目录的一键启动脚本 |
+| macOS | [下载 Apple Silicon 版 DMG](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.13.1/bid-dog_0.13.1_aarch64.dmg) | 适用于 M1 / M2 / M3 / M4 系列 Mac |
+| Windows | [下载 Windows x64 安装程序](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.13.1/bid-dog_0.13.1_x64-setup.exe) | Windows 10 / 11 64 位 |
+| 源码 | [下载完整源码本地运行版](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.13.1/%E4%B8%AD%E6%A0%87%E7%8B%97_v0.13.1_%E6%BA%90%E7%A0%81%E6%9C%AC%E5%9C%B0%E8%BF%90%E8%A1%8C%E7%89%88.zip) | 解压后使用根目录的一键启动脚本 |
 
 安装包暂未进行商业代码签名。macOS 若提示“已损坏”，请按 [Mac 安装说明](docs/Mac安装说明.md) 放行；Windows SmartScreen 提示时选择“更多信息 → 仍要运行”。也可以前往 [全部 Releases](https://github.com/shandianT/bid-dog/releases) 查看历史版本。
 
@@ -108,13 +108,13 @@
 - 接入外部模型或 CLI 时，数据处理还受相应服务商条款约束；涉密材料请先确认组织的数据安全要求。
 - AI 产物必须人工复核，尤其是投标人信息、报价、资质有效期、承诺和签章内容。
 
-## v0.12.1 亮点
+## v0.15.0 亮点
 
-- 新增「S2 模型 · 用我们发的 Key」生成引擎：接收方无需任何账号或登录，填一串 Key 即产真实标书，额度走我们的 token 套餐。
-- **执行外壳（Codex 二进制）已内置到安装包**：客户不装 Node、不跑命令，开箱即用；源码本地运行包提供「一键安装」按钮（npmmirror 镜像优先，带进度，损坏自愈）。
-- 引擎内置 Responses↔chat 协议中转，Codex 直连自有 S2 网关；不改用户原有 `~/.codex`，真 Key 不出引擎进程。
-- 「测试连接」分层报错（Key/网关/模型/外壳/中转层），每条都是中文下一步动作。
-- 定制发包支持 `preset_config.json` 预置配置：给某家客户的专版可以连 Key 都预填好（公开包严禁携带）。
+- **实时工作台词**：对话区常驻控制台，agent 每一步在做什么逐行流式显示（读哪个文件、跑什么脚本、写出什么），跑完折叠为回放。
+- **预计等待时间**：按本机历史每步耗时估算，第 1 步就有数、越用越准，不被单个超长步带偏。
+- **成品质检门禁**：图片按索引锚点自动搬正/补插/剔除、重复段折叠、按章字数与应答覆盖率核验；交付前自动修复并重出 Word，产《成品质检报告》。
+- **零依赖开箱即用**：执行外壳已内置进安装包，一串 Key 一键接入（生成+对话+识图三件事一次配好）。
+- 官网首页直接展示**成品 Word 页面**（封面/图文正文/偏离表），不是应用界面截图。
 
 完整版本记录见 [CHANGELOG](CHANGELOG.md)。
 
