@@ -1,0 +1,14 @@
+{
+  "name": "bid-assistant",
+  "private": true,
+  "version": "0.12.1",
+  "author": "FDE-家涛",
+  "scripts": {
+    "tauri": "tauri",
+    "build": "tauri build",
+    "dev": "tauri dev"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

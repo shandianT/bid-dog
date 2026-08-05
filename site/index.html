@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>中标狗 — 把招标文件交给它,你只做确认</title>
+<meta name="description" content="中标狗:本地运行的投标文件生成工作台。拖入招标文件,12 阶段流水线产出技术标与自检报告,出件前门禁把关。数据不出你的电脑。">
+<link rel="icon" href="assets/icon.png">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#08090b; --bg2:#0e1014; --card:rgba(255,255,255,.035); --line:rgba(255,255,255,.09);
+  --line2:rgba(255,255,255,.14); --ink:#f6f7f9; --sub:#9ba1ab; --dim:#6b7280;
+  --brand:#4d9dff; --brand2:#8b7cff; --ok:#35d08a; --warn:#f5b544; --bad:#ff6b5e;
+  --r:16px;
+}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--ink);font-size:15px;line-height:1.65;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1120px;margin:0 auto;padding:0 26px}
+/* 背景光晕 */
+.glow{position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+   radial-gradient(760px 420px at 18% -8%, rgba(77,157,255,.20), transparent 62%),
+   radial-gradient(680px 380px at 88% 4%, rgba(139,124,255,.16), transparent 60%),
+   radial-gradient(900px 500px at 50% 108%, rgba(53,208,138,.07), transparent 62%)}
+.grain{position:fixed;inset:0;pointer-events:none;z-index:1;opacity:.28;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E")}
+main,nav,footer{position:relative;z-index:2}
+
+/* ---------- 导航 ---------- */
+nav{position:sticky;top:0;z-index:40;backdrop-filter:blur(16px);background:rgba(8,9,11,.72);
+  border-bottom:1px solid rgba(255,255,255,.06)}
+nav .wrap{display:flex;align-items:center;gap:28px;height:62px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:650;font-size:16px;letter-spacing:-.01em}
+.brand img{width:27px;height:27px;border-radius:7px}
+nav .nl{color:var(--sub);font-size:14px;transition:color .18s}
+nav .nl:hover{color:var(--ink)}
+.cta{display:inline-flex;align-items:center;gap:8px;border-radius:11px;font-weight:600;font-size:14px;
+  padding:10px 18px;transition:transform .16s,box-shadow .22s,background .18s;white-space:nowrap}
+.cta.p{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;
+  box-shadow:0 6px 24px -6px rgba(77,157,255,.6)}
+.cta.p:hover{transform:translateY(-1px);box-shadow:0 12px 34px -8px rgba(77,157,255,.75)}
+.cta.g{border:1px solid var(--line2);color:var(--ink);background:rgba(255,255,255,.04)}
+.cta.g:hover{background:rgba(255,255,255,.08)}
+nav .cta{margin-left:auto;padding:9px 16px}
+
+/* ---------- Hero ---------- */
+.hero{padding:74px 0 0;text-align:center}
+.badge{display:inline-flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:999px;
+  padding:7px 15px;font-size:12.5px;color:var(--sub);background:var(--card);margin-bottom:26px}
+.badge i{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(53,208,138,.18);
+  animation:bp 2.4s infinite}
+@keyframes bp{0%,100%{opacity:1}50%{opacity:.45}}
+h1{font-size:clamp(34px,5.6vw,62px);line-height:1.1;letter-spacing:-.035em;font-weight:700}
+h1 .gr{background:linear-gradient(100deg,var(--brand) 10%,var(--brand2) 55%,#c9b6ff 90%);
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.hsub{color:var(--sub);font-size:clamp(15px,1.7vw,18px);max-width:640px;margin:22px auto 32px;line-height:1.7}
+.hbtns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.cta.big{padding:14px 26px;font-size:15px;border-radius:13px}
+.trust{margin-top:16px;font-size:12.5px;color:var(--dim)}
+
+/* ---------- 演示窗口 ---------- */
+.stage{margin-top:52px;position:relative}
+.stage::before{content:"";position:absolute;inset:-6% 8% 40%;background:radial-gradient(closest-side,rgba(77,157,255,.30),transparent);
+  filter:blur(58px);z-index:-1}
+.win{max-width:1000px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;
+  border:1px solid rgba(255,255,255,.14);box-shadow:0 40px 90px -22px rgba(0,0,0,.75),0 0 0 1px rgba(0,0,0,.4);
+  transform:perspective(1600px) rotateX(3deg);transform-origin:top center}
+.tb{height:34px;background:#f2f2f0;border-bottom:1px solid #e3e3e1;display:flex;align-items:center;padding:0 12px;gap:7px}
+.tb i{width:10px;height:10px;border-radius:50%}
+.tb .t{flex:1;text-align:center;font-size:11.5px;color:#8b8b8b;font-weight:500}
+/* 迷你 App:三栏 */
+.mini{display:grid;grid-template-columns:154px 1fr 178px;height:392px;background:#fff;color:#0d0d0d;
+  font-size:11px;line-height:1.5;text-align:left}
+.mini.empty{grid-template-columns:154px 1fr}
+.ms{background:#f9f9f8;border-right:1px solid #ececea;padding:11px 9px;display:flex;flex-direction:column;gap:9px}
+.ms .lg{display:flex;align-items:center;gap:6px;font-weight:650;font-size:11.5px;padding:2px}
+.ms .lg b{width:6px;height:6px;border-radius:50%;background:var(--ok);display:block}
+.nb{background:#0a63c9;color:#fff;border-radius:8px;padding:8px 9px;font-size:10.5px;font-weight:600;
+  display:flex;align-items:center;gap:6px}
+.nb span{opacity:.75;font-weight:400;font-size:9.5px;display:block}
+.gl{font-size:9px;color:#b4b4b4;letter-spacing:.08em;padding:4px 3px 0;font-weight:600}
+.ti{border-radius:7px;padding:7px 8px;display:flex;flex-direction:column;gap:4px;
+  opacity:0;transform:translateY(-6px);transition:opacity .4s,transform .4s,background .3s}
+.ti.show{opacity:1;transform:none}
+.ti.on{background:#ececea}
+.ti .tn{display:flex;align-items:center;gap:6px;font-weight:600;font-size:10.5px}
+.ti .tn i{width:5px;height:5px;border-radius:50%;background:#0a63c9;flex:none;transition:background .4s}
+.ti .tm{color:#8f8f8f;font-size:9.5px;padding-left:11px}
+.ti .bar{height:2px;background:#e4e4e2;border-radius:2px;margin-left:11px;overflow:hidden}
+.ti .bar b{display:block;height:100%;width:0;background:#0a63c9;transition:width .8s cubic-bezier(.4,0,.2,1)}
+.ms .btm{margin-top:auto;border-top:1px solid #ececea;padding-top:8px;display:flex;flex-direction:column;gap:5px;
+  font-size:10px;color:#5d5d5d}
+/* 中栏 */
+.mc{display:flex;flex-direction:column;min-width:0;position:relative}
+.mh{padding:12px 18px 0;opacity:0;transform:translateY(-8px);transition:.45s}
+.mh.show{opacity:1;transform:none}
+.mh .r{display:flex;align-items:center;gap:9px;border-bottom:1px solid #ececea;padding-bottom:10px}
+.mh h4{font-size:13px;font-weight:650;letter-spacing:-.01em;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.mh .sb{font-size:9.5px;color:#8f8f8f;margin-top:3px}
+.mh .pill{font-size:9.5px;border:1px solid #dcdcda;border-radius:999px;padding:5px 10px;font-weight:600;white-space:nowrap}
+.mh .pill.on{background:#0a63c9;border-color:#0a63c9;color:#fff}
+.mh .bdg{font-size:9.5px;border-radius:999px;padding:5px 9px;font-weight:600;white-space:nowrap;
+  display:none;align-items:center;gap:5px}
+.mh .bdg.s{display:inline-flex;animation:pop .4s}
+@keyframes pop{from{transform:scale(.85);opacity:0}to{transform:none;opacity:1}}
+.mh .bdg i{width:5px;height:5px;border-radius:50%;background:currentColor}
+.mb{flex:1;overflow:hidden;padding:14px 18px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:88%;opacity:0;transform:translateY(8px);animation:in .42s forwards}
+@keyframes in{to{opacity:1;transform:none}}
+.msg .bb{font-size:11px;line-height:1.65}
+.msg .who{font-size:8.5px;color:#b4b4b4;margin-top:3px}
+.msg.u{align-self:flex-end}
+.msg.u .bb{background:#f2f2f0;border-radius:13px;padding:7px 11px}
+.msg.u .who{text-align:right}
+.sysl{align-self:center;font-size:9px;color:#b4b4b4;display:flex;align-items:center;gap:5px;
+  opacity:0;animation:in .4s forwards}
+.sysl b{width:3px;height:3px;border-radius:50%;background:#c9c9c7;display:block}
+.chips{display:flex;gap:7px;flex-wrap:wrap;opacity:0;animation:in .4s forwards}
+.chip{font-size:10px;font-weight:600;padding:7px 12px;border-radius:999px;background:#0a63c9;color:#fff;
+  transition:transform .2s,box-shadow .2s}
+.chip.g{background:#fff;color:#0d0d0d;border:1px solid #dcdcda}
+.chip.tap{transform:scale(.94);box-shadow:0 0 0 4px rgba(10,99,201,.22)}
+.typing{display:flex;gap:4px;align-items:center;font-size:9.5px;color:#8f8f8f}
+.typing b{width:4px;height:4px;border-radius:50%;background:#c2c2c0;display:block;animation:tp 1.2s infinite}
+.typing b:nth-child(2){animation-delay:.16s}.typing b:nth-child(3){animation-delay:.32s}
+@keyframes tp{0%,60%,100%{opacity:.35;transform:none}30%{opacity:1;transform:translateY(-3px)}}
+.mi{padding:0 18px 14px;opacity:0;transition:.4s}
+.mi.show{opacity:1}
+.mi .box{border:1px solid #dcdcda;border-radius:20px;padding:7px 8px 7px 12px;display:flex;align-items:center;gap:8px;
+  font-size:10.5px;color:#b4b4b4;background:#fff}
+.mi .snd{margin-left:auto;width:25px;height:25px;border-radius:50%;background:#0a63c9;display:flex;
+  align-items:center;justify-content:center;color:#fff;font-size:11px}
+/* 空态 */
+.mz{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  background:#fff;transition:opacity .5s,transform .5s}
+.mz.hide{opacity:0;transform:scale(.97);pointer-events:none}
+.mz h3{font-size:16px;font-weight:650;letter-spacing:-.02em}
+.mz p{font-size:10.5px;color:#8f8f8f;margin-bottom:12px}
+.mz .drop{width:74%;border:1.4px dashed #dcdcda;border-radius:12px;padding:16px;display:flex;align-items:center;gap:11px;
+  transition:border-color .3s,background .3s}
+.mz .drop.hot{border-color:#0a63c9;background:#eef5fd}
+.mz .drop .ic{width:30px;height:30px;border-radius:9px;background:#0a63c9;color:#fff;display:flex;
+  align-items:center;justify-content:center;font-size:14px;flex:none}
+.mz .drop b{font-size:11px;display:block}
+.mz .drop span{font-size:9.5px;color:#8f8f8f}
+/* 飞入的文件 */
+.fly{position:absolute;z-index:5;background:#fff;border:1px solid #dcdcda;border-radius:9px;padding:7px 11px;
+  font-size:10px;font-weight:600;box-shadow:0 12px 26px rgba(0,0,0,.16);display:flex;align-items:center;gap:7px;
+  opacity:0;pointer-events:none}
+.fly.go{animation:fly 1.5s cubic-bezier(.5,0,.3,1) forwards}
+@keyframes fly{
+  0%{opacity:0;transform:translate(96px,-64px) scale(.9) rotate(6deg)}
+  22%{opacity:1}
+  78%{opacity:1;transform:translate(0,0) scale(1) rotate(0)}
+  100%{opacity:0;transform:translate(0,10px) scale(.96)}}
+/* 右栏 */
+.mr{border-left:1px solid #ececea;padding:11px;display:flex;flex-direction:column;gap:8px;background:#fff;
+  opacity:0;transform:translateX(10px);transition:.45s}
+.mr.show{opacity:1;transform:none}
+.rc{border:1px solid #ececea;border-radius:11px;padding:9px 10px;display:flex;flex-direction:column;gap:6px}
+.rc .ct{font-size:8.5px;color:#b4b4b4;letter-spacing:.08em;font-weight:600;display:flex;justify-content:space-between}
+.tk{display:flex;gap:2px}
+.tk i{flex:1;height:3px;border-radius:2px;background:#e9e9e7;transition:background .35s}
+.tk i.d{background:#3a3a38}.tk i.a{background:#0a63c9}
+.cs{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600}
+.cs .sp{width:8px;height:8px;border:1.4px solid rgba(10,99,201,.25);border-top-color:#0a63c9;border-radius:50%;
+  animation:sp .7s linear infinite;display:block;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+.cs .r{margin-left:auto;font-weight:400;color:#b4b4b4;font-size:9px}
+.fr{display:flex;align-items:center;gap:6px;font-size:10px;opacity:0;transform:translateX(-6px);
+  animation:sl .4s forwards}
+@keyframes sl{to{opacity:1;transform:none}}
+.fr .nm{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fr .dl{color:#0a63c9;font-size:9px}
+.rc.warn{cursor:default}
+.rc .wt{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600}
+.rc .wt i{width:6px;height:6px;border-radius:50%;background:#b7791f;display:block}
+.rc .wd{font-size:9.5px;color:#8f8f8f}
+.empty-r{font-size:9.5px;color:#c9c9c7}
+
+/* 章节控制条 */
+.chap{max-width:1000px;margin:20px auto 0;display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.cb{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:9px 15px;font-size:12.5px;
+  color:var(--sub);cursor:pointer;position:relative;overflow:hidden;transition:color .2s,border-color .2s}
+.cb:hover{color:var(--ink);border-color:var(--line2)}
+.cb.on{color:var(--ink);border-color:rgba(77,157,255,.5)}
+.cb .fill{position:absolute;left:0;bottom:0;height:2px;width:0;background:linear-gradient(90deg,var(--brand),var(--brand2))}
+.cb.on .fill{transition:width linear}
+.replay{font-size:12px;color:var(--dim);text-align:center;margin-top:14px}
+.replay b{color:var(--sub);cursor:pointer;border-bottom:1px dashed var(--line2)}
+
+/* ---------- 通用 section ---------- */
+section{padding:96px 0}
+.kick{color:var(--brand);font-size:12.5px;font-weight:650;letter-spacing:.1em;text-transform:uppercase}
+h2{font-size:clamp(25px,3.4vw,38px);letter-spacing:-.028em;line-height:1.22;margin:12px 0 14px;font-weight:680}
+.lead{color:var(--sub);max-width:48em;font-size:15.5px}
+.center{text-align:center}.center .lead{margin:0 auto}
+.rv{opacity:0;transform:translateY(22px);transition:opacity .7s cubic-bezier(.2,.7,.3,1),transform .7s cubic-bezier(.2,.7,.3,1)}
+.rv.in{opacity:1;transform:none}
+
+/* 数字条 */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);
+  border-radius:var(--r);overflow:hidden;margin-top:42px}
+.st{background:#0b0d10;padding:22px 20px}
+.st b{display:block;font-size:26px;font-weight:700;letter-spacing:-.02em;
+  background:linear-gradient(120deg,#fff,#9db4d8);-webkit-background-clip:text;background-clip:text;color:transparent}
+.st span{font-size:12.5px;color:var(--dim)}
+
+/* Bento */
+.bento{display:grid;grid-template-columns:repeat(6,1fr);gap:16px;margin-top:44px}
+.bx{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:24px;position:relative;
+  overflow:hidden;transition:border-color .25s,transform .25s,background .25s}
+.bx:hover{border-color:var(--line2);transform:translateY(-2px);background:rgba(255,255,255,.055)}
+.bx.w3{grid-column:span 3}.bx.w2{grid-column:span 2}.bx.w6{grid-column:span 6}
+.bx h3{font-size:17px;font-weight:650;letter-spacing:-.015em;margin-bottom:8px}
+.bx p{color:var(--sub);font-size:13.5px;line-height:1.7}
+.bx .tag{display:inline-block;font-size:11px;color:var(--brand);background:rgba(77,157,255,.12);
+  border-radius:999px;padding:3px 10px;margin-bottom:12px;font-weight:600}
+/* 门禁三色小演示 */
+.gates{display:flex;flex-direction:column;gap:9px;margin-top:16px}
+.gt{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:11px;padding:11px 13px;
+  background:rgba(0,0,0,.25)}
+.gt i{width:8px;height:8px;border-radius:50%;flex:none}
+.gt b{font-size:13px;font-weight:600}
+.gt span{color:var(--dim);font-size:12px;margin-left:auto;text-align:right}
+/* 引擎条 */
+.engs{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.eg{border:1px solid var(--line);border-radius:11px;padding:11px 15px;background:rgba(0,0,0,.25);font-size:13px}
+.eg b{display:block;font-weight:600}
+.eg span{font-size:11.5px;color:var(--dim)}
+/* 真实截图 */
+.shots{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:40px}
+.sh{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#0b0d10}
+.sh img{width:100%;display:block}
+.sh .cap{padding:13px 16px;font-size:12.5px;color:var(--sub);border-top:1px solid var(--line)}
+/* FAQ */
+.faq{max-width:780px;margin-top:36px}
+details{border-bottom:1px solid var(--line);padding:19px 0}
+summary{cursor:pointer;font-weight:600;font-size:15.5px;list-style:none;display:flex;justify-content:space-between;gap:16px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";color:var(--dim);font-size:19px;font-weight:300;line-height:1}
+details[open] summary::after{content:"−"}
+details p{color:var(--sub);font-size:14px;margin-top:11px;max-width:46em}
+details code{background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12.5px}
+/* 尾部 CTA */
+.final{text-align:center;border:1px solid var(--line);border-radius:22px;padding:64px 30px;background:
+  radial-gradient(700px 260px at 50% 0%,rgba(77,157,255,.16),transparent 70%),var(--card)}
+footer{border-top:1px solid var(--line);padding:30px 0;color:var(--dim);font-size:13px}
+footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+@media (max-width:900px){
+  .mini{grid-template-columns:120px 1fr;height:340px}
+  .mr{display:none}
+  .bento{grid-template-columns:1fr}
+  .bx.w3,.bx.w2,.bx.w6{grid-column:span 1}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .shots{grid-template-columns:1fr}
+  nav .nl{display:none}
+  .win{transform:none}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="glow"></div><div class="grain"></div>
+
+<nav><div class="wrap">
+  <a class="brand" href="#"><img src="assets/icon.png" alt="">中标狗</a>
+  <a class="nl" href="app/index.html?demo=1">在线体验</a>
+  <a class="nl" href="#demo">看它干活</a>
+  <a class="nl" href="#feat">能力</a>
+  <a class="nl" href="#gate">出件门禁</a>
+  <a class="nl" href="#faq">问答</a>
+  <a class="cta p" href="#get">免费下载</a>
+</div></nav>
+
+<main>
+<div class="hero"><div class="wrap">
+  <div class="badge"><i></i>v0.12.1 · 发 Key 即用 S2 模型(执行外壳已内置) · SoWork / Claude / Codex 一键接入</div>
+  <h1>把招标文件交给它,<br>你只做<span class="gr">确认</span></h1>
+  <p class="hsub">在你自己的电脑上,一份招标文件变成可交付的投标文件:预检 → 评分点与废标项 → 分章撰写 → 出 Word。写得快是基本功,<b style="color:var(--ink)">敢交出去</b>才是本事。</p>
+  <div class="hbtns" id="get">
+    <a class="cta p big" href="https://github.com/shandianT/bid-dog/releases/latest" target="_blank">下载 macOS 版</a>
+    <a class="cta g big" href="https://github.com/shandianT/bid-dog/releases/latest" target="_blank">下载 Windows 版</a>
+    <a class="cta g big" href="app/index.html?demo=1">在线体验(不用装)</a>
+  </div>
+  <div class="trust">安装即用 · 内置演示模式,不填任何配置也能完整体验 · 数据全程留在本机</div>
+</div></div>
+
+<!-- ============ 自动播放的产品演示 ============ -->
+<div class="stage" id="demo"><div class="wrap">
+  <div class="win">
+    <div class="tb"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">中标狗</span><span style="width:46px"></span></div>
+    <div class="mini" id="mini">
+      <!-- 侧栏 -->
+      <div class="ms">
+        <div class="lg"><b></b>中标狗</div>
+        <div class="nb">＋<div>新建任务<span>选择或拖入招标文件</span></div></div>
+        <div class="gl" id="glTitle" style="opacity:0">进行中 · 1</div>
+        <div class="ti" id="task1">
+          <div class="tn"><i></i><span>滨江智慧管网项目</span></div>
+          <div class="tm" id="tStage">启动中 · 0%</div>
+          <div class="bar"><b id="tBar"></b></div>
+        </div>
+        <div class="btm"><span>📁 素材库</span><span>⚙ 设置 · 模型接入</span></div>
+      </div>
+      <!-- 中栏 -->
+      <div class="mc">
+        <div class="mz" id="zero">
+          <h3>准备好了,随时开始</h3>
+          <p>把招标文件交给我,全程可对话</p>
+          <div class="drop" id="drop">
+            <div class="ic">↑</div>
+            <div><b>上传招标文件,开始生成标书</b><span>点击选择,或把文件拖到窗口任意位置</span></div>
+          </div>
+        </div>
+        <div class="fly" id="fly">📄 滨江智慧管网项目_招标文件.docx</div>
+        <div class="mh" id="head"><div class="r">
+          <div style="flex:1;min-width:0">
+            <h4>滨江智慧管网项目</h4>
+            <div class="sb" id="hSub">正在:体检素材 · 第 1/12 步</div>
+          </div>
+          <span class="bdg" id="bdg" style="background:#fdf4e6;color:#b7791f"><i></i>有必办项,暂不可投</span>
+          <span class="pill" id="pill">出件前检查</span>
+        </div></div>
+        <div class="mb" id="chat"></div>
+        <div class="mi" id="inp"><div class="box">问问进度、提要求,或把文件拖进来<span class="snd">↑</span></div></div>
+      </div>
+      <!-- 右栏 -->
+      <div class="mr" id="rail">
+        <div class="rc">
+          <div class="ct"><span>进度</span><span id="eta">已用 4 秒</span></div>
+          <div class="tk" id="ticks"></div>
+          <div class="cs"><span class="sp" id="spin"></span><span id="curStep">体检素材</span><span class="r" id="stepN">1/12</span></div>
+        </div>
+        <div class="rc" style="flex:1">
+          <div class="ct"><span>已产出 <span id="artN"></span></span></div>
+          <div id="files" style="display:flex;flex-direction:column;gap:5px"><span class="empty-r">生成过程中陆续出现</span></div>
+        </div>
+        <div class="rc warn">
+          <div class="wt"><i id="wDot"></i><span id="wT">出件前检查</span></div>
+          <div class="wd" id="wD">出 Word 后在这里看结论与补料清单</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="chap" id="chap">
+    <span class="cb on" data-i="0">① 拖入招标文件<span class="fill"></span></span>
+    <span class="cb" data-i="1">② 12 阶段生成<span class="fill"></span></span>
+    <span class="cb" data-i="2">③ 拿不准就问你<span class="fill"></span></span>
+    <span class="cb" data-i="3">④ 出件前把关<span class="fill"></span></span>
+  </div>
+  <div class="replay">这是产品真实界面与流程的动画还原 · <b id="replay">重新播放</b></div>
+</div></div>
+
+<section><div class="wrap rv">
+  <div class="stats">
+    <div class="st"><b>12 阶段</b><span>流水线,每步落盘验收</span></div>
+    <div class="st"><b>36+ 项</b><span>出件前格式与内容门禁</span></div>
+    <div class="st"><b>104 项</b><span>自动化回归,每版全跑</span></div>
+    <div class="st"><b>0 上传</b><span>文件全程留在你电脑</span></div>
+  </div>
+</div></section>
+
+<section id="feat"><div class="wrap">
+  <div class="rv"><div class="kick">核心能力</div>
+  <h2>为"敢交出去"而设计</h2>
+  <p class="lead">生成只是开始。真正难的是:不编造、能追问、出门前有人把关。</p></div>
+  <div class="bento">
+    <div class="bx w3 rv"><span class="tag">素材库</span><h3>过往标书变成弹药</h3><p>上传历史标书,自动拆章节模板、抽图片、归类资质业绩;AI 识图打标,写新标书时按锚点自动配图——你的积累第一次真正被复用起来。</p></div>
+    <div class="bx w3 rv"><span class="tag">不编造</span><h3>缺什么,明说</h3><p>资质、案例、报价缺失时不瞎编,统一标〔需补充〕并列进补料清单。宁可留空,也不给你在评标现场埋雷。</p></div>
+    <div class="bx w2 rv"><span class="tag">对话即遥控</span><h3>说人话就能指挥</h3><p>「暂停一下」「继续」直接生效;「重写第三章」「整册重跑」先给确认按钮,点了才动手。</p></div>
+    <div class="bx w2 rv"><span class="tag">版式引擎</span><h3>Word 排版自动兜底</h3><p>14 列宽表自动转横排、固定列宽、表头跨页重复;逐字打散、样板重复能检测能修复。</p></div>
+    <div class="bx w2 rv"><span class="tag">本地优先</span><h3>数据主权在你手里</h3><p>文件都在「文稿/中标狗」,打开就能看;删掉应用,文件还在。也可部署到自己的服务器。</p></div>
+    <div class="bx w6 rv"><span class="tag">生成引擎</span><h3>拿 Key 即用,或接你已有的 AI 订阅</h3>
+      <p>拿到我们发的 Key,填进去就能用 S2 模型产标书——不需要注册、登录任何 AI 账号;也可绑定你已有的 SoWork、Claude Code、Codex 订阅或自定义命令。「测试连接」连不上会用中文告诉你差哪一步——不是甩你一串英文报错。</p>
+      <div class="engs">
+        <div class="eg"><b>S2 模型 · 发 Key 即用</b><span>免注册免登录,走我们的套餐</span></div>
+        <div class="eg"><b>SoWork · 商汤</b><span>本机已登录账号,免配 Key</span></div>
+        <div class="eg"><b>Claude Code</b><span>claude CLI 订阅直连</span></div>
+        <div class="eg"><b>Codex CLI</b><span>codex 订阅直连</span></div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<section id="gate"><div class="wrap">
+  <div class="rv"><div class="kick">出件前检查</div>
+  <h2>写完不算完,过检才算数</h2>
+  <p class="lead">每一册出 Word 前都要过格式与内容两道门禁。结论只有三种颜色,红色直接拦住不让交付。</p></div>
+  <div class="gates rv" style="max-width:760px">
+    <div class="gt"><i style="background:var(--bad)"></i><b>暂不可投</b><span>投标人名称/报价未填 · 资质缺失 · 内容异常</span></div>
+    <div class="gt"><i style="background:var(--warn)"></i><b>待你确认</b><span>证书临期 · 业绩差一份佐证</span></div>
+    <div class="gt"><i style="background:var(--ok)"></i><b>检查通过</b><span>字体 / 页边距 / 页码 / 表格列宽 36+ 项合规</span></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="rv"><div class="kick">真实界面</div><h2>不是概念图,是装完就长这样</h2></div>
+  <div class="shots">
+    <div class="sh rv"><img src="assets/screen-running.png" alt="生成中"><div class="cap">生成中:左侧任务进度、中间实时对话(它会主动来问关键决策)、右侧产出与检查</div></div>
+    <div class="sh rv"><img src="assets/screen-done.png" alt="完成"><div class="cap">完成后:徽章直接说明能不能投,配补料清单;对话可继续追问、定向重做某一章</div></div>
+    <div class="sh rv"><img src="assets/screen-table.png" alt="Word 表格"><div class="cap">出 Word 真功夫:14 列设备清单自动横排、固定列宽、表头跨页重复</div></div>
+    <div class="sh rv"><img src="assets/screen-welcome.png" alt="欢迎页"><div class="cap">打开即用:拖入文件就开始,也可先建素材库或看一遍演示流程</div></div>
+  </div>
+</div></section>
+
+<section id="faq"><div class="wrap">
+  <div class="rv"><div class="kick">常见问题</div><h2>装之前想知道的</h2></div>
+  <div class="faq rv">
+    <details open><summary>macOS 提示「已损坏,无法打开」?</summary><p>不是文件坏了,是系统对未签名应用的默认拦截。拖入「应用程序」后,终端执行 <code>xattr -cr /Applications/中标狗.app</code>;或在「系统设置 → 隐私与安全性」点「仍要打开」。</p></details>
+    <details><summary>我的标书和素材会上传到哪里吗?</summary><p>不会。所有文件存在你电脑的「文稿/中标狗」文件夹,程序本地运行。只有你主动绑定的生成引擎/模型网关会按你的配置被调用。</p></details>
+    <details><summary>不绑定任何 AI 能用吗?</summary><p>能。内置演示模式完整走通建任务、12 阶段、对话、产出、出件检查全流程。产真实标书时再绑定 SoWork / Claude Code / Codex 任一引擎。</p></details>
+    <details><summary>生成用的是谁的额度?</summary><p>生成标书本体走你绑定的 CLI 订阅额度;「模型接入」里的 API Key 只用于对话追问与图片打标——两个独立额度,用完会明确提示,不是甩一串英文。</p></details>
+    <details><summary>怎么更新版本?</summary><p>下载新安装包覆盖安装即可,数据与配置自动保留,老版本数据目录会自动迁移,任务与素材一个不丢。</p></details>
+  </div>
+</div></section>
+
+<section><div class="wrap"><div class="final rv">
+  <h2 style="margin-top:0">下一册标书,试试只做确认</h2>
+  <p class="lead center" style="margin:0 auto 26px">安装即用 · 内置演示 · 数据不出你的电脑</p>
+  <div class="hbtns">
+    <a class="cta p big" href="https://github.com/shandianT/bid-dog/releases/latest" target="_blank">下载 macOS 版</a>
+    <a class="cta g big" href="https://github.com/shandianT/bid-dog/releases/latest" target="_blank">下载 Windows 版</a>
+    <a class="cta g big" href="app/index.html?demo=1">在线体验</a>
+  </div>
+</div></div></section>
+</main>
+
+<footer><div class="wrap">
+  <span>中标狗 © 2026 · 作者:FDE-家涛</span>
+  <span>本地运行 · 保留所有权利</span>
+</div></footer>
+
+<script>
+/* ========== 滚动进场 ========== */
+const io = new IntersectionObserver(es => es.forEach(e => { if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } }), {threshold:.12});
+document.querySelectorAll('.rv').forEach((el,i) => { el.style.transitionDelay = (i%3)*70 + 'ms'; io.observe(el); });
+
+/* ========== 产品演示:真实流程的动画还原 ========== */
+const $ = id => document.getElementById(id);
+const STAGES = ['体检素材','图片入库','读懂组成','提取格式','评分废标','拆解分工','分章撰写','逐条应答','汇总成册','配图复核','自查体检','出Word门禁'];
+let timers = [];
+const clearAll = () => { timers.forEach(clearTimeout); timers = []; };
+
+function ticksHtml(cur, done){
+  let h = '';
+  for(let i=1;i<=12;i++) h += '<i class="'+(done||i<cur?'d':i===cur?'a':'')+'"></i>';
+  return h;
+}
+function agent(text, delay){
+  const d = document.createElement('div');
+  d.className = 'msg a'; d.style.animationDelay = (delay||0)+'ms';
+  d.innerHTML = '<div class="bb">'+text+'</div><div class="who">中标狗</div>';
+  $('chat').appendChild(d); scroll();
+}
+function user(text){
+  const d = document.createElement('div');
+  d.className = 'msg u';
+  d.innerHTML = '<div class="bb">'+text+'</div><div class="who">你</div>';
+  $('chat').appendChild(d); scroll();
+}
+function sys(text){
+  const d = document.createElement('div');
+  d.className = 'sysl'; d.innerHTML = '<b></b>'+text;
+  $('chat').appendChild(d); scroll();
+}
+function typing(on){
+  let t = document.getElementById('typ');
+  if(on && !t){ t = document.createElement('div'); t.id='typ'; t.className='typing';
+    t.innerHTML='<b></b><b></b><b></b><span style="margin-left:3px">中标狗 正在写…</span>'; $('chat').appendChild(t); scroll(); }
+  if(!on && t) t.remove();
+}
+function scroll(){ const c = $('chat'); c.scrollTop = c.scrollHeight; }
+function file(name, tag){
+  const e = $('files');
+  if(e.querySelector('.empty-r')) e.innerHTML = '';
+  const d = document.createElement('div');
+  d.className = 'fr';
+  d.innerHTML = '<span class="nm">'+name+'</span><span class="dl">下载</span>';
+  e.appendChild(d);
+  $('artN').textContent = '· ' + e.querySelectorAll('.fr').length;
+}
+function step(n, label){
+  $('ticks').innerHTML = ticksHtml(n);
+  $('curStep').textContent = label || STAGES[n-1];
+  $('stepN').textContent = n + '/12';
+  $('hSub').textContent = '正在:' + (label || STAGES[n-1]) + ' · 第 ' + n + '/12 步';
+  $('tStage').textContent = (label || STAGES[n-1]) + ' · ' + Math.round(n/12*100) + '%';
+  $('tBar').style.width = Math.round(n/12*100) + '%';
+  $('eta').textContent = '已用 ' + (8 + n*3) + ' 秒';
+}
+function markChapter(i){
+  document.querySelectorAll('.cb').forEach((b,k) => {
+    b.classList.toggle('on', k===i);
+    const f = b.querySelector('.fill');
+    f.style.transition = 'none'; f.style.width = '0';
+  });
+  const cur = document.querySelectorAll('.cb')[i], f = cur.querySelector('.fill');
+  const dur = [3.2, 7.5, 5.5, 6.0][i];
+  requestAnimationFrame(() => { f.style.transition = 'width '+dur+'s linear'; f.style.width = '100%'; });
+}
+
+function reset(){
+  clearAll();
+  $('zero').classList.remove('hide');
+  $('drop').classList.remove('hot');
+  $('fly').classList.remove('go');
+  $('head').classList.remove('show');
+  $('rail').classList.remove('show');
+  $('inp').classList.remove('show');
+  $('task1').classList.remove('show','on');
+  $('glTitle').style.opacity = 0;
+  $('chat').innerHTML = '';
+  $('files').innerHTML = '<span class="empty-r">生成过程中陆续出现</span>';
+  $('artN').textContent = '';
+  $('bdg').classList.remove('s');
+  $('pill').classList.remove('on');
+  $('pill').textContent = '出件前检查';
+  $('spin').style.display = 'block';
+  $('ticks').innerHTML = ticksHtml(0);
+  $('wDot').style.background = '#b7791f';
+  $('wT').textContent = '出件前检查';
+  $('wD').textContent = '出 Word 后在这里看结论与补料清单';
+  $('tBar').style.width = '0';
+}
+
+/* 时间线:一处定义,可从任意章节起播 */
+function playWith(sched){
+  const T = [
+    [500,  () => { $('drop').classList.add('hot'); $('fly').classList.add('go'); }],
+    [1900, () => { $('drop').classList.remove('hot'); $('zero').classList.add('hide'); }],
+    [2200, () => { $('head').classList.add('show'); $('rail').classList.add('show'); $('inp').classList.add('show');
+                   $('glTitle').style.opacity=1; $('task1').classList.add('show','on'); step(1);
+                   agent('收到招标文件,开始读。读完我把结构、评分表和要你确认的事列出来。'); }],
+    [3200, () => markChapter(1)],
+    [3400, () => { step(2); sys('第 2/12 步 · 图片入库'); }],
+    [4400, () => { step(3); sys('第 3/12 步 · 读懂组成'); }],
+    [5200, () => typing(true)],
+    [6200, () => { typing(false); agent('投标文件由 6 册组成,技术标要求宋体小四、1.5 倍行距;评分表共 8 项,其中<b>业绩与资质占 30 分</b>。'); }],
+    [7400, () => { step(4); sys('第 4/12 步 · 提取格式'); }],
+    [8400, () => { step(5); sys('第 5/12 步 · 评分废标'); }],
+    [9200, () => markChapter(2)],
+    [9400, () => { agent('评分表要求安全生产许可证在有效期内,素材库那份 <b>2026-06 到期</b>。等你上传新证,还是按「即将换证」写?');
+                   const c=document.createElement('div'); c.className='chips'; c.id='chips';
+                   c.innerHTML='<span class="chip" id="ch1">等我上传新证</span><span class="chip g">按即将换证写</span>';
+                   $('chat').appendChild(c); scroll(); }],
+    [11200,() => { const b=$('ch1'); if(b) b.classList.add('tap'); }],
+    [11700,() => { const c=$('chips'); if(c) c.remove(); user('等我上传新证'); }],
+    [12400,() => agent('好,按「等我上传新证」处理,继续。')],
+    [13400,() => { step(7); sys('第 7/12 步 · 分章撰写'); }],
+    [14200,() => agent('六章已分给子 agent 并行写,写完逐章汇报。')],
+    [14700,() => markChapter(3)],
+    [14900,() => { step(9); sys('第 9/12 步 · 汇总成册'); file('第三章_技术方案.md'); }],
+    [15700,() => { step(11); sys('第 11/12 步 · 自查体检'); file('投标文件自检报告.md'); }],
+    [16600,() => { step(12); sys('第 12/12 步 · 出Word门禁'); file('投标文件_技术标.docx'); }],
+    [17600,() => { $('spin').style.display='none'; $('ticks').innerHTML=ticksHtml(13,true);
+                   $('curStep').textContent='已完成 · 有必办项'; $('stepN').textContent='12/12';
+                   $('eta').textContent='共 4 分 22 秒'; $('hSub').textContent='全部 12 步完成 · 用时 4 分 22 秒';
+                   $('tStage').textContent='完成 · 100%'; $('tBar').style.width='100%';
+                   $('task1').querySelector('.tn i').style.background='#b7791f';
+                   $('bdg').classList.add('s'); $('pill').classList.add('on'); $('pill').textContent='看必办清单';
+                   $('wT').textContent='出件前需要你 3 项';
+                   $('wD').textContent='投标人名称与报价未填 · 安全生产许可证 · 业绩缺中标通知书';
+                   agent('已出 Word:全册与自检报告在交付目录。<b>出件前有 3 项要你确认</b>,见「出件前检查」。'); }],
+    [20800,() => playWith(mkSched(0))]
+  ];
+  if(!window.__chapMarked){ markChapter(0); }
+  T.forEach(([ms, fn]) => sched(ms, fn));
+}
+function mkSched(shift){
+  return (delay, fn) => { const d = delay - shift; if(d <= 0) fn(); else timers.push(setTimeout(fn, d)); };
+}
+/* 章节点击:从该章开始播 */
+document.querySelectorAll('.cb').forEach(b => { b.onclick = () => {
+  const starts = [0, 3200, 9200, 14700], i = +b.dataset.i;
+  clearAll(); reset(); markChapter(i);
+  window.__chapMarked = true;
+  playWith(mkSched(starts[i]));
+  window.__chapMarked = false;
+}; });
+$('replay').onclick = () => { clearAll(); reset(); markChapter(0); playWith(mkSched(0)); };
+
+/* 首屏进入视野才开播,省电且更自然 */
+const dio = new IntersectionObserver(es => es.forEach(e => {
+  if(e.isIntersecting && !window.__started){ window.__started = true; markChapter(0); playWith(mkSched(0)); }
+}), {threshold:.25});
+dio.observe($('mini'));
+</script>
+</body>
+</html>

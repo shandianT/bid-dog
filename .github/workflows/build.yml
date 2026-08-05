@@ -1,0 +1,126 @@
+name: build-installers
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            artifact: installer-macos
+            build_args: "-- --bundles dmg"
+            artifact_paths: |
+              app/src-tauri/target/release/bundle/dmg/*.dmg
+          - platform: windows-latest
+            artifact: installer-windows
+            build_args: "-- --bundles nsis"
+            artifact_paths: |
+              app/src-tauri/target/release/bundle/nsis/*.exe
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: build engine sidecar (内置引擎,客户免装 Python)
+        shell: bash
+        working-directory: server
+        run: |
+          python -m pip install --quiet pyinstaller fastapi uvicorn python-multipart python-docx certifi
+          cp ../bidmultiagenttao_v5.3.zip . 2>/dev/null || true
+          pyinstaller -F -n bid-engine engine_v1.py --collect-all uvicorn --collect-all certifi \
+            --add-data "bidmultiagenttao_v5.3.zip:." --noconfirm
+          TRIPLE=$(rustc -Vv | sed -n 's/^host: //p')
+          mkdir -p ../app/src-tauri/binaries
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp dist/bid-engine.exe "../app/src-tauri/binaries/bid-engine-$TRIPLE.exe"
+          else
+            cp dist/bid-engine "../app/src-tauri/binaries/bid-engine-$TRIPLE"
+          fi
+          ls -la ../app/src-tauri/binaries/
+      - name: bundle Codex CLI (S2 引擎执行外壳,客户免装 Node/免登录)
+        shell: bash
+        working-directory: app
+        run: |
+          # 版本与引擎 CODEX_PIN 保持一致:S2 中转按这个版本的 Responses 行为实测过
+          CODEX_PIN=0.146.0
+          TRIPLE=$(rustc -Vv | sed -n 's/^host: //p')
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            PKG=win32-x64; INNER="package/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+            OUT="src-tauri/binaries/codex-cli-$TRIPLE.exe"
+          else
+            PKG=darwin-arm64; INNER="package/vendor/aarch64-apple-darwin/bin/codex"
+            OUT="src-tauri/binaries/codex-cli-$TRIPLE"
+          fi
+          curl -sSL --retry 3 "https://registry.npmjs.org/@openai/codex/-/codex-$CODEX_PIN-$PKG.tgz" -o codex.tgz
+          mkdir -p codex_x src-tauri/binaries
+          tar xzf codex.tgz -C codex_x "$INNER"
+          mv "codex_x/$INNER" "$OUT"
+          chmod +x "$OUT" 2>/dev/null || true
+          rm -rf codex.tgz codex_x
+          ls -la src-tauri/binaries/
+      - name: install deps & icons
+        working-directory: app
+        run: |
+          npm install
+          npx tauri icon app-icon.png
+      - name: build installers
+        working-directory: app
+        shell: bash
+        run: npm run build ${{ matrix.build_args }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: ${{ matrix.artifact_paths }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: normalize release asset filenames
+        run: |
+          mkdir -p out
+          find dist -type f \( -name '*.dmg' -o -name '*.exe' \) | while read -r f; do
+            name="$(basename "$f" | sed -e 's/中标狗/bid-dog/g' -e 's/标书助手/bid-dog/g')"
+            mv "$f" "out/$name"
+          done
+          ls -la out
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-v0.12.1
+          name: 中标狗桌面版 v0.12.1
+          prerelease: true
+          body: |
+            中标狗桌面应用安装包(自动构建,未签名)。作者:FDE-家涛。
+
+            - macOS Apple Silicon(M 系列): `bid-dog_0.12.1_aarch64.dmg`
+            - Windows: `bid-dog_0.12.1_x64-setup.exe`
+            -(需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可)
+
+            **macOS 提示「已损坏,无法打开」?** 不是文件坏了,是系统对未签名应用的拦截。把应用拖入「应用程序」后,终端执行:
+            `xattr -cr /Applications/中标狗.app` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。详见仓库 docs/Mac安装说明.md。
+            Windows SmartScreen 提示时点「更多信息 → 仍要运行」。
+
+            本地引擎已内置(安装即用,无需装 Python)。要产真实标书,在「设置 · 模型接入 → 生成引擎」里选一个:
+
+            - **S2 模型 · 用我们发的 Key**(推荐给同事/客户):只填一串 Key,不需要 Claude/Codex 账号、不需要登录、
+              **也不用装 Node——执行外壳已内置在安装包里**,填 Key 点「测试连接」即可。详见 docs/让别人用S2模型.md。
+            - Claude Code / Codex CLI / SoWork:走你自己的订阅额度,详见 docs/使用与绑定指南.md。
+          files: out/*
