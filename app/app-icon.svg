@@ -5,6 +5,8 @@
     </linearGradient>
   </defs>
   <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <!-- 去掉印章后重心偏上:整体下移并略放大,回到视觉居中 -->
+  <g transform="translate(512 512) scale(1.07) translate(-512 -446)">
   <g fill="#ffffff">
     <!-- 立耳:头顶偏内,圆角三角,柴犬感 -->
     <path d="M 344 332 L 322 172 Q 318 140 350 152 L 472 218 Q 430 252 344 332 Z"/>
@@ -21,9 +23,5 @@
   <!-- 吐舌:狗的身份证 -->
   <path d="M 512 596 L 512 640 Q 512 706 470 706 Q 442 706 442 676 Q 442 662 452 654" fill="none"/>
   <path d="M 456 618 Q 456 700 512 700 Q 568 700 568 618 Q 540 636 512 636 Q 484 636 456 618 Z" fill="#ff8da1"/>
-  <!-- 中标印章:右下角绿章 + 对勾 -->
-  <g>
-    <circle cx="768" cy="752" r="148" fill="#23a55a" stroke="#ffffff" stroke-width="26"/>
-    <path d="M 700 752 L 750 806 L 840 692" stroke="#ffffff" stroke-width="42" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>

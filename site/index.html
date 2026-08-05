@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>中标狗 — 把招标文件交给它,你只做确认</title>
-<meta name="description" content="中标狗:本地运行的投标文件生成工作台。拖入招标文件,12 阶段流水线产出技术标与自检报告,出件前门禁把关。数据不出你的电脑。">
+<title>中标狗 — 招标文件丢进去,出一份能直接交的 Word 标书</title>
+<meta name="description" content="中标狗:装在自己电脑上的投标文件生成工具。拖入招标文件,拆出评分点和废标项,分章写完出 Word,出件前过一道质检。文件不上传。">
 <link rel="icon" href="assets/icon.png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -274,24 +274,24 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 <nav><div class="wrap">
   <a class="brand" href="#"><img src="assets/icon.png" alt="">中标狗</a>
   <a class="nl" href="app/index.html?demo=1">在线体验</a>
-  <a class="nl" href="#demo">看它干活</a>
-  <a class="nl" href="#feat">能力</a>
-  <a class="nl" href="#gate">出件门禁</a>
-  <a class="nl" href="#faq">问答</a>
+  <a class="nl" href="#demo">看流程</a>
+  <a class="nl" href="#feat">能做什么</a>
+  <a class="nl" href="#gate">出件质检</a>
+  <a class="nl" href="#faq">常见问题</a>
   <a class="cta p" href="#get">免费下载</a>
 </div></nav>
 
 <main>
 <div class="hero"><div class="wrap">
-  <div class="badge"><i></i><span id="relVer">v0.16.0</span> · 粘一串 Key 全配好 · 要求已预填专家提示词 · 实时进度反馈 · 成品质检门禁(图片按锚点校正·字数·查重·覆盖率) · 发 Key 即用 S2 模型</div>
-  <h1>把招标文件交给它,<br>你只做<span class="gr">确认</span></h1>
-  <p class="hsub">在你自己的电脑上,一份招标文件变成可交付的投标文件:预检 → 评分点与废标项 → 分章撰写 → 出 Word。写得快是基本功,<b style="color:var(--ink)">敢交出去</b>才是本事。</p>
+  <div class="badge"><i></i><span id="relVer">v0.16.0</span> · macOS / Windows · 数据留本机 · 粘一串 Key 就能用</div>
+  <h1>招标文件丢进去,<br>出一份能直接交的 <span class="gr">Word 标书</span></h1>
+  <p class="hsub">中标狗装在自己电脑上,macOS / Windows 都能装,<b style="color:var(--ink)">文件不上传</b>。拆出评分点和废标项,分章写完正文和偏离表应答,出 Word 前先过一道出件质检。</p>
   <div class="hbtns" id="get">
     <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.16.0/bid-dog_0.16.0_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片 · dmg</em></a>
     <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.16.0/bid-dog_0.16.0_x64-setup.exe">下载 Windows 版<em class="dls">64 位 · exe</em></a>
     <a class="cta g big" href="app/index.html?demo=1">在线体验(不用装)</a>
   </div>
-  <div class="trust">安装即用 · 内置演示模式,不填任何配置也能完整体验 · 数据全程留在本机 ·
+  <div class="trust">不填配置也能先跑一遍内置演示 ·
     <a href="https://github.com/shandianT/bid-dog/releases" target="_blank" rel="noopener" style="color:inherit">全部版本</a></div>
 </div></div>
 
@@ -315,8 +315,8 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
       <!-- 中栏 -->
       <div class="mc">
         <div class="mz" id="zero">
-          <h3>准备好了,随时开始</h3>
-          <p>把招标文件交给我,全程可对话</p>
+          <h3>还没有任务</h3>
+          <p>拖一份招标文件进来</p>
           <div class="drop" id="drop">
             <div class="ic">↑</div>
             <div><b>上传招标文件,开始生成标书</b><span>点击选择,或把文件拖到窗口任意位置</span></div>
@@ -364,7 +364,7 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 <section><div class="wrap rv">
   <div class="stats">
     <div class="st"><b>12 阶段</b><span>流水线,每步落盘验收</span></div>
-    <div class="st"><b>36+ 项</b><span>出件前格式与内容门禁</span></div>
+    <div class="st"><b>36+ 项</b><span>出件前格式与内容质检</span></div>
     <div class="st"><b>104 项</b><span>自动化回归,每版全跑</span></div>
     <div class="st"><b>0 上传</b><span>文件全程留在你电脑</span></div>
   </div>
@@ -372,16 +372,16 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 
 <section id="feat"><div class="wrap">
   <div class="rv"><div class="kick">核心能力</div>
-  <h2>为"敢交出去"而设计</h2>
-  <p class="lead">生成只是开始。真正难的是:不编造、能追问、出门前有人把关。</p></div>
+  <h2>除了写正文,还管这些</h2>
+  <p class="lead">先读懂招标文件由哪几册组成、格式要求是什么。资质业绩这类事实从素材库取,按锚点配图,缺了标〔需补充〕,不瞎编。</p></div>
   <div class="bento">
-    <div class="bx w3 rv"><span class="tag">素材库</span><h3>过往标书变成弹药</h3><p>上传历史标书,自动拆章节模板、抽图片、归类资质业绩;AI 识图打标,写新标书时按锚点自动配图——你的积累第一次真正被复用起来。</p></div>
-    <div class="bx w3 rv"><span class="tag">不编造</span><h3>缺什么,明说</h3><p>资质、案例、报价缺失时不瞎编,统一标〔需补充〕并列进补料清单。宁可留空,也不给你在评标现场埋雷。</p></div>
+    <div class="bx w3 rv"><span class="tag">素材库</span><h3>老标书拆成素材</h3><p>上传历史标书,自动拆章节模板、抽图片、归类资质业绩;AI 识图打标,写新标书时按锚点配图。</p></div>
+    <div class="bx w3 rv"><span class="tag">不编造</span><h3>缺什么,明说</h3><p>资质、案例、报价缺失时不瞎编,统一标〔需补充〕并列进补料清单。</p></div>
     <div class="bx w2 rv"><span class="tag">对话即遥控</span><h3>说人话就能指挥</h3><p>「暂停一下」「继续」直接生效;「重写第三章」「整册重跑」先给确认按钮,点了才动手。</p></div>
     <div class="bx w2 rv"><span class="tag">版式引擎</span><h3>Word 排版自动兜底</h3><p>14 列宽表自动转横排、固定列宽、表头跨页重复;逐字打散、样板重复能检测能修复。</p></div>
-    <div class="bx w2 rv"><span class="tag">本地优先</span><h3>数据主权在你手里</h3><p>文件都在「文稿/中标狗」,打开就能看;删掉应用,文件还在。也可部署到自己的服务器。</p></div>
+    <div class="bx w2 rv"><span class="tag">本地优先</span><h3>数据留在本机</h3><p>文件都在「文稿/中标狗」,打开就能看;删掉应用,文件还在。也可部署到自己的服务器。</p></div>
     <div class="bx w6 rv"><span class="tag">生成引擎</span><h3>拿 Key 即用,或接你已有的 AI 订阅</h3>
-      <p>拿到我们发的 Key,填进去就能用 S2 模型产标书——不需要注册、登录任何 AI 账号;也可绑定你已有的 SoWork、Claude Code、Codex 订阅或自定义命令。「测试连接」连不上会用中文告诉你差哪一步——不是甩你一串英文报错。</p>
+      <p>拿到我们发的 Key,填进去就能用 S2 模型产标书,不用注册 AI 账号;也可绑定你已有的 SoWork、Claude Code、Codex 订阅或自定义命令。「测试连接」连不上会用中文说明差在哪一步。</p>
       <div class="engs">
         <div class="eg"><b>S2 模型 · 发 Key 即用</b><span>免注册免登录,走我们的套餐</span></div>
         <div class="eg"><b>SoWork · 商汤</b><span>本机已登录账号,免配 Key</span></div>
@@ -393,9 +393,9 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 </div></section>
 
 <section id="gate"><div class="wrap">
-  <div class="rv"><div class="kick">出件前检查</div>
-  <h2>写完不算完,过检才算数</h2>
-  <p class="lead">每一册出 Word 前都要过格式与内容两道门禁。结论只有三种颜色,红色直接拦住不让交付。</p></div>
+  <div class="rv"><div class="kick">出件质检</div>
+  <h2>质检不过就不出 Word</h2>
+  <p class="lead">每一册出 Word 前都要过格式和内容两道检查。结论三种颜色,红的直接拦住不让出件。</p></div>
   <div class="gates rv" style="max-width:760px">
     <div class="gt"><i style="background:var(--bad)"></i><b>暂不可投</b><span>投标人名称/报价未填 · 资质缺失 · 内容异常</span></div>
     <div class="gt"><i style="background:var(--warn)"></i><b>待你确认</b><span>证书临期 · 业绩差一份佐证</span></div>
@@ -406,10 +406,10 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 <section><div class="wrap">
   <div class="rv"><div class="kick">真实界面</div><h2>出的 Word,就长这样</h2></div>
   <div class="shots">
-    <div class="sh rv"><img src="assets/word-cover.png" alt="Word 封面页"><div class="cap">封面页:项目名+文件性质+投标人落款,黑体标题、居中版式——直接从成品 docx 渲染,未经修饰</div></div>
+    <div class="sh rv"><img src="assets/word-cover.png" alt="Word 封面页"><div class="cap">封面页:项目名+文件性质+投标人落款,黑体标题居中。图是成品 docx 直接渲染的</div></div>
     <div class="sh rv"><img src="assets/word-body.png" alt="Word 图文正文页"><div class="cap">正文页:产品截图自动插到对应章节、连续编号图注,页眉带项目名、页码分节,段落首行缩进两字符</div></div>
     <div class="sh rv"><img src="assets/word-deviation.png" alt="Word 技术偏离表页"><div class="cap">技术应答偏离表:招标要求→我方应答→满足情况→说明,逐条应答、表头跨页重复</div></div>
-    <div class="sh rv"><img src="assets/word-xinchuang.png" alt="Word 章节图文页"><div class="cap">章节页:标题层级、扎实的完整段落,配图按素材库"落位锚点"落在它该在的章节</div></div>
+    <div class="sh rv"><img src="assets/word-xinchuang.png" alt="Word 章节图文页"><div class="cap">章节页:标题分层级,段落写满,配图按素材库的落位锚点插进对应章节</div></div>
   </div>
 </div></section>
 
@@ -419,14 +419,14 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
     <details open><summary>macOS 提示「已损坏,无法打开」?</summary><p>不是文件坏了,是系统对未签名应用的默认拦截。拖入「应用程序」后,终端执行 <code>xattr -cr /Applications/中标狗.app</code>;或在「系统设置 → 隐私与安全性」点「仍要打开」。</p></details>
     <details><summary>我的标书和素材会上传到哪里吗?</summary><p>不会。所有文件存在你电脑的「文稿/中标狗」文件夹,程序本地运行。只有你主动绑定的生成引擎/模型网关会按你的配置被调用。</p></details>
     <details><summary>不绑定任何 AI 能用吗?</summary><p>能。内置演示模式完整走通建任务、12 阶段、对话、产出、出件检查全流程。产真实标书时再绑定 SoWork / Claude Code / Codex 任一引擎。</p></details>
-    <details><summary>生成用的是谁的额度?</summary><p>生成标书本体走你绑定的 CLI 订阅额度;「模型接入」里的 API Key 只用于对话追问与图片打标——两个独立额度,用完会明确提示,不是甩一串英文。</p></details>
+    <details><summary>生成用的是谁的额度?</summary><p>生成标书本体走你绑定的 CLI 订阅额度;「模型接入」里的 API Key 只用于对话追问与图片打标,两个额度分开算,用完会提示。</p></details>
     <details><summary>怎么更新版本?</summary><p>下载新安装包覆盖安装即可,数据与配置自动保留,老版本数据目录会自动迁移,任务与素材一个不丢。</p></details>
   </div>
 </div></section>
 
 <section><div class="wrap"><div class="final rv">
-  <h2 style="margin-top:0">下一册标书,试试只做确认</h2>
-  <p class="lead center" style="margin:0 auto 26px">安装即用 · 内置演示 · 数据不出你的电脑</p>
+  <h2 style="margin-top:0">拿一份招标文件试一遍</h2>
+  <p class="lead center" style="margin:0 auto 26px">不填配置也能跑一遍内置演示。要出真件,粘一串 Key 就行,不用注册 AI 账号,也能接自己已有的 Claude Code / Codex 订阅。</p>
   <div class="hbtns">
     <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.16.0/bid-dog_0.16.0_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片 · dmg</em></a>
     <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.16.0/bid-dog_0.16.0_x64-setup.exe">下载 Windows 版<em class="dls">64 位 · exe</em></a>
@@ -484,7 +484,7 @@ document.querySelectorAll('.rv').forEach((el,i) => { el.style.transitionDelay = 
 
 /* ========== 产品演示:真实流程的动画还原 ========== */
 const $ = id => document.getElementById(id);
-const STAGES = ['体检素材','图片入库','读懂组成','提取格式','评分废标','拆解分工','分章撰写','逐条应答','汇总成册','配图复核','自查体检','出Word门禁'];
+const STAGES = ['体检素材','图片入库','读懂组成','提取格式','评分废标','拆解分工','分章撰写','逐条应答','汇总成册','配图复核','自查体检','出Word质检'];
 let timers = [];
 const clearAll = () => { timers.forEach(clearTimeout); timers = []; };
 
@@ -598,7 +598,7 @@ function playWith(sched){
     [14700,() => markChapter(3)],
     [14900,() => { step(9); sys('第 9/12 步 · 汇总成册'); file('第三章_技术方案.md'); }],
     [15700,() => { step(11); sys('第 11/12 步 · 自查体检'); file('投标文件自检报告.md'); }],
-    [16600,() => { step(12); sys('第 12/12 步 · 出Word门禁'); file('投标文件_技术标.docx'); }],
+    [16600,() => { step(12); sys('第 12/12 步 · 出Word质检'); file('投标文件_技术标.docx'); }],
     [17600,() => { $('spin').style.display='none'; $('ticks').innerHTML=ticksHtml(13,true);
                    $('curStep').textContent='已完成 · 有必办项'; $('stepN').textContent='12/12';
                    $('eta').textContent='共 4 分 22 秒'; $('hSub').textContent='全部 12 步完成 · 用时 4 分 22 秒';

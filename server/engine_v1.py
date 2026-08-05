@@ -87,7 +87,7 @@ app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], all
 # ---------- 云端网页模式:口令门 + 访客工作区隔离(桌面版不设 BID_PASSWORD 则完全不生效) ----------
 def _tok(pw): return hashlib.sha256(('bid-assistant|' + pw).encode()).hexdigest()[:32]
 
-LOGIN_HTML = """<!doctype html><meta charset=utf-8><title>中标狗</title><link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221024%22 height=%221024%22 viewBox=%220 0 1024 1024%22%3E%3Cdefs%3E%3ClinearGradient id=%22bg%22 x1=%220%22 y1=%220%22 x2=%220%22 y2=%221%22%3E%3Cstop offset=%220%22 stop-color=%22%231274e0%22/%3E%3Cstop offset=%221%22 stop-color=%22%230a55aa%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%221024%22 height=%221024%22 rx=%22232%22 fill=%22url(%23bg)%22/%3E%3Cg fill=%22%23ffffff%22%3E%3C!-- %E7%AB%8B%E8%80%B3:%E5%A4%B4%E9%A1%B6%E5%81%8F%E5%86%85,%E5%9C%86%E8%A7%92%E4%B8%89%E8%A7%92,%E6%9F%B4%E7%8A%AC%E6%84%9F --%3E%3Cpath d=%22M 344 332 L 322 172 Q 318 140 350 152 L 472 218 Q 430 252 344 332 Z%22/%3E%3Cpath d=%22M 680 332 L 702 172 Q 706 140 674 152 L 552 218 Q 594 252 680 332 Z%22/%3E%3C!-- %E8%84%B8:%E7%95%A5%E5%AE%BD%E6%A4%AD%E5%9C%86 --%3E%3Cellipse cx=%22512%22 cy=%22490%22 rx=%22270%22 ry=%22250%22/%3E%3C/g%3E%3C!-- %E4%BA%94%E5%AE%98 --%3E%3Cg fill=%22%230a55aa%22%3E%3Ccircle cx=%22418%22 cy=%22448%22 r=%2232%22/%3E%3Ccircle cx=%22606%22 cy=%22448%22 r=%2232%22/%3E%3Cellipse cx=%22512%22 cy=%22560%22 rx=%2250%22 ry=%2238%22/%3E%3C/g%3E%3C!-- %E5%90%90%E8%88%8C:%E7%8B%97%E7%9A%84%E8%BA%AB%E4%BB%BD%E8%AF%81 --%3E%3Cpath d=%22M 512 596 L 512 640 Q 512 706 470 706 Q 442 706 442 676 Q 442 662 452 654%22 fill=%22none%22/%3E%3Cpath d=%22M 456 618 Q 456 700 512 700 Q 568 700 568 618 Q 540 636 512 636 Q 484 636 456 618 Z%22 fill=%22%23ff8da1%22/%3E%3C!-- %E4%B8%AD%E6%A0%87%E5%8D%B0%E7%AB%A0:%E5%8F%B3%E4%B8%8B%E8%A7%92%E7%BB%BF%E7%AB%A0 %2B %E5%AF%B9%E5%8B%BE --%3E%3Cg%3E%3Ccircle cx=%22768%22 cy=%22752%22 r=%22148%22 fill=%22%2323a55a%22 stroke=%22%23ffffff%22 stroke-width=%2226%22/%3E%3Cpath d=%22M 700 752 L 750 806 L 840 692%22 stroke=%22%23ffffff%22 stroke-width=%2242%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/g%3E%3C/svg%3E">
+LOGIN_HTML = """<!doctype html><meta charset=utf-8><title>中标狗</title><link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221024%22 height=%221024%22 viewBox=%220 0 1024 1024%22%3E%3Cdefs%3E%3ClinearGradient id=%22bg%22 x1=%220%22 y1=%220%22 x2=%220%22 y2=%221%22%3E%3Cstop offset=%220%22 stop-color=%22%231274e0%22/%3E%3Cstop offset=%221%22 stop-color=%22%230a55aa%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%221024%22 height=%221024%22 rx=%22232%22 fill=%22url(%23bg)%22/%3E%3Cg transform=%22translate(512 512) scale(1.07) translate(-512 -446)%22%3E%3Cg fill=%22%23ffffff%22%3E%3Cpath d=%22M 344 332 L 322 172 Q 318 140 350 152 L 472 218 Q 430 252 344 332 Z%22/%3E%3Cpath d=%22M 680 332 L 702 172 Q 706 140 674 152 L 552 218 Q 594 252 680 332 Z%22/%3E%3Cellipse cx=%22512%22 cy=%22490%22 rx=%22270%22 ry=%22250%22/%3E%3C/g%3E%3Cg fill=%22%230a55aa%22%3E%3Ccircle cx=%22418%22 cy=%22448%22 r=%2232%22/%3E%3Ccircle cx=%22606%22 cy=%22448%22 r=%2232%22/%3E%3Cellipse cx=%22512%22 cy=%22560%22 rx=%2250%22 ry=%2238%22/%3E%3C/g%3E%3Cpath d=%22M 512 596 L 512 640 Q 512 706 470 706 Q 442 706 442 676 Q 442 662 452 654%22 fill=%22none%22/%3E%3Cpath d=%22M 456 618 Q 456 700 512 700 Q 568 700 568 618 Q 540 636 512 636 Q 484 636 456 618 Z%22 fill=%22%23ff8da1%22/%3E%3C/g%3E%3C/svg%3E">
 <style>body{font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;display:flex;align-items:center;
 justify-content:center;height:100vh;margin:0;background:#fbfbfd;color:#1d1d1f}
 form{background:#fff;padding:38px 40px;border-radius:16px;box-shadow:0 10px 40px rgba(0,0,0,.08);width:320px}
@@ -152,7 +152,7 @@ def emit(job, ev):
         pass
 
 STAGES = ['体检素材', '图片入库', '读懂组成', '提取格式', '评分废标', '拆解分工',
-          '分章撰写', '逐条应答', '汇总成册', '配图复核', '自查体检', '出Word门禁']
+          '分章撰写', '逐条应答', '汇总成册', '配图复核', '自查体检', '出Word质检']
 
 def mock_agent(job):
     """内置模拟 agent:走完 12 阶段,发问一次,产出样例交付物 —— 演示与前端联调用"""
@@ -196,7 +196,7 @@ def _mock_agent(job):
                'gaps': [{'level': 'red', 'title': '投标人名称与报价未填', 'detail': '封面与投标函两处占位符'},
                         {'level': 'yellow', 'title': '安全生产许可证 2026-06 到期', 'detail': '评分表要求有效期内'},
                         {'level': 'yellow', 'title': '项目经理业绩缺一份中标通知书', 'detail': '要求近三年 2 个同类业绩'},
-                        {'level': 'green', 'title': '格式门禁全部通过', 'detail': '字体/行距/页边距/页码合规'}]})
+                        {'level': 'green', 'title': '格式质检全部通过', 'detail': '字体/行距/页边距/页码合规'}]})
 
 DELIVER_EXT = ('.md', '.docx', '.xlsx', '.pdf')
 
