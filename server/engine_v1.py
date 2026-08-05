@@ -633,9 +633,9 @@ def ensure_skill():
     if os.path.isfile(os.path.join(dst, 'SKILL.md')) and cur == SKILL_VERSION: return dst
     cands = []
     meipass = getattr(sys, '_MEIPASS', None)           # PyInstaller 打包版:zip 嵌在二进制里
-    if meipass: cands.append(os.path.join(meipass, 'bidmultiagenttao_v5.3.zip'))
-    cands += [os.path.join(HERE, 'bidmultiagenttao_v5.3.zip'),
-              os.path.join(HERE, '..', 'bidmultiagenttao_v5.3.zip')]
+    if meipass: cands.append(os.path.join(meipass, 'bidmultiagenttao_v5.5.zip'))
+    cands += [os.path.join(HERE, 'bidmultiagenttao_v5.5.zip'),
+              os.path.join(HERE, '..', 'bidmultiagenttao_v5.5.zip')]
     for z in cands:
         if os.path.isfile(z):
             try:

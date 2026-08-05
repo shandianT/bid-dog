@@ -16,7 +16,7 @@ pip install fastapi uvicorn python-multipart
 python3 server/engine_v1.py        # 127.0.0.1:8080,同时也直接托管了前端
 ```
 浏览器开 http://127.0.0.1:8080 即是完整功能:拖招标文件建任务 → SSE 实时进度 → agent 提问点按钮回答 → 交付物下载 → 模型接入可添加并测通。
-接真实 agent(推荐用包装脚本,已处理权限与事件上报;需先解压 bidmultiagenttao_v5.3.zip 得到 bid-multiagent-tao/ 目录):
+接真实 agent(推荐用包装脚本,已处理权限与事件上报;需先解压 bidmultiagenttao_v5.5.zip 得到 bid-multiagent-tao/ 目录):
 `AGENT_CMD='bash server/run_claude_agent.sh {tender} {out} {materials}' python3 server/engine_v1.py`
 (注:`--dangerously-skip-permissions` 在 root 环境会被 claude CLI 拒绝,包装脚本改用 --settings 显式授权,见 server/agent_settings.json)
 

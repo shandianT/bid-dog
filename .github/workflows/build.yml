@@ -39,9 +39,9 @@ jobs:
         working-directory: server
         run: |
           python -m pip install --quiet pyinstaller fastapi uvicorn python-multipart python-docx certifi
-          cp ../bidmultiagenttao_v5.3.zip . 2>/dev/null || true
+          cp ../bidmultiagenttao_v5.5.zip . 2>/dev/null || true
           pyinstaller -F -n bid-engine engine_v1.py --collect-all uvicorn --collect-all certifi \
-            --add-data "bidmultiagenttao_v5.3.zip:." --noconfirm
+            --add-data "bidmultiagenttao_v5.5.zip:." --noconfirm
           TRIPLE=$(rustc -Vv | sed -n 's/^host: //p')
           mkdir -p ../app/src-tauri/binaries
           if [ "$RUNNER_OS" = "Windows" ]; then

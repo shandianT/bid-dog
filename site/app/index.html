@@ -1357,7 +1357,7 @@ async function loadAgent(){
     el('agMsg').textContent = 'SoWork:'+(a.available.sowork?'✓ '+(pth.sowork||'已装'):'✗ 未找到(需安装并登录 SoWork)')
       +' · claude CLI:'+(a.available.claude?'✓ 已装':'✗ 未装')
       +' · codex CLI:'+(a.available.codex?'✓ 已装':'✗ 未装')
-      +' · 标书技能包:'+(a.skill_ok?'✓ '+a.skill_dir:'✗ 未找到(解压 bidmultiagenttao_v5.3.zip 到 '+a.skill_dir+')')
+      +' · 标书技能包:'+(a.skill_ok?'✓ '+a.skill_dir:'✗ 未找到(解压 bidmultiagenttao_v5.5.zip 到 '+a.skill_dir+')')
       +(a.kind==='env'?' · 当前由环境变量 AGENT_CMD 接管':'');
   }catch(e){}
 }
