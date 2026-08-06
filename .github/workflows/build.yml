@@ -111,8 +111,11 @@ jobs:
           prerelease: false
           body: |
             中标狗桌面应用安装包(自动构建,未签名)。作者:FDE-家涛。
-            官网(成品 Word 页面):https://bid-dog.vercel.app
-            在线体验(不用装):https://bid-dog.vercel.app/demo.html?demo=1
+            官网(成品 Word 页面):
+            https://bid-dog.vercel.app
+
+            在线体验(不用装):
+            https://bid-dog.vercel.app/demo.html?demo=1
 
             - macOS Apple Silicon(M 系列): `bid-dog_0.17.3_aarch64.dmg`
             - Windows: `bid-dog_0.17.3_x64-setup.exe`

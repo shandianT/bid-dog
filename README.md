@@ -8,7 +8,15 @@
 [![build](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/macOS%20Apple%20Silicon%20%7C%20Windows%20x64-111111)
 
-**官网**：https://bid-dog.vercel.app（在线体验: https://bid-dog.vercel.app/demo.html?demo=1，不用装就能点）
+**官网**
+
+https://bid-dog.vercel.app
+
+**在线体验**
+
+https://bid-dog.vercel.app/demo.html?demo=1
+
+不用安装即可体验。
 
 ---
 
