@@ -4,11 +4,11 @@
 **给谁用** — 拿到 Key 的同事和客户：装上、粘 Key、拖文件，不用注册 AI 账号。写代码的看文末架构小节。
 **怎么开始** — 到 [Releases](https://github.com/shandianT/bid-dog/releases/latest) 下载 dmg / exe → 打开后粘一串 Key、选一个模式 → 把招标文件拖进窗口。
 
-[![release](https://img.shields.io/badge/release-v0.17.0-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
+[![release](https://img.shields.io/badge/release-v0.17.3-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
 [![build](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/macOS%20Apple%20Silicon%20%7C%20Windows%20x64-111111)
 
-**官网**：https://bid-dog.vercel.app（在线体验直达 https://bid-dog.vercel.app/app/index.html?demo=1，不用装就能点）
+**官网**：https://bid-dog.vercel.app（有在线体验版，不用装就能点）
 
 ---
 
@@ -51,8 +51,8 @@
 
 | 系统 | 安装包 | 说明 |
 |---|---|---|
-| macOS | [`bid-dog_0.17.0_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.0/bid-dog_0.17.0_aarch64.dmg) | Apple Silicon（M 系列） |
-| Windows | [`bid-dog_0.17.0_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.0/bid-dog_0.17.0_x64-setup.exe) | Windows 10 / 11 64 位 |
+| macOS | [`bid-dog_0.17.3_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.3/bid-dog_0.17.3_aarch64.dmg) | Apple Silicon（M 系列） |
+| Windows | [`bid-dog_0.17.3_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.3/bid-dog_0.17.3_x64-setup.exe) | Windows 10 / 11 64 位 |
 
 安装包目前未做商业代码签名，两个系统各有一次放行动作，做完就再也不会提示：
 
@@ -71,7 +71,7 @@
 2. **粘 Key、选模式** —— 打开「设置 · 模型接入」，把发给你的 Key 粘进快速接入卡，选**标准**（写正式标书）或**极速**（试跑更快、更省额度），点一键接入。生成、对话、识图三件事一次全配好，四步实时打勾，配完当场测通。
 3. **拖招标文件** —— 把招标文件（PDF / DOCX / Markdown）拖进窗口任意位置，按向导确认一下哪份是招标文件，点开始。跑的过程中可以随时提要求、补材料、暂停或重跑。
 
-向导里的「你的要求」**预填了一份投标方案专家提示词**（角色、篇幅目标、逐条对齐评分点、承诺函、不编造），改两句就能用，也可以整段换掉。这段会存进任务目录的《你的要求.md》，agent 开工先读，自检报告里逐条回执。
+向导里的「你的要求」**预填了一份投标方案专家提示词**（小标题必须每章现拟、逐条应答招标条款、不编造、资质单独成章），改两句就能用，也可以整段换掉。这段会存进任务目录的《你的要求.md》，agent 开工先读，自检报告里逐条回执。
 
 不用注册账号、不用登录 AI 服务、不用装 Node.js 和 Python、不用开终端。不填配置也能先跑一遍内置演示。
 

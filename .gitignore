@@ -21,3 +21,11 @@ preset_config.json
 server/agent_settings.json
 # Vercel 本地链接目录
 .vercel/
+# 交付用的打包产物(每次重打,不进仓库)
+upload_v*.zip
+网站包_v*.zip
+网站单独部署包.zip
+上传说明_v*.md
+
+# CI 会把根目录那份 cp 进来打包;开发机上留着会抢在根目录新包前面被解压
+server/bidmultiagenttao_v5.3.zip

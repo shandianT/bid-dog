@@ -7,14 +7,14 @@
 真实 agent:环境变量 AGENT_CMD 命令模板(占位符 {tender}/{out}/{materials}),不配则跑内置 mock 流程。
 打包:pyinstaller -F engine_v1.py → 作为 Tauri sidecar 随安装包分发(见 BUILD.md)。
 """
-import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, urllib.request, urllib.error
+import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error
 from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-ENGINE_VERSION = '0.17.0'
+ENGINE_VERSION = '0.17.3'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
@@ -775,6 +775,22 @@ def real_agent(job, cmd):
                                '等套餐额度窗口重置后点「重跑本任务」即可续做;急用可先换另一个引擎。',
                        'actions': [{'act': 'open_engine', 'label': '去换生成引擎'},
                                    {'act': 'mock_rerun', 'label': '先用内置演示跑通流程'}]})
+        elif any(k in tail for k in ('连接被对端掐断',)) or \
+                any(k in low for k in ('connection reset by peer', 'unexpected_eof',
+                                       'stream disconnected before completion', 'eof occurred in violation')):
+            # 上游网关把连接掐了。中转层已经自动重试过 RETRY_WAITS 次仍不通,不是配置问题,别让客户去翻设置。
+            emit(job, {'type': 'error',
+                       'text': '**跟模型网关的连接被反复掐断**,任务没能跑完(不是 Key 或配置的问题——'
+                               '中转层已经自动重试 %d 次)。\n\n'
+                               '已经写出来的章节都保留着,点「重跑本任务」会接着做,不用从头来。\n\n'
+                               '如果连着几次都这样:\n'
+                               '① 换个网络试一次(手机热点最快)——能通就是本地网络设备/安全软件在拦长连接;\n'
+                               '② 过几分钟再跑,多数是网关侧短时限流;\n'
+                               '③ 还不行就把「设置 · 模型接入」里的模式切成**极速**,'
+                               '单次请求短一些,更不容易被掐。' % len(RETRY_WAITS),
+                       'actions': [{'act': 'rerun', 'label': '重跑本任务'},
+                                   {'act': 'open_engine', 'label': '去换模式'},
+                                   {'act': 'open_log', 'label': '查看运行日志'}]})
         elif any(k in low for k in ('no api key found for provider', 'auth-profiles', 'auth profile',
                                     'not logged in', 'unauthorized', 'please login', 'please log in',
                                     'agents add', 'no credentials')):
@@ -839,7 +855,7 @@ def skill_dir_conf(conf=None):
     custom = eng.get('skill_dir') or os.environ.get('SKILL_DIR')
     return custom or ensure_skill()   # 托管默认目录必须走 ensure_skill:带版本标记,升级后自动刷新存量目录
 
-SKILL_VERSION = '5.6'   # 技能包内容版本:已解压目录比它旧(或无标记)时,用内置 zip 自动刷新
+SKILL_VERSION = '5.7'   # 技能包内容版本:已解压目录比它旧(或无标记)时,用内置 zip 自动刷新
 
 def ensure_skill():
     """内置技能包:首次运行自动解压到数据目录;版本升级后老目录自动刷新,修复能到存量用户手里"""
@@ -855,6 +871,12 @@ def ensure_skill():
     if meipass: cands.append(os.path.join(meipass, 'bidmultiagenttao_v5.3.zip'))
     cands += [os.path.join(HERE, 'bidmultiagenttao_v5.3.zip'),
               os.path.join(HERE, '..', 'bidmultiagenttao_v5.3.zip')]
+    # 有多份同名 zip 时按修改时间取最新的:开发机上 server/ 常留着 CI 那步 cp 过来的旧副本,
+    # 按顺序取第一个会让它抢在根目录的新包前面解压——技能包改了却"没生效",排查起来极费时间(踩过两次)
+    exist = [z for z in cands if os.path.isfile(z)]
+    if len(exist) > 1 and not meipass:
+        exist.sort(key=lambda z: os.path.getmtime(z), reverse=True)
+        cands = exist
     for z in cands:
         if os.path.isfile(z):
             try:
@@ -1189,7 +1211,15 @@ async def create_job(tender: UploadFile = File(None), materials: UploadFile = Fi
     if prompt:
         # 落盘成文件,agent 才真的看得到(以前只发了一条聊天消息,界面写着「会作为生成指令的一部分」其实没进指令)
         open(os.path.join(job, '你的要求.md'), 'w', encoding='utf-8').write(prompt)
-        emit(job, {'type': 'message', 'role': 'user', 'text': prompt})
+        # 短要求原样回显;长的(默认预填就有二十来行 markdown)只回一句摘要——
+        # 整段灌进对话框既刷屏、又因为用户气泡是纯文本渲染而露出一堆 ** 和 #
+        if len(prompt) <= 120:
+            emit(job, {'type': 'message', 'role': 'user', 'text': prompt})
+        else:
+            head = next((l.strip(' #*').strip() for l in prompt.splitlines() if l.strip(' #*').strip()), '')
+            emit(job, {'type': 'message', 'role': 'user',
+                       'text': '已提交你的要求(%d 字,开头:%s…),完整内容存在任务目录的《你的要求.md》,'
+                               'agent 开工先读它。' % (len(prompt), head[:24])})
     if start == '0':
         emit(job, {'type': 'progress', 'stage': '待开始(素材已就位,点「开始生成」)', 'pct': 0, 'step': 0, 'total': 12})
         return {'job_id': jid, 'mode': 'staged'}
@@ -1658,9 +1688,54 @@ async def add_provider(req: Request):
     write_json(conf_path(), conf)
     return {'id': body['id']}
 
+RETRY_WAITS = (0.8, 2.0, 4.5)      # 三次重试的等待,总计约 7 秒——网关瞬时抖动基本都在这个窗口内恢复
+
+def _is_transient(e):
+    """能靠重试自愈的网络故障。判定要严:把 401/404/证书错误当瞬时错误重试是白烧时间。
+
+    实测最常见的两个(客户机 → S2 网关):
+      <urlopen error [Errno 54] Connection reset by peer>
+      <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol>
+    两条都是「连接建立/握手阶段被对端掐断」,重开一条连接就好——网关侧短时限流或中间设备干扰。
+    """
+    if isinstance(e, urllib.error.HTTPError):
+        return e.code in (429, 500, 502, 503, 504)
+    reason = getattr(e, 'reason', e)
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return False                                    # 证书问题重试一万次也一样
+    if isinstance(reason, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError,
+                           ssl.SSLEOFError, ssl.SSLZeroReturnError, TimeoutError, socket.timeout)):
+        return True
+    if isinstance(reason, (http.client.RemoteDisconnected, http.client.IncompleteRead,
+                           http.client.BadStatusLine)):
+        return True
+    s = str(reason).lower()
+    return any(k in s for k in ('connection reset', 'unexpected_eof', 'eof occurred in violation',
+                                'remote end closed', 'connection aborted', 'broken pipe',
+                                'record layer failure', 'timed out'))
+
+def _retry(call, tries=len(RETRY_WAITS) + 1, on_wait=None):
+    """瞬时网络故障重试。上游网关偶发掐连接是常态,不重试就等于把整条任务赌在一次握手上。"""
+    last = None
+    for i in range(tries):
+        try:
+            return call()
+        except Exception as e:
+            last = e
+            if i == tries - 1 or not _is_transient(e): raise
+            if on_wait: on_wait(i + 1, tries - 1, e)
+            time.sleep(RETRY_WAITS[i])
+    raise last
+
 def net_hint(e):
     """把底层网络异常翻译成可操作的中文提示"""
     s = str(e)
+    if 'Connection reset by peer' in s or 'unexpected_eof' in s.lower() \
+            or 'EOF occurred in violation' in s or 'RemoteDisconnected' in s:
+        return ('连接被对端掐断(已自动重试 %d 次仍未成功)。多半是网关侧短时限流,或公司网络/VPN、'
+                '安全软件在拦截长连接。可以:① 过一两分钟点「重跑本任务」;② 换个网络(手机热点)试一次'
+                '——能通就是本地网络设备的问题;③ 若你是网关方,看下并发连接数限制。原始信息:%s'
+                % (len(RETRY_WAITS), s))
     if 'CERTIFICATE_VERIFY' in s or 'certificate verify failed' in s:
         return ('HTTPS 证书校验失败(已尝试系统证书与内置根证书)。常见于公司网络代理拦截 HTTPS 或内网自签名网关;'
                 '若确认该网关可信,勾选「跳过证书校验」后重试。原始信息:%s' % s)
@@ -1696,7 +1771,9 @@ def _openai_req(base, key, path, payload=None, timeout=30, verify=True):
         except Exception:
             continue  # 该环境没有 certifi
         try:
-            return json.loads(urllib.request.urlopen(req, timeout=timeout, context=ctx).read().decode('utf-8', 'ignore'))
+            # 瞬时故障(连接被重置/握手 EOF/网关 5xx)自动重试,不重试就等于把一次对话赌在一次握手上
+            r = _retry(lambda: urllib.request.urlopen(req, timeout=timeout, context=ctx))
+            return json.loads(r.read().decode('utf-8', 'ignore'))
         except urllib.error.URLError as e:
             # 仅证书类失败才换 CA 重试;其他错误(401/超时/DNS)直接抛
             if not isinstance(getattr(e, 'reason', None), ssl.SSLCertVerificationError): raise
@@ -1876,7 +1953,11 @@ def _upstream(base, key, path, payload, timeout, verify):
     for kind in (['default', 'certifi'] if verify else ['none']):
         try: ctx = _ssl_ctx(kind)
         except Exception: continue
-        try: return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+        try:
+            # 生成一册标书要打几十上百次上游,握手被掐一次就整条任务失败太脆:瞬时故障自动重开连接
+            note = lambda i, n, e: RELAY_LAST.update(
+                {'ts': now(), 'retry': '第 %d/%d 次重试上游:%s' % (i, n, str(getattr(e, 'reason', e))[:120])})
+            return _retry(lambda: urllib.request.urlopen(req, timeout=timeout, context=ctx), on_wait=note)
         except urllib.error.URLError as e:
             if not isinstance(getattr(e, 'reason', None), ssl.SSLCertVerificationError): raise
             last = e
@@ -1947,7 +2028,14 @@ def _relay_stream(body, up):
                 fn = tc.get('function') or {}
                 calls[i] = {'id': tc.get('id') or '', 'name': fn.get('name') or '', 'args': fn.get('arguments') or '{}'}
     except Exception as e:
-        err = net_hint(e)
+        # 流到一半被掐断:已经吐出去的正文不能白扔。
+        # 只有「有正文 且 这一轮没有任何工具调用」时才按部分结果收尾——
+        # 一旦掺了工具调用,截断的 arguments 会让 agent 拿着半截 JSON 去执行,比失败更糟。
+        partial = ''.join(text).strip()
+        if opened[0] and partial and not calls:
+            RELAY_LAST['error'] = '上游流中断,已按已收到的 %d 字收尾:%s' % (len(partial), net_hint(e))
+        else:
+            err = net_hint(e)
     if err:
         RELAY_LAST['error'] = err
         yield sse('response.failed', {'type': 'response.failed', 'response': {'id': rid, 'status': 'failed',
