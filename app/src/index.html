@@ -343,7 +343,8 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
         <div class="inbar">
           <span class="plus" onclick="togglePlus(event)" title="添加文件"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
           <input id="draft" placeholder="问问进度、提要求,或把文件拖进来" onkeydown="if(event.key==='Enter'&&!event.isComposing)send()">
-          <span class="rbtn mic" title="语音(接本机转写)"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg></span>
+          <!-- 语音按钮已撤下:前端从未绑事件,后端 /v1/transcribe 也是硬编码 501「本机未装转写模型」。
+               摆一颗永远点不动的按钮,只会让人以为是自己操作不对。等真接上转写再放回来。 -->
           <span class="rbtn send" onclick="send()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><line x1="12" y1="19" x2="12" y2="5"/><path d="M6 11l6-6 6 6"/></svg></span>
         </div>
         <div class="quick" id="quick"></div>
@@ -740,19 +741,35 @@ function taskRow(j, compact){
   return '<div class="task'+(on?' on':'')+'" data-id="'+escA(j.job_id)+'">'+head
     + '<div class="st">'+esc(stage)+' · '+p+'%</div><div class="bar"><b style="width:'+p+'%"></b></div></div>';
 }
+/* 状态由引擎给结论(list_jobs 的 state 字段),前端不再从进度百分比反推。
+   以前只有 `pct>=100 ? 已完成 : 进行中` 两档,于是四种「已停止」终态(它们的 pct 都是 0)
+   全部被归进「进行中」并一直转圈——跑挂了跟正在跑长得一模一样,用户会一直等下去。 */
+function jobState(j){
+  if(j.state) return j.state;                       // 新引擎:直接用它的结论
+  const p = (S.prog[j.job_id]&&S.prog[j.job_id].pct)!=null ? S.prog[j.job_id].pct : j.pct||0;
+  const st = (S.prog[j.job_id]&&S.prog[j.job_id].stage) || j.stage || '';
+  if(j.staged) return 'staged';                     // 旧引擎:尽量还原,别退回两档
+  if(p>=100) return 'done';
+  if(/^已停止/.test(st)) return 'stopped';
+  return 'running';
+}
 function renderTasks(){
-  const act = [], done = [];
-  S.jobs.forEach(j=>{
-    const p = (S.prog[j.job_id]&&S.prog[j.job_id].pct)!=null ? S.prog[j.job_id].pct : j.pct||0;
-    (p>=100 ? done : act).push(j);
-  });
-  const open = S.doneOpen !== undefined ? S.doneOpen : done.length <= 4;   // 少量默认展开,多了默认收
+  const g = {staged:[], running:[], stopped:[], unknown:[], done:[]};
+  S.jobs.forEach(j=>{ (g[jobState(j)] || g.running).push(j); });
+  const open = S.doneOpen !== undefined ? S.doneOpen : g.done.length <= 4;
   let h = '';
-  if(act.length) h += '<div class="tgrp">进行中 · '+act.length+'</div>' + act.map(j=>taskRow(j,false)).join('');
-  if(done.length){
-    h += '<div class="tgrp">已完成 · '+done.length
+  const grp = (key, label, compact)=>{
+    const list = g[key]; if(!list.length) return '';
+    return '<div class="tgrp">'+label+' · '+list.length+'</div>' + list.map(j=>taskRow(j,compact)).join('');
+  };
+  h += grp('staged', '等你开始', false);
+  h += grp('running', '进行中', false);
+  h += grp('stopped', '已停止', false);
+  h += grp('unknown', '状态不明', false);      // 引擎被杀/断电:如实说不知道,不装作在跑
+  if(g.done.length){
+    h += '<div class="tgrp">已完成 · '+g.done.length
        + '<span class="tgx" data-tgl="'+(open?'0':'1')+'">'+(open?'收起':'展开')+'</span></div>';
-    const show = open ? done : done.filter(j=>j.job_id===S.active);   // 收起时仍显示当前选中的那条
+    const show = open ? g.done : g.done.filter(j=>j.job_id===S.active);   // 收起时仍显示当前选中的那条
     h += show.map(j=>taskRow(j,true)).join('');
   }
   el('tasks').innerHTML = h || '<div class="empty-side">还没有任务</div>';
@@ -894,26 +911,38 @@ function verdict(id){
 function renderHead(){
   if(!S.active) return;
   const p = S.prog[S.active]||{};
-  const t = timing(S.active), done = p.pct>=100;
-  const v = verdict(S.active);
   const j = S.jobs.find(x=>x.job_id===S.active);
+  const st = j ? jobState(j) : (p.pct>=100 ? 'done' : 'running');
+  /* done 只表示「跑到头了」;stopped/unknown 是另一类终态——它们也不该再显示成运行中,
+     但结论卡、质检徽章那一套只对真正跑完的稿子有意义,所以分开判。 */
+  const t = timing(S.active), done = (st === 'done');
+  const halted = (st === 'stopped' || st === 'unknown');
+  const v = verdict(S.active);
   el('hTitle').textContent = (j&&j.name) || S.active;
   const badge = el('hBadge');
   if(done){
     const label = {ok:'内容检查通过', warn:'待确认项待处理', bad:(v.fix?'内容异常,需修复':'有必办项,暂不可投'), none:'已完成,待体检'}[v.key];
     badge.style.display = 'inline-flex'; badge.className = 'badge ' + v.key;
     badge.innerHTML = '<span class="bdot"></span>' + label;
+  } else if(halted){
+    // 跑挂了不能装作没事:徽章直接把话说明白,再配合下面的「重跑 / 补出 Word」
+    badge.style.display = 'inline-flex'; badge.className = 'badge bad';
+    badge.innerHTML = '<span class="bdot"></span>' + (st==='unknown' ? '状态不明,可能被中断' : '已停止,未跑完');
   } else badge.style.display = 'none';
   const act = el('hAct');
   act.className = 'pill' + (done ? ' primary' : '');
   act.textContent = done ? (v.key==='bad' ? (v.fix?'去修复内容异常':'看必办清单') : '出件前检查') : '出件前检查';
-  el('stopBtn').style.display = (!done && S.online && p.step) ? 'inline-block' : 'none';
-  el('redoBtn').style.display = (done && S.online) ? 'inline-block' : 'none';
+  /* 不再依赖 p.step:那等于「agent 自己汇报了第一条进度才给停止按钮」,
+     而真实 agent 读招标文件那几分钟到几十分钟是不吭声的——选错了文件想停,
+     用户只能删掉整个任务或干等三小时超时。任务只要不是终态就该能停。 */
+  el('stopBtn').style.display = (st==='running' && S.online) ? 'inline-block' : 'none';
+  // 跑挂了也该能定向重做/重跑:已经写出来的章节不该跟着一起作废
+  el('redoBtn').style.display = ((done || halted) && S.online) ? 'inline-block' : 'none';
   const jj = (S.jobs||[]).find(j=>j.job_id===S.active);
   el('startBtn').style.display = (jj && jj.staged) ? '' : 'none';
   const pb = el('pauseBtn');
   pb.onclick = togglePause;
-  if(!done && S.online && p.step){
+  if(st==='running' && S.online && p.step){
     pb.style.display='flex';
     pb.title = S.paused[S.active] ? '继续' : '暂停';
     pb.innerHTML = S.paused[S.active]
@@ -922,6 +951,13 @@ function renderHead(){
   } else pb.style.display='none';
   const parts = [];
   if(done){ parts.push('全部 '+t.total+' 步完成'); if(t.elapsed) parts.push('用时 '+fmtDur(t.elapsed)); }
+  else if(halted){
+    // 停在第几步、已经写了多久,是用户决定「重跑还是接着改」的依据,不能只说一句"已停止"
+    parts.push(p.stage || '已停止');
+    if(p.step) parts.push('停在第 '+p.step+'/'+t.total+' 步');
+    if(t.elapsed) parts.push('已跑 '+fmtDur(t.elapsed));
+    parts.push('已生成的产物都保留着');
+  }
   else{
     parts.push(p.stage ? '正在:'+p.stage : '任务启动中');
     parts.push('第 '+(p.step||1)+'/'+t.total+' 步');
@@ -1048,6 +1084,8 @@ async function errAction(act, file, param){
     }catch(e){ toast('定向重做启动失败:任务可能正在运行'); }
     return;
   }
+  if(act==='open_redo'){ openRedo(); return; }
+  if(act==='repair'){ openCheck(); repairJob(); return; }
   if(act==='open_artifact'){ openArtifact(file); return; }
   if(act==='open_job_folder'){ openJobFolder(); return; }
   if(act==='export_docx'){
@@ -1071,7 +1109,13 @@ async function errAction(act, file, param){
       toast('已切到内置演示,开始重跑');
       rerunJob(true);
     }catch(e){ toast('切换失败,请到「设置 · 模型接入」手动选择'); }
+    return;
   }
+  /* 兜底:引擎发来一个前端不认识的动作。以前这里直接走到函数末尾静默 return——
+     「定向重做不达标章节」(open_redo)就这么死了很久:按钮画得好好的,点了毫无反应。
+     宁可当面说"这版应用不认识这个动作",也不让用户对着一颗死按钮猜。 */
+  toast('这版应用还不认识「'+act+'」这个操作,可能是引擎比应用新。请更新应用后重试。');
+  console.warn('[errAction] 未处理的动作:', act, {file, param});
 }
 
 /* ================= 右栏卡片 ================= */
@@ -1316,7 +1360,10 @@ async function njStart(startNow){
 async function startStaged(){
   if(!S.active) return;
   el('startBtn').style.display='none';
-  try{ await api('/v1/jobs/'+S.active+'/start', {method:'POST'}); S.jobs = await api('/v1/jobs'); renderJobs(); }
+  /* renderJobs 这个函数根本不存在(只有 renderTasks)——调用抛 ReferenceError 被下面 catch 住,
+     于是「已经启动成功」的任务 100% 弹出「启动失败,请重试」。用户会反复点,最后多半去删任务重建,
+     把正在跑的 agent 一起杀掉。真机上这是最容易撞见的一条。 */
+  try{ await api('/v1/jobs/'+S.active+'/start', {method:'POST'}); S.jobs = await api('/v1/jobs'); renderTasks(); renderHead(); }
   catch(e){ toast('启动失败,请重试'); el('startBtn').style.display=''; }
 }
 function createJob(file){ if(file) njAddFiles([file]); }   // 兼容旧入口:一律进向导
@@ -1439,10 +1486,24 @@ function renderCheck(){
   const h = S.health[S.active];
   if(!h){ el('ckTitle').textContent='还没到出件阶段'; el('ckList').innerHTML=''; el('ckFix').style.display='none'; return; }
   el('ckLv').textContent = h.level==='red' ? '不可交付' : '仅可作初稿'; el('ckTitle').textContent=h.summary;
-  el('ckFix').style.display = (h.gaps||[]).some(g=>/逐字|重复|异常/.test(g.title||'')) ? 'flex' : 'none';
+  const gaps = h.gaps||[];
+  el('ckFix').style.display = gaps.some(g=>(g.actions||[]).some(a=>a.act==='repair')) ? 'flex' : 'none';
   const dot = {red:'var(--red)',yellow:'var(--amber)',green:'var(--green)'};
-  el('ckList').innerHTML = (h.gaps||[]).map(g=>'<div class="lrow"><span class="dot" style="background:'+(dot[g.level]||'var(--amber)')+'"></span><div class="c"><span class="n">'+esc(g.title)+'</span><span class="s">'+esc(g.detail)+'</span></div><span class="gap-act">'+(g.level==='green'?'明细':'处理')+'</span></div>').join('');
+  /* 每条只在**后端给了可执行动作**时才画按钮。以前无脑画一颗「处理」,却没绑任何事件——
+     客户点了没反应,卡在那儿不知道该干嘛(真实报障)。假按钮比没有更糟:它让人以为有路可走。
+     按钮走 errAction 同一条分发路径,和聊天里的操作按钮共用已验证过的实现。 */
+  el('ckList').innerHTML = gaps.map(g=>{
+    const acts = (g.actions||[]).map(a=>'<span class="gap-act" data-eact="'+escA(a.act)+'" data-file="'+escA(a.file||'')+'" data-eparam="'+escA(a.param||'')+'">'+esc(a.label||'处理')+'</span>').join('');
+    return '<div class="lrow"><span class="dot" style="background:'+(dot[g.level]||'var(--amber)')+'"></span>'
+      + '<div class="c"><span class="n">'+esc(g.title)+'</span><span class="s">'+esc(g.detail)+'</span></div>'
+      + (acts ? '<span style="display:flex;gap:10px;align-items:flex-start">'+acts+'</span>' : '') + '</div>';
+  }).join('');
 }
+el('ckList').addEventListener('click', e=>{
+  const a = e.target.closest('[data-eact]'); if(!a) return;
+  closeAll();                                   // 抽屉挡着底下的对话与重做弹层,先关掉再执行
+  errAction(a.dataset.eact, a.dataset.file, a.dataset.eparam);
+});
 async function repairJob(){
   if(!S.active) return;
   el('fixMsg').textContent = '清洗中…';

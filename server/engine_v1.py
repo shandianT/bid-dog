@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTM
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-ENGINE_VERSION = '0.17.6'
+ENGINE_VERSION = '0.17.8'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
@@ -481,6 +481,36 @@ def ensure_line_ts(job):
         except Exception: pass
     return index
 
+def merged_materials(job):
+    """本次任务真正该用的素材目录。
+
+    以前是二选一:`mdir if os.path.isdir(mdir) else assets_dir()` ——
+    只要用户在新建任务向导里拖进**任何一个**公司文件,就建出了 job/素材/,
+    于是**整个全局素材库(公司介绍、产品能力表、资质与案例、应答要点、图片索引)
+    在这一单里全部失联**,agent 满篇写〔需补充〕。
+    用户越认真传材料,产出越差 —— 这条极其反直觉,而且藏在一行代码里。
+
+    现在改成合并:把全局库里任务级没有的文件补进 job/素材/,同名一律以任务级为准
+    (这一单专门传的东西优先)。合并只补不覆盖,可重复调用。"""
+    mdir = os.path.join(job, '素材')
+    glob_dir = assets_dir()
+    if not os.path.isdir(mdir):
+        return glob_dir if os.path.isdir(glob_dir) else mdir
+    if os.path.isdir(glob_dir) and os.path.realpath(glob_dir) != os.path.realpath(mdir):
+        for root, dirs, files in os.walk(glob_dir):
+            dirs[:] = [d for d in dirs if not d.startswith(('.', '_')) and d != '原件']
+            rel = os.path.relpath(root, glob_dir)
+            dst_root = mdir if rel == '.' else os.path.join(mdir, rel)
+            for fn in files:
+                if fn.startswith(('.', '_')) or fn == '入库流水.jsonl': continue
+                dst = os.path.join(dst_root, fn)
+                if os.path.exists(dst): continue          # 任务级同名文件优先,不覆盖
+                try:
+                    os.makedirs(dst_root, exist_ok=True)
+                    shutil.copy2(os.path.join(root, fn), dst)
+                except Exception: pass
+    return mdir
+
 def _skill_module(name):
     """从技能包 references/ 里加载确定性脚本(quality_gate / build_tender_docx 等)。
     单一事实来源:引擎不复制这些逻辑,升级技能包 = 引擎门禁同步升级。"""
@@ -582,8 +612,7 @@ def ensure_docx(job, known):
                    'text': '⚠ 正文已写好但没出 Word,而技能包里的导出脚本 build_tender_docx.py 也没找到。'
                            '请到「设置 · 生成引擎」确认技能包路径,或重跑本任务。'})
         return []
-    mdir = os.path.join(job, '素材')
-    mat = mdir if os.path.isdir(mdir) else assets_dir()
+    mat = merged_materials(job)
     spec_f = _job_find(job, 'word_format_spec.json')
     meta = read_json(os.path.join(job, '任务.json'), {})
     made = []
@@ -636,13 +665,13 @@ def quality_audit(job, known):
     修复动作真实发生时,用修复稿重建 docx(build_tender_docx,零 token)——给客户看的必须是修好的 Word。"""
     qg = _skill_module('quality_gate')
     if not qg: return content_gate(job, known)          # 老技能目录没有质检脚本:退回旧内容门禁
-    mdir = os.path.join(job, '素材')
-    mat = mdir if os.path.isdir(mdir) else assets_dir()
+    mat = merged_materials(job)
     score = _job_find(job, '评分点响应矩阵.md')
     devs = [p for p in [_job_find(job, '技术应答偏离表.md'), _job_find(job, '商务偏离表.md')] if p]
     mds = _body_mds(job, known)     # 与兜底导出共用同一套正文识别,避免命名一变全链路失灵
     if not mds: return content_gate(job, known)
     worst, fixed_total, lines = 'green', 0, []
+    red_items = []          # 具体红项:出件前检查面板要给每条挂上「重做这一章」,不能只丢一句"见报告"
     order = {'green': 0, 'yellow': 1, 'red': 2}
     for fn in mds:
         mp = os.path.join(job, fn)
@@ -661,6 +690,7 @@ def quality_audit(job, known):
             lines.append('%s %s:%d 章共 %d 字' % (icon, fn, len(res['chapters']), res['total_chars']))
             for l, t in res['items'][:4]:
                 lines.append(('  🔴 ' if l == 'red' else '  🟡 ') + t)
+            red_items += [t for l, t in res['items'] if l == 'red']
             if fixed: lines.append('  🔧 已自动修复 %d 处(图片落位/重复段),原稿备份 *.bak.md' % fixed)
         except Exception as e:
             lines.append('⚠ %s 质检异常:%s' % (fn, e)); continue
@@ -697,9 +727,24 @@ def quality_audit(job, known):
                'actions': [{'act': 'open_artifact', 'label': '打开质检报告', 'file': '成品质检报告.md'}]
                           + ([{'act': 'open_redo', 'label': '定向重做不达标章节'}] if worst == 'red' else [])})
     if worst == 'red':
-        emit(job, {'type': 'health', 'level': 'red', 'summary': '成品质检有必须处理项',
-                   'gaps': [{'level': 'red', 'title': '见《成品质检报告.md》',
-                             'detail': '字数/图片落位/重复段/应答覆盖率的逐项详情都在报告里'}]})
+        # 每条 gap 自带可执行动作。以前只给一条「见《成品质检报告.md》」,前端画一颗「处理」按钮
+        # 却没绑任何事件——客户点了没反应,卡在那儿不知道该干嘛(真实报障)。
+        # 现在:动作由后端指定(它才知道该怎么修),前端只负责执行;没有动作的 gap 不画按钮。
+        gaps = [{'level': 'red', 'title': '逐项详情见《成品质检报告.md》',
+                 'detail': '字数/图片落位/重复段/应答覆盖率都在报告里,逐条对着改',
+                 'actions': [{'act': 'open_artifact', 'label': '打开报告', 'file': '成品质检报告.md'}]}]
+        # 把质检抓到的具体红项也放进来,每条直接挂「定向重做这一章」——用户不用自己抄章节名
+        for t in red_items[:6]:
+            g = {'level': 'red', 'title': t, 'detail': '按报告要求补足后再交付'}
+            ch = re.search(r'章节「([^」]+)」', t)
+            if ch:
+                g['actions'] = [{'act': 'redo', 'label': '重做这一章',
+                                 'param': '重写章节「%s」:%s' % (ch.group(1), t)}]
+            gaps.append(g)
+        gaps.append({'level': 'yellow', 'title': '也可以对整册不达标章节一起重做',
+                     'detail': '只重做这些章节,其余产物保留,完成后自动重新汇总并更新自检',
+                     'actions': [{'act': 'open_redo', 'label': '定向重做'}]})
+        emit(job, {'type': 'health', 'level': 'red', 'summary': '成品质检有必须处理项', 'gaps': gaps})
 
 def content_gate(job, names):
     """内容门禁:格式自检只管版式,这里管正文是否被逐字打散/重复灌注,坏了不静默交付"""
@@ -716,13 +761,15 @@ def content_gate(job, names):
             continue
         for i in r.get('issues', []):
             bad.append(fn)
-            gaps.append({'level': 'red', 'title': '%s:%s' % (fn, i['title']), 'detail': i['detail']})
+            # 每条都挂上真能点的「一键修复」:这类问题的处理动作就是清洗,不用让用户自己去找按钮
+            gaps.append({'level': 'red', 'title': '%s:%s' % (fn, i['title']), 'detail': i['detail'],
+                         'actions': [{'act': 'repair', 'label': '一键修复'}]})
     if gaps:
         emit(job, {'type': 'message', 'role': 'agent',
                    'text': '⚠ 内容门禁未通过:%s 存在正文被逐字打散或整段重复灌注的问题,直接交付会是废稿。'
-                           '可在「出件前检查」点「一键修复」自动清洗后重新出 Word。' % '、'.join(sorted(set(bad)))})
-        emit(job, {'type': 'health', 'level': 'red', 'summary': '内容异常,需修复后再出件',
-                   'gaps': gaps[:8] + [{'level': 'green', 'title': '可一键修复', 'detail': '合并逐字碎片、折叠重复样板后重新导出'}]})
+                           '可在「出件前检查」点「一键修复」自动清洗后重新出 Word。' % '、'.join(sorted(set(bad))),
+                   'actions': [{'act': 'repair', 'label': '一键修复内容异常'}]})
+        emit(job, {'type': 'health', 'level': 'red', 'summary': '内容异常,需修复后再出件', 'gaps': gaps[:8]})
 
 @app.post('/v1/jobs/{jid}/repair')
 def repair_job(jid: str):
@@ -789,6 +836,18 @@ def skill_evidence(job):
     why = '运行日志里没有出现 SKILL.md、门禁脚本或响应矩阵等任何技能包痕迹'
     if not log: why = '没有拿到运行日志,无法确认(agent 可能没有输出)'
     return {'ok': False, 'hits': [], 'why': why}
+
+def halt(job, why):
+    """任务终止:保留它跑到哪一步,不要把进度清零。
+
+    四种终态(手动停止 / 未能启动 / 没有产出 / agent 异常退出)以前一律 pct=0 step=0,
+    于是前端看到「pct 0 且没到 100」就当成运行中,一直转圈、一直挂在「进行中」——
+    跑挂了跟正在跑长得一模一样,用户会一直等下去,等到投标截止。
+    停在第几步、跑了多久,是用户决定「重跑还是接着改」的依据,必须留着。"""
+    prev = read_json(os.path.join(job, 'progress.json'), {})
+    emit(job, {'type': 'progress', 'stage': why, 'terminal': True,
+               'pct': min(int(prev.get('pct') or 0), 99),   # 保住进度,但绝不让它等于 100(那是"完成")
+               'step': int(prev.get('step') or 0), 'total': int(prev.get('total') or 12)})
 
 def real_agent(job, cmd):
     RUNNING.add(os.path.basename(job))
@@ -859,7 +918,7 @@ def real_agent(job, cmd):
         ev = {'type': 'error', 'text': spawn_err}
         if spawn_actions: ev['actions'] = spawn_actions
         emit(job, ev)
-        emit(job, {'type': 'progress', 'stage': '已停止(未能启动生成)', 'pct': 0, 'step': 0, 'total': 12})
+        halt(job, '已停止(未能启动生成)')
     stop.set(); log.close(); RUNNING.discard(base)
     harvest(job)
     for fn in list_deliverables(job):
@@ -896,7 +955,7 @@ def real_agent(job, cmd):
                    'actions': [{'act': 'open_log', 'label': '查看运行日志'},
                                {'act': 'open_engine', 'label': '换生成引擎'},
                                {'act': 'open_job_folder', 'label': '打开任务文件夹'}]})
-        emit(job, {'type': 'progress', 'stage': '已停止(没有产出)', 'pct': 0, 'step': 0, 'total': 12})
+        halt(job, '已停止(没有产出)')
     elif rc != 0 and not spawn_err:
         tail = ''
         try: tail = open(os.path.join(job, 'run.log'), encoding='utf-8').read()[-600:]
@@ -946,7 +1005,7 @@ def real_agent(job, cmd):
                                    {'act': 'open_log', 'label': '查看运行日志'}]})
         else:
             emit(job, {'type': 'error', 'text': 'agent 异常退出(退出码 %s)。可点「重跑本任务」再试;日志尾部:%s' % (rc, tail[-300:].strip() or '(空)')})
-        emit(job, {'type': 'progress', 'stage': '已停止(agent 异常退出)', 'pct': 0, 'step': 0, 'total': 12})
+        halt(job, '已停止(agent 异常退出)')
 
 # ---------- 生成引擎绑定(claude / codex / 自定义;打包版通过应用内设置,无需环境变量) ----------
 AGENT_PROMPT = ('你是标书生成 agent。先完整阅读 {skill}/SKILL.md,然后严格按其流程执行:'
@@ -1073,8 +1132,19 @@ def opencode_home_s2(eng=None):
             'npm': '@ai-sdk/openai-compatible', 'name': '中标狗 · S2',
             'options': {'baseURL': base, 'apiKey': '{env:BIDDOG_S2_KEY}'},
             'models': {up['model']: {'name': up['model']}}}},
-        # 标书生成要跑脚本/写文件:bash 与 edit 放行;webfetch 关掉(素材是唯一事实来源,不允许上网编)
-        'permission': {'edit': 'allow', 'bash': 'allow', 'webfetch': 'deny'},
+        # 标书生成要跑脚本/写文件:bash 与 edit 放行;webfetch 关掉(素材是唯一事实来源,不允许上网编)。
+        #
+        # external_directory 必须显式放行,否则**每一单都会永久挂住** ——
+        # 素材库(materialsDir)与技能包(skillDir)天生在工作目录(outDir)之外,
+        # opencode 对目录外访问默认 action=ask;而我们用的是 `run --auto` 非交互模式,
+        # 没有人能回答这个询问,进程就停在那里:0% CPU、没有报错、没有超时,
+        # 界面上永远停在「预检 8%」。真机实测:三个前置分析子 agent 全部跑完并返回后,
+        # 主控读素材库时撞上 ask,整条流程静默挂死 9 分钟以上(日志原文:
+        # `message=asking permission=external_directory action.action=ask`)。
+        # 这就是 OpenCode 一直「装上了却从没产出过一单」的真实原因。
+        'permission': {'edit': 'allow', 'bash': 'allow', 'webfetch': 'deny',
+                       'external_directory': 'allow', 'read': 'allow',
+                       'glob': 'allow', 'grep': 'allow', 'task': 'allow', 'skill': 'allow'},
     }
     write_json(os.path.join(d, 'opencode.json'), conf)
     return d, base, direct
@@ -1224,7 +1294,7 @@ def agent_test():
         cli = resolve_cli('opencode', eng)
         if not cli:
             return {'ok': False, 'need_provision': True,
-                    'error': 'S2 网关是通的,只差 OpenCode 外壳。点「一键安装执行外壳」(约 80MB);'
+                    'error': 'S2 网关是通的,只差 OpenCode 外壳。点「一键安装执行外壳」(约 60MB,解压后约 170MB);'
                              '或手动:npm i -g opencode-ai。装完都不用登录。'}
         cmd = [cli, 'run', '--auto', '-m', 'biddog-s2/' + up['model'], probe]
     elif kind == 's2':
@@ -1373,6 +1443,11 @@ def _launch_job(jid, job, mock='auto'):
     if not os.path.isfile(tpath):
         emit(job, {'type': 'error', 'text': '找不到招标文件「%s」,请删除本任务重新创建。' % meta.get('tender')})
         return {'job_id': jid, 'mode': 'error'}
+    # 先打一条 step=1 的进度再派发。前端的停止按钮要等 progress.step 有值才显示,
+    # 而这一步以前完全取决于 agent 自己什么时候写第一条进度——真实 agent 读招标文件、
+    # 建素材索引可能几分钟到几十分钟不吭声,这段时间界面上**根本没有停止按钮**:
+    # 选错了招标文件想停,只能删掉整个任务(把正在跑的 agent 一起杀掉),或者干等三小时超时。
+    emit(job, {'type': 'progress', 'stage': '已派发,正在读招标文件', 'pct': 2, 'step': 1, 'total': 12})
     agent_cmd = config_agent_cmd()
     use_mock = (mock == '1') or (mock == 'auto' and not agent_cmd)
     if use_mock:
@@ -1384,8 +1459,7 @@ def _launch_job(jid, job, mock='auto'):
                        'actions': [{'act': 'open_engine', 'label': '去填 Key'}]})
         threading.Thread(target=mock_agent, args=(job,), daemon=True).start()
     else:
-        mdir = os.path.join(job, '素材')
-        mat = mdir if os.path.isdir(mdir) else assets_dir()
+        mat = merged_materials(job)     # 这一处最要紧:它决定 agent 命令行里的 materialsDir
         sd_path = skill_dir_conf(read_json(conf_path(), {}))
         if not os.path.isfile(os.path.join(sd_path, 'SKILL.md')): sd_path = ensure_skill()
         sub = lambda x: (x.replace('{tender}', tpath).replace('{out}', job)
@@ -1423,6 +1497,29 @@ def del_job(jid: str):
     RUNNING.discard(base)
     return {'ok': True}
 
+def job_state(job, meta=None, prog=None):
+    """任务当前处于哪个状态 —— 由引擎给出结论,不让前端从进度百分比反推。
+
+    以前前端只有 `done = pct >= 100` 一个判据,于是「已停止(手动)」「已停止(没有产出)」
+    「已停止(agent 异常退出)」「已停止(未能启动生成)」这四种终态(它们的 pct 都是 0)
+    在界面上全部等于「运行中 0%」:一直转圈、一直挂在「进行中」分组里。
+    用户会一直等下去——等到投标截止。"""
+    meta = read_json(os.path.join(job, '任务.json'), {}) if meta is None else meta
+    prog = read_json(os.path.join(job, 'progress.json'), {}) if prog is None else prog
+    if meta.get('staged'): return 'staged'                       # 暂存,还没开跑
+    if os.path.basename(job) in RUNNING: return 'running'
+    stage = str(prog.get('stage') or '')
+    if int(prog.get('pct') or 0) >= 100: return 'done'
+    if stage.startswith('已停止'): return 'stopped'
+    if not prog: return 'staged'                                 # 从没跑过
+    return 'unknown'      # 进程没了、进度也没到头:多半是引擎被杀或断电,单独标出来别装作在跑
+
+# 每种状态下前端允许做什么。放在引擎侧,免得前端各处自己拼条件、拼错了就是死按钮
+STATE_CAN = {'staged': ['start', 'delete'], 'running': ['stop', 'ask', 'delete'],
+             'done': ['redo', 'rerun', 'ask', 'export', 'delete'],
+             'stopped': ['rerun', 'redo', 'ask', 'export', 'delete'],
+             'unknown': ['rerun', 'ask', 'export', 'delete']}
+
 @app.get('/v1/jobs')
 def list_jobs():
     out = []
@@ -1431,9 +1528,11 @@ def list_jobs():
         if not os.path.isdir(job): continue
         meta = read_json(os.path.join(job, '任务.json'), {})
         prog = read_json(os.path.join(job, 'progress.json'), {})
+        st = job_state(job, meta, prog)
         out.append({'job_id': jid, 'name': meta.get('name', jid), 'created_at': meta.get('created_at', ''),
                     'stage': prog.get('stage', '启动中'), 'pct': prog.get('pct', 0),
-                    'staged': bool(meta.get('staged'))})
+                    'staged': bool(meta.get('staged')),
+                    'state': st, 'can': STATE_CAN.get(st, [])})
     return out
 
 @app.get('/v1/jobs/{jid}/events')
@@ -1635,7 +1734,7 @@ def stop_job(jid: str):
     kill_tree(PROCS.pop(base, None))
     RUNNING.discard(base)
     emit(job, {'type': 'message', 'role': 'agent', 'text': '已按你的要求停止。已生成的产物都保留着,可以「重跑」或「定向重做」。'})
-    emit(job, {'type': 'progress', 'stage': '已停止(手动)', 'pct': 0, 'step': 0, 'total': 12})
+    halt(job, '已停止(手动)')
     return {'ok': True}
 
 @app.post('/v1/jobs/{jid}/redo')
@@ -1660,8 +1759,10 @@ async def redo_job(jid: str, req: Request):
     prompt = (AGENT_PROMPT.replace('{mode}', MODE_AGENTS).replace('{skill}', sd)
               + ' 【本次为定向重做】只执行这条指令:「%s」。保留任务目录内其他既有产物;'
                 '改写对应文件后,必须重新执行汇总成册与自检体检,更新自检报告。' % instruction)
+    # 定向重做也要用合并后的素材:以前这里写死 assets_dir(),于是重做时反而看不到
+    # 这一单专门传进来的材料,改出来的章节和首轮不是一个事实来源
     sub = lambda s: (s.replace('{tender}', tpath).replace('{out}', job)
-                      .replace('{materials}', assets_dir()).replace('{jobid}', os.path.basename(jid))
+                      .replace('{materials}', merged_materials(job)).replace('{jobid}', os.path.basename(jid))
                       .replace('{skill}', sd))
     raw = agent_cmd
     if isinstance(raw, list):
@@ -2304,11 +2405,45 @@ def _plat_key():
             'arm64': 'arm64', 'aarch64': 'arm64' if sys.platform == 'darwin' else 'aarch64'}.get(mach, mach)
     return (sys.platform if sys.platform != 'cygwin' else 'win32', mach)
 
+def _has_avx2():
+    """本机 CPU 支不支持 AVX2。
+
+    opencode 官方安装脚本会探测这一项:不支持就必须下 `-baseline` 变体,
+    否则二进制**直接崩**,而且报错完全看不出是 CPU 指令集的问题。
+    招投标客户里老工控机/老办公机不少,这条不是理论风险。
+    探测失败一律当"不支持"——下 baseline 只是稍慢,下错了是根本跑不起来。"""
+    try:
+        if sys.platform == 'win32':
+            import ctypes
+            return bool(ctypes.windll.kernel32.IsProcessorFeaturePresent(40))   # 40 = PF_AVX2_INSTRUCTIONS_AVAILABLE
+        if sys.platform == 'darwin':
+            import platform as _pl
+            if (_pl.machine() or '').lower() in ('arm64', 'aarch64'): return True   # 苹果芯片没有 baseline 变体
+            out = subprocess.run(['sysctl', '-n', 'machdep.cpu.leaf7_features'],
+                                 capture_output=True, text=True, timeout=4).stdout
+            return 'AVX2' in out.upper()
+        flags = open('/proc/cpuinfo', encoding='utf-8', errors='ignore').read().lower()
+        return bool(re.search(r'(^|\s)avx2(\s|$)', flags, re.M))
+    except Exception:
+        return False
+
+def opencode_pkg():
+    """opencode 的 npm 平台包名。老 CPU(无 AVX2)必须换 -baseline 变体,否则二进制装上了也跑不起来。
+
+    baseline 变体**只有 x64 平台有**——实测 npm:windows-x64/linux-x64/darwin-x64 的 baseline
+    都是 200,而 darwin-arm64 / windows-arm64 / linux-arm64 的 baseline 全是 404
+    (AVX2 是 x86 的指令集,ARM 上根本没这回事)。
+    所以只对 x64 做回退,arm64 一律用标准包,别去拼一个不存在的包名。"""
+    pkg = OPENCODE_PLAT.get(_plat_key())
+    if not pkg: return None
+    if not pkg.endswith(('-x64',)): return pkg      # arm64:没有也不需要 baseline
+    return pkg if _has_avx2() else pkg + '-baseline'
+
 def _shell_meta(which):
     # 外壳下载参数:('codex'|'opencode') -> (url构造器, 包内路径, 目标文件名, 手装提示);不支持的平台返回 None
     ext = '.exe' if os.name == 'nt' else ''
     if which == 'opencode':
-        pkg = OPENCODE_PLAT.get(_plat_key())
+        pkg = opencode_pkg()
         if not pkg: return None
         return (lambda reg: '%s/%s/-/%s-%s.tgz' % (reg.rstrip('/'), pkg, pkg, OPENCODE_PIN),
                 'package/bin/opencode' + ext, 'opencode-cli' + ext, 'npm i -g opencode-ai')
@@ -2384,7 +2519,7 @@ def _provision_codex(which='codex'):
 
 @app.post('/v1/agent/provision')
 async def agent_provision(req: Request):
-    """一键安装执行外壳到数据目录(codex 约 130MB / opencode 约 80MB)。不碰系统目录,免管理员权限。
+    """一键安装执行外壳到数据目录(codex 约 130MB / opencode 压缩约 60MB、解压约 170MB)。不碰系统目录,免管理员权限。
     已有可用外壳(内置或此前装过)则直接返回;文件坏了(跑不动 --version)会自动删掉重下。"""
     try: which = ((await req.json()).get('which') or 'codex')
     except Exception: which = 'codex'
@@ -2742,8 +2877,44 @@ async def ingest_asset(file: UploadFile = File(...)):
 def transcribe():
     return JSONResponse({'error': '本机未装转写模型;接 whisper.cpp sidecar 或云端转写'}, 501)
 
+HOST_GONE = False       # 桌面壳已经退出,但还有任务在跑:跑完自己走
+
+@app.post('/v1/shutdown')
+def shutdown():
+    """桌面壳关窗时调它。有任务在跑就先把任务跑完再退,不当场自尽。
+
+    以前 Tauri 退出是无条件 kill 引擎,而 agent 是我们用 start_new_session=True
+    起的独立进程组 —— **杀得掉引擎,杀不掉 agent**。于是 agent 还在后台写文件,
+    负责收尾的那段代码(收拢产物、补出 Word、质检、完成播报)却已经死了:
+    用户关窗去开个会,回来看到的是一个永远没有结局的任务。
+    云端多用户模式下不接受这个请求——那是共享服务,不能被某个客户端关掉。"""
+    global HOST_GONE
+    if MULTIUSER:
+        return JSONResponse({'ok': False, 'error': '云端模式不支持远程关闭'}, 403)
+    running = sorted(RUNNING)
+    if not running:
+        threading.Timer(0.3, lambda: os._exit(0)).start()   # 先把响应发出去再退
+        return {'ok': True, 'exiting': True, 'running': 0}
+    HOST_GONE = True
+    threading.Thread(target=_exit_when_idle, daemon=True).start()
+    return {'ok': True, 'exiting': False, 'running': len(running), 'jobs': running,
+            'note': '还有 %d 个任务在跑,我先把它们跑完、收好尾再退出' % len(running)}
+
+def _exit_when_idle():
+    """桌面壳走了之后守着:任务全部收尾完成就自己退出,不留孤儿进程。"""
+    while True:
+        time.sleep(5)
+        if not HOST_GONE: return            # 用户又把应用打开了(端口复用),继续正常服务
+        if RUNNING: continue
+        time.sleep(8)                       # 给 finalize/质检/出 Word 收尾留出余量
+        if RUNNING or not HOST_GONE: continue
+        os._exit(0)
+
 @app.get('/v1/health')
 def health():
+    # 桌面壳重新打开时会复用这个还活着的引擎:把 HOST_GONE 撤回,否则它会在半路自退
+    global HOST_GONE
+    HOST_GONE = False
     return {'ok': True, 'data_dir': DATA, 'agent': bool(config_agent_cmd()),
             'version': ENGINE_VERSION, 'author': AUTHOR, 'features': ENGINE_FEATURES}
 
