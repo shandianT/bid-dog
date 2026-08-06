@@ -1,0 +1,1954 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- root-level online demo fallback: avoids /app/ route 404 on Vercel -->
+
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>中标狗</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221024%22 height=%221024%22 viewBox=%220 0 1024 1024%22%3E%3Cdefs%3E%3ClinearGradient id=%22bg%22 x1=%220%22 y1=%220%22 x2=%220%22 y2=%221%22%3E%3Cstop offset=%220%22 stop-color=%22%231274e0%22/%3E%3Cstop offset=%221%22 stop-color=%22%230a55aa%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%221024%22 height=%221024%22 rx=%22232%22 fill=%22url(%23bg)%22/%3E%3Cg transform=%22translate(512 512) scale(1.07) translate(-512 -446)%22%3E%3Cg fill=%22%23ffffff%22%3E%3Cpath d=%22M 344 332 L 322 172 Q 318 140 350 152 L 472 218 Q 430 252 344 332 Z%22/%3E%3Cpath d=%22M 680 332 L 702 172 Q 706 140 674 152 L 552 218 Q 594 252 680 332 Z%22/%3E%3Cellipse cx=%22512%22 cy=%22490%22 rx=%22270%22 ry=%22250%22/%3E%3C/g%3E%3Cg fill=%22%230a55aa%22%3E%3Ccircle cx=%22418%22 cy=%22448%22 r=%2232%22/%3E%3Ccircle cx=%22606%22 cy=%22448%22 r=%2232%22/%3E%3Cellipse cx=%22512%22 cy=%22560%22 rx=%2250%22 ry=%2238%22/%3E%3C/g%3E%3Cpath d=%22M 512 596 L 512 640 Q 512 706 470 706 Q 442 706 442 676 Q 442 662 452 654%22 fill=%22none%22/%3E%3Cpath d=%22M 456 618 Q 456 700 512 700 Q 568 700 568 618 Q 540 636 512 636 Q 484 636 456 618 Z%22 fill=%22%23ff8da1%22/%3E%3C/g%3E%3C/svg%3E">
+<style>
+/* ============ 设计令牌:中性为底、单一品牌色、语义色只讲结论 ============ */
+:root{
+  --bg:#fff; --panel:#f9f9f8; --card:#fff; --hover:#f2f2f0; --active:#ececea;
+  --line:#e9e9e7; --line-d:#dcdcda;
+  --ink:#0d0d0d; --sub:#5d5d5d; --dim:#8f8f8f; --faint:#b4b4b4;
+  --blue:#0a63c9; --blue-d:#0a55aa; --blue-t:#eef5fd;
+  --amber:#b7791f; --amber-bg:#fdf4e6; --green:#1e8f5c; --green-bg:#eaf7f0; --red:#c0392b; --red-bg:#fdeceb;
+  --r-s:8px; --r-m:12px; --r-l:16px; --r-full:999px;
+  --sh-xs:0 1px 2px rgba(0,0,0,.04); --sh-sm:0 2px 10px rgba(0,0,0,.06); --sh-lg:0 24px 64px rgba(0,0,0,.16);
+  --tr:.15s ease;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#dcdcda;border-radius:8px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#c9c9c7;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+button,input,select{font-family:inherit}
+:focus-visible{outline:2px solid rgba(10,99,201,.45);outline-offset:2px;border-radius:4px}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;
+  background:var(--bg);color:var(--ink);height:100vh;overflow:hidden;display:flex;flex-direction:column;font-size:13px}
+#app{display:grid;grid-template-columns:232px minmax(0,1fr) 302px;flex:1;min-height:0}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+svg.i{width:16px;height:16px;flex:none;display:block}
+
+/* ============ 左栏:安静的面板 ============ */
+aside{background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px;overflow-y:auto}
+.brand{display:flex;align-items:center;gap:8px;padding:4px 6px 2px;font:600 13.5px/1 inherit;letter-spacing:-.01em}
+.brand .bd{width:7px;height:7px;border-radius:50%;background:var(--green)}
+.newbtn{display:flex;align-items:center;gap:9px;background:var(--blue);color:#fff;border-radius:10px;
+  padding:10px 12px;cursor:pointer;transition:background var(--tr),transform .1s;box-shadow:var(--sh-xs)}
+.newbtn:hover{background:var(--blue-d)}.newbtn:active{transform:scale(.985)}
+.newbtn .nb-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+.newbtn .nb-t b{font:600 12.5px/1.3 inherit}
+.newbtn .nb-t i{font:400 11px/1.3 inherit;font-style:normal;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lbl{font:500 11px/1 inherit;color:var(--faint);letter-spacing:.07em;padding:2px 6px 6px}
+.lnk{font:500 11px/1 inherit;color:var(--blue);cursor:pointer;letter-spacing:0}
+.lnk:hover{text-decoration:underline}
+.task{display:flex;flex-direction:column;gap:5px;padding:9px 10px;border-radius:var(--r-s);cursor:pointer;transition:background var(--tr)}
+.task:hover{background:var(--hover)}
+.task.on{background:var(--active)}
+.task.on .nm{font-weight:600}
+.task .nm{display:flex;align-items:center;gap:7px;font:500 12.5px/1.4 inherit}
+.task .nm .tn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task .st{font:400 11.5px/1.4 inherit;color:var(--dim);padding-left:13px}
+.task .del{opacity:.4;color:var(--faint);padding:2px;border-radius:5px;transition:opacity var(--tr),background var(--tr),color var(--tr);display:flex}
+.task:hover .del{opacity:1}
+.task .del:hover{background:var(--red-bg);color:var(--red)}
+.task .bar{margin-left:13px;height:2px;border-radius:2px;background:#e4e4e2;overflow:hidden}
+.task .bar b{display:block;height:100%;background:var(--blue);transition:width .5s}
+.task.dn{padding:6px 10px;gap:0}          /* 已完成任务:单行紧凑,不占进度条 */
+.tgrp{display:flex;align-items:center;font:500 11px/1 inherit;color:var(--faint);letter-spacing:.05em;
+  padding:10px 6px 5px;user-select:none}
+.tgrp .tgx{margin-left:auto;color:var(--blue);cursor:pointer;letter-spacing:0;padding:2px 4px;border-radius:4px}
+.tgrp .tgx:hover{background:var(--hover)}
+.empty-side{font:400 12px/1.7 inherit;color:var(--faint);padding:2px 6px}
+.side-links{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:2px}
+.side-links .sl{display:flex;align-items:center;gap:9px;font:400 12.5px/1 inherit;color:var(--sub);cursor:pointer;
+  padding:8px 8px;border-radius:var(--r-s);transition:background var(--tr),color var(--tr)}
+.side-links .sl:hover{background:var(--hover);color:var(--ink)}
+#conn{color:var(--faint);font-size:11.5px;cursor:default;padding:6px 8px 2px}
+
+/* ============ 中栏:对话为中心,内容居中限宽 ============ */
+main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+.head{flex:none;padding:14px 28px 0;display:none}
+.head .hwrap{max-width:780px;margin:0 auto;display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.head .ht{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.head h1{font:600 15px/1.35 inherit;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.head .sub{font:400 12px/1.5 inherit;color:var(--dim)}
+.head .bar{height:2px;border-radius:2px;background:#ececea;overflow:hidden;margin-top:8px}
+.head .bar b{display:block;height:100%;width:0;background:var(--blue);transition:width .6s}
+.pill{font:500 12.5px/1 inherit;color:var(--ink);cursor:pointer;padding:9px 14px;border-radius:var(--r-full);
+  background:var(--card);border:1px solid var(--line-d);transition:background var(--tr),border-color var(--tr);white-space:nowrap}
+.pill:hover{background:var(--hover)}
+.pill.primary{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:var(--sh-xs)}
+.pill.primary:hover{background:var(--blue-d)}
+.iconbtn{width:32px;height:32px;border-radius:var(--r-s);display:flex;align-items:center;justify-content:center;cursor:pointer;
+  color:var(--sub);border:1px solid var(--line-d);background:var(--card);transition:background var(--tr),color var(--tr)}
+.iconbtn:hover{background:var(--hover);color:var(--ink)}
+.badge{display:inline-flex;align-items:center;gap:6px;font:500 11.5px/1 inherit;padding:6px 11px;border-radius:var(--r-full);white-space:nowrap}
+.badge .bdot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.badge.ok{background:var(--green-bg);color:var(--green)}
+.badge.warn{background:var(--amber-bg);color:var(--amber)}
+.badge.bad{background:var(--red-bg);color:var(--red)}
+.badge.none{background:var(--hover);color:var(--dim)}
+#chat{flex:1;min-height:0;overflow-y:auto;display:none;padding:20px 28px}
+#chat .cwrap{max-width:780px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.msg{max-width:82%;display:flex;flex-direction:column;gap:4px}
+.msg .b{font:400 14px/1.75 inherit;white-space:pre-wrap;text-wrap:pretty;word-break:break-word}
+.msg .m{font:400 11px/1 inherit;color:var(--faint)}
+.msg.u{align-self:flex-end}.msg.u .b{background:var(--hover);border-radius:18px;padding:11px 16px}.msg.u .m{text-align:right}
+.msg.a{align-self:flex-start}.msg.a .b{padding:1px 0}
+.sysline{display:flex;align-items:center;gap:7px;align-self:center;font:400 11px/1 inherit;color:var(--faint)}
+.sysline .sdot{width:4px;height:4px;border-radius:50%;background:var(--faint)}
+.msg .m .rs{color:var(--red);cursor:pointer}
+.msg.fail .b{opacity:.55}
+.typing{display:flex;align-items:center;gap:5px;align-self:flex-start;padding:6px 2px;color:var(--dim);font:400 12px/1 inherit}
+.typing .tdot{width:6px;height:6px;border-radius:50%;background:#b9b9b7;animation:tp 1.2s infinite}
+.typing .tdot:nth-child(2){animation-delay:.18s}.typing .tdot:nth-child(3){animation-delay:.36s}
+@keyframes tp{0%,60%,100%{opacity:.35;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+/* 对话与预览里的 Markdown 渲染 */
+.md{font:400 14px/1.75 inherit;word-break:break-word;white-space:normal}
+.md p{margin:0 0 8px}.md p:last-child{margin-bottom:0}
+.md h1,.md h2,.md h3{font-weight:600;line-height:1.5;margin:14px 0 6px;letter-spacing:-.01em}
+.md h1{font-size:16px}.md h2{font-size:15px}.md h3{font-size:14px}
+.md h1:first-child,.md h2:first-child,.md h3:first-child{margin-top:0}
+.md ul,.md ol{margin:2px 0 10px;padding-left:22px}
+.md li{margin:3px 0}
+.md strong{font-weight:600}
+.md code{background:var(--hover);border-radius:5px;padding:1px 5px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.92em}
+.md table{border-collapse:collapse;margin:6px 0 10px;font-size:12.5px;display:block;overflow-x:auto;max-width:100%}
+.md th,.md td{border:1px solid var(--line-d);padding:5px 9px;text-align:left;line-height:1.5;white-space:normal}
+.md th{background:var(--panel);font-weight:600}
+.md blockquote{border-left:3px solid var(--line-d);margin:6px 0;padding:2px 12px;color:var(--sub)}
+#pvBody.md{font-family:inherit;white-space:normal;color:var(--ink);line-height:1.8}
+.chips{display:flex;gap:9px;flex-wrap:wrap}
+.chip{font:500 13px/1 inherit;padding:10px 16px;border-radius:var(--r-full);background:var(--blue);color:#fff;cursor:pointer;
+  transition:filter var(--tr),transform .1s}
+.chip:hover{filter:brightness(.93)}.chip:active{transform:scale(.97)}
+.chip.gy{background:var(--card);color:var(--ink);border:1px solid var(--line-d)}
+.chip.gy:hover{background:var(--hover);filter:none}
+
+/* ---- 空状态:居中欢迎 + 建议入口 ---- */
+#hero{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;padding:24px}
+#hero h2{font:600 22px/1.4 inherit;letter-spacing:-.015em}
+#hero .hs{font:400 13px/1.7 inherit;color:var(--dim);margin:8px 0 26px;text-align:center}
+.dropbig{width:min(620px,90%);border:1.5px dashed var(--line-d);border-radius:var(--r-l);padding:26px;display:flex;align-items:center;
+  gap:14px;cursor:pointer;transition:border-color var(--tr),background var(--tr)}
+.dropbig:hover{border-color:var(--blue);background:var(--blue-t)}
+.dropbig .di{width:40px;height:40px;border-radius:12px;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;flex:none}
+.dropbig b{font:600 14px/1.4 inherit;display:block}
+.dropbig i{font:400 12px/1.5 inherit;font-style:normal;color:var(--dim)}
+.sugs{width:min(620px,90%);margin-top:10px;display:flex;flex-direction:column}
+.sug{display:flex;align-items:center;gap:11px;padding:13px 10px;border-bottom:1px solid var(--line);cursor:pointer;
+  color:var(--sub);font:400 13px/1 inherit;transition:color var(--tr),background var(--tr);border-radius:var(--r-s)}
+.sug:last-child{border-bottom:none}
+.sug:hover{color:var(--ink);background:var(--hover)}
+.sug svg{color:var(--dim)}
+.sug .sgr{margin-left:auto;color:var(--faint);font-size:11px}
+
+/* ---- 输入区:大圆角浮起 ---- */
+.compose{flex:none;padding:10px 28px 14px;position:relative;display:none}
+.cbox{max-width:780px;margin:0 auto;display:flex;flex-direction:column;gap:9px}
+.inbar{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line-d);border-radius:26px;
+  padding:7px 8px 7px 10px;box-shadow:var(--sh-xs);transition:border-color var(--tr),box-shadow var(--tr)}
+.inbar:focus-within{border-color:#c6c6c4;box-shadow:var(--sh-sm)}
+.inbar .plus{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--sub);
+  cursor:pointer;transition:background var(--tr)}
+.inbar .plus:hover{background:var(--hover)}
+.inbar input{flex:1;border:none;outline:none;background:transparent;font:400 14px/1.4 inherit;padding:6px 2px}
+.inbar input::placeholder{color:var(--faint)}
+.rbtn{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;
+  transition:background var(--tr),transform .1s}
+.rbtn.mic{color:var(--sub)}.rbtn.mic:hover{background:var(--hover)}
+.rbtn.send{background:var(--blue);color:#fff}.rbtn.send:hover{background:var(--blue-d)}.rbtn.send:active{transform:scale(.94)}
+.quick{display:flex;gap:8px;flex-wrap:wrap;padding:0 4px}
+.quick span{cursor:pointer;font:400 12px/1 inherit;color:var(--sub);padding:7px 12px;border-radius:var(--r-full);
+  border:1px solid var(--line);transition:all var(--tr)}
+.quick span:hover{color:var(--ink);border-color:var(--line-d);background:var(--hover)}
+.plusmenu{position:absolute;bottom:100%;left:0;margin-bottom:10px;background:var(--card);border-radius:var(--r-m);
+  border:1px solid var(--line);box-shadow:var(--sh-lg);padding:5px;z-index:30;min-width:260px}
+.plusmenu>div{display:flex;align-items:flex-start;gap:10px;padding:10px 11px;border-radius:var(--r-s);cursor:pointer;transition:background .12s}
+.plusmenu>div:hover{background:var(--hover)}
+.plusmenu svg{margin-top:1px;color:var(--sub)}
+.plusmenu b{font:500 12.5px/1.4 inherit;color:var(--ink);display:block}
+.plusmenu i{font:400 11.5px/1.4 inherit;font-style:normal;color:var(--dim)}
+
+/* ============ 右栏:浮卡片信息面板 ============ */
+.rail{padding:14px 14px 14px 0;display:flex;flex-direction:column;gap:10px;overflow:hidden;background:var(--bg)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-l);padding:13px 15px;display:flex;flex-direction:column;gap:9px}
+.card .ch{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.card .ct{font:500 11px/1 inherit;color:var(--faint);letter-spacing:.07em}
+.card .ct .tgl{color:var(--blue);cursor:pointer;letter-spacing:0;margin-left:5px}
+.card .cr{font:400 11px/1 inherit;color:var(--faint)}
+.ticks{display:flex;gap:3px;margin:2px 0 3px}
+.ticks i{flex:1;height:3px;border-radius:2px;background:#e9e9e7;transition:background .3s}
+.ticks i.d{background:#3a3a38}.ticks i.a{background:var(--blue)}
+.curstep{display:flex;align-items:center;gap:7px;font:500 12.5px/1.4 inherit;color:var(--ink)}
+.curstep .cs-r{margin-left:auto;font-weight:400;color:var(--faint);font-size:11px}
+.spin{width:8px;height:8px;border:1.5px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;display:block;animation:sp .7s linear infinite}
+.spin.b{border-color:rgba(10,99,201,.25);border-top-color:var(--blue)}
+@keyframes sp{to{transform:rotate(360deg)}}
+.step{display:flex;align-items:center;gap:8px;padding:3px 0;font:400 12px/1.4 inherit;color:var(--faint)}
+.step .si{width:15px;height:15px;flex:none;border-radius:50%;background:var(--hover);color:var(--faint);
+  font:500 9.5px/15px inherit;display:flex;align-items:center;justify-content:center}
+.step .sn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.step .sd{color:var(--faint);font-size:11px;flex:none}
+.step.d{color:var(--sub)}.step.d .si{background:#3a3a38;color:#fff}
+.step.a{color:var(--ink);font-weight:500}.step.a .si{background:var(--blue);color:#fff}
+.grp{display:flex;align-items:center;gap:7px;padding:5px 0 3px;cursor:pointer;user-select:none}
+.grp .gt{font:500 12px/1 inherit;color:var(--sub)}
+.grp .gc{font:400 10.5px/1 inherit;color:var(--faint);background:var(--hover);border-radius:var(--r-full);padding:3px 6px}
+.grp .gx{margin-left:auto;color:var(--faint);display:flex;transition:transform var(--tr)}
+.grp.on .gx{transform:rotate(90deg)}
+.grp:hover .gt,.grp.on .gt{color:var(--ink)}
+.file{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid var(--line)}
+.file:last-child{border-bottom:none}
+.file .fmain{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.file .ftop{display:flex;align-items:center;gap:6px;min-width:0}
+.file .tag{flex:none;font:600 8.5px/1 inherit;color:var(--dim);background:var(--hover);border-radius:4px;padding:3px 4px;letter-spacing:.03em}
+.file .fn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font:500 12px/1.4 inherit}
+.file .fn.pv{cursor:pointer}
+.file .fn.pv:hover{color:var(--blue)}
+.file .fdesc{color:var(--faint);font:400 10.5px/1.45 inherit;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.file .openart{flex:none;color:var(--blue);font:500 11.5px/1 inherit;cursor:pointer;padding:5px 0}
+.file .openart:hover{color:var(--blue-d)}
+.cardlist{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.warncard{cursor:pointer;transition:border-color var(--tr)}
+.warncard:hover{border-color:var(--line-d)}
+.warncard .t{display:flex;align-items:center;gap:8px;font:500 12.5px/1 inherit}
+.warncard .d{font:400 12px/1.6 inherit;color:var(--dim)}
+.addref{display:flex;align-items:center;gap:7px;color:var(--blue);font:500 12px/1 inherit;cursor:pointer;padding:3px 0}
+.addref:hover{color:var(--blue-d)}
+.attrow{display:flex;align-items:center;gap:8px;font:400 12.5px/1.5 inherit;color:var(--ink)}
+.attrow svg{color:var(--dim)}
+.attrow .as{margin-left:auto;color:var(--faint);font-size:11px}
+
+/* ============ 通用弹层 ============ */
+.statusbar{flex:none;height:28px;display:flex;align-items:center;gap:12px;padding:0 18px;border-top:1px solid var(--line);
+  font:400 11px/1 inherit;color:var(--faint);background:var(--panel)}
+.ovl{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:40;display:none}
+.sheet{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:580px;max-height:84%;overflow-y:auto;background:var(--card);
+  border-radius:var(--r-l);z-index:41;box-shadow:var(--sh-lg);padding:30px 34px;display:none;flex-direction:column;gap:20px}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:470px;background:var(--card);z-index:41;box-shadow:var(--sh-lg);
+  padding:32px 34px;display:none;flex-direction:column;gap:20px;overflow-y:auto}
+.x{color:var(--faint);cursor:pointer;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:50%;transition:background var(--tr);flex:none}
+.x:hover{background:var(--hover)}
+.sheet h2,.drawer h2{font:600 17px/1.35 inherit;letter-spacing:-.01em}
+.sheet .desc{font:400 12.5px/1.65 inherit;color:var(--sub)}
+.lrow{display:flex;align-items:center;gap:12px;padding:12px 10px;margin:0 -10px;border-top:1px solid var(--line);border-radius:var(--r-s);transition:background var(--tr)}
+.lrow:hover{background:#fafaf9}
+.lrow .c{flex:1;display:flex;flex-direction:column;gap:3px;min-width:0}
+.lrow .n{font:500 13px/1.4 inherit}.lrow .s{font:400 11.5px/1.5 inherit;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lrow .a{font:500 12px/1 inherit;color:var(--blue);cursor:pointer;flex:none}
+.gap-act{font:500 12px/1 inherit;color:var(--blue);cursor:pointer;white-space:nowrap;padding-top:4px}
+input.f,select.f{border:1px solid var(--line-d);border-radius:10px;padding:10px 12px;font:400 13px/1.4 inherit;outline:none;width:100%;
+  transition:border-color var(--tr);background:var(--card)}
+input.f:focus,select.f:focus{border-color:var(--blue)}
+.btn{padding:10px 18px;border-radius:var(--r-full);background:var(--blue);color:#fff;font:500 12.5px/1 inherit;cursor:pointer;border:none;transition:background var(--tr)}
+.btn:hover{background:var(--blue-d)}
+.btn.gy{background:var(--card);color:var(--ink);border:1px solid var(--line-d)}
+.btn.gy:hover{background:var(--hover)}
+.btn.danger{background:var(--red)}
+.btn.danger:hover{background:#a93226}
+.gcard{display:flex;align-items:center;gap:12px;background:var(--panel);border-radius:var(--r-m);padding:13px 15px}
+#pvBody{font:400 12.5px/1.8 "SF Mono",Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;color:var(--sub);
+  background:var(--panel);border-radius:var(--r-m);padding:16px;overflow-y:auto;flex:1;min-height:0}
+
+/* ============ 拖放遮罩 / 提示 ============ */
+.demo-tag{position:fixed;top:14px;left:50%;transform:translateX(-50%);background:var(--amber-bg);border:1px solid #f0e0b8;color:var(--amber);
+  border-radius:var(--r-full);padding:8px 16px;font:500 12px/1 inherit;z-index:35;display:none;box-shadow:var(--sh-sm)}
+#dropzone{position:fixed;inset:0;background:rgba(255,255,255,.92);backdrop-filter:blur(2px);z-index:50;display:none;
+  align-items:center;justify-content:center;gap:18px}
+#dropzone .dz{width:270px;border:1.5px dashed var(--line-d);border-radius:var(--r-l);padding:30px 24px;text-align:center;
+  transition:border-color var(--tr),background var(--tr),transform var(--tr)}
+#dropzone .dz.hot{border-color:var(--blue);background:var(--blue-t);transform:scale(1.02)}
+#dropzone .dz b{font:600 14.5px/1.4 inherit;display:block;margin:12px 0 5px}
+#dropzone .dz i{font:400 12px/1.6 inherit;font-style:normal;color:var(--dim)}
+#dropzone .dz .di{width:42px;height:42px;border-radius:12px;margin:0 auto;display:flex;align-items:center;justify-content:center;background:var(--blue);color:#fff}
+#dropzone .dz.ref .di{background:#3a3a38}
+#toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%) translateY(8px);background:#1d1d1f;color:#fff;
+  font:400 12.5px/1.4 inherit;padding:10px 16px;border-radius:10px;opacity:0;pointer-events:none;
+  transition:opacity .2s,transform .2s;z-index:60;box-shadow:var(--sh-lg)}
+#toast.show{opacity:.97;transform:translateX(-50%) translateY(0)}
+.mdrop{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:40;background:var(--bg, #fff);
+  border:1px solid var(--line-d);border-radius:10px;max-height:230px;overflow:auto;display:none;
+  box-shadow:0 12px 34px rgba(0,0,0,.14)}
+.mdrop div{padding:7px 12px;cursor:pointer;font:400 12.5px/1.5 inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mdrop div:hover{background:var(--soft)}
+.mdrop .mnone{color:var(--faint);cursor:default}
+#engDet[open] #engSum{color:var(--ink)}
+.wl{margin:10px 0 4px;border:1px solid var(--line-d);border-radius:11px;background:var(--soft);overflow:hidden}
+.wl summary{cursor:pointer;font:500 12px/2.2 inherit;color:var(--sub);padding:0 12px;user-select:none}
+.wl pre{margin:0;padding:8px 12px 10px;max-height:190px;overflow:auto;font:400 11px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--sub);white-space:pre-wrap;word-break:break-all;border-top:1px solid var(--line-d)}
+.segbar{display:inline-flex;border:1px solid var(--line-d);border-radius:999px;overflow:hidden;background:var(--bg,#fff)}
+.segbar .seg{padding:6px 13px;font:500 12px/1.4 inherit;color:var(--sub);cursor:pointer;user-select:none;white-space:nowrap}
+.segbar .seg.on{background:var(--blue);color:#fff}
+</style>
+</head>
+<body>
+<div id="demoTag" class="demo-tag">演示模式 · 未连接本地引擎</div>
+
+<div id="app">
+  <aside>
+    <div class="brand"><span class="bd" id="brandDot"></span>中标狗</div>
+    <div class="newbtn" onclick="pickFile()">
+      <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      <div class="nb-t"><b>新建任务</b><i>选择或拖入招标文件</i></div>
+    </div>
+    <div style="flex:none"><div id="tasks" style="display:flex;flex-direction:column;gap:2px"></div></div>
+    <div class="side-links">
+      <span class="sl" onclick="openSheet('assets')"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>素材库</span>
+      <span class="sl" onclick="openSheet('providers')"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>设置 · 模型接入</span>
+      <span id="conn">连接引擎中…</span>
+    </div>
+  </aside>
+
+  <main>
+    <!-- 空状态:居中欢迎 -->
+    <div id="hero">
+      <h2>准备好了,随时开始</h2>
+      <div class="hs" id="heroSub">把招标文件交给我,预检 → 分析 → 分章撰写 → 出 Word,全程可对话</div>
+      <div class="dropbig" onclick="pickFile()">
+        <div class="di"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:19px;height:19px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+        <div><b>上传招标文件,开始生成标书</b><i>点击选择,或把文件拖到窗口任意位置 · docx / pdf / md</i></div>
+      </div>
+      <div class="sugs">
+        <div class="sug" data-act="assets"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>上传过往标书,自动整理成可复用素材<span class="sgr">素材库</span></div>
+        <div class="sug" data-act="providers"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 2.5"/></svg>接入你的模型与生成引擎<span class="sgr">设置</span></div>
+        <div class="sug" data-act="demo"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>先看一遍 12 阶段演示流程<span class="sgr">约 30 秒</span></div>
+      </div>
+    </div>
+
+    <!-- 任务态:头部 + 对话 -->
+    <div class="head" id="head"><div class="hwrap">
+      <div class="ht">
+        <h1 id="hTitle">任务</h1>
+        <div class="sub" id="hSub"></div>
+        <div class="bar"><b id="hBar"></b></div>
+      </div>
+      <span class="badge" id="hBadge" style="display:none"></span>
+      <span class="iconbtn" id="pauseBtn" style="display:none" title="暂停/继续"></span>
+      <span class="pill" id="stopBtn" style="display:none" onclick="stopJob()">停止</span>
+      <span class="pill" id="redoBtn" style="display:none" onclick="openRedo()">定向重做</span>
+      <span class="pill" id="logBtn" onclick="openLog()">运行日志</span>
+      <span class="pill on" id="startBtn" style="display:none" onclick="startStaged()">▶ 开始生成</span>
+      <span class="pill" id="hAct" onclick="openCheck()">出件前检查</span>
+    </div></div>
+    <div id="chat"><div class="cwrap" id="chatWrap"></div><div class="cwrap" id="wlHost"></div></div>
+
+    <div class="compose" id="composer">
+      <div class="cbox">
+        <div class="plusmenu" id="plusMenu" style="display:none">
+          <div onclick="pickRef()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span><b>加参考资料到当前任务</b><i>过往标书/模板,AI 写作时参考它的写法</i></span></div>
+          <div onclick="pickFile()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg><span><b>新建任务</b><i>把这份招标文件作为新任务开始</i></span></div>
+        </div>
+        <div class="inbar">
+          <span class="plus" onclick="togglePlus(event)" title="添加文件"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
+          <input id="draft" placeholder="问问进度、提要求,或把文件拖进来" onkeydown="if(event.key==='Enter'&&!event.isComposing)send()">
+          <span class="rbtn mic" title="语音(接本机转写)"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg></span>
+          <span class="rbtn send" onclick="send()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><line x1="12" y1="19" x2="12" y2="5"/><path d="M6 11l6-6 6 6"/></svg></span>
+        </div>
+        <div class="quick" id="quick"></div>
+      </div>
+    </div>
+  </main>
+
+  <div class="rail" id="rail">
+    <div class="card" style="flex:none">
+      <div class="ch"><span class="ct">进度<span class="tgl" id="stepsTgl" onclick="S.stepsOpen=!S.stepsOpen;renderRail()">展开</span></span><span class="cr" id="etaTop"></span></div>
+      <div id="miniProg"></div>
+      <div id="phases"></div>
+    </div>
+    <div class="card" style="flex:1;min-height:0">
+      <div class="ch"><span class="ct">已产出 <span id="artCount" style="letter-spacing:0"></span></span><span class="addref" onclick="openJobFolder()">打开任务文件夹</span></div>
+      <div class="cardlist" id="files"><span style="font:400 12px/1.6 inherit;color:var(--faint)">生成过程中陆续出现</span></div>
+    </div>
+    <div class="card" style="flex:none">
+      <div class="ch"><span class="ct">参考资料</span><span class="addref" onclick="pickRef()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:13px;height:13px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加</span></div>
+      <div id="attsList" style="display:flex;flex-direction:column;gap:6px"><span style="font:400 12px/1.6 inherit;color:var(--faint)">给 AI 的写法参照,如过往标书</span></div>
+    </div>
+    <div class="card warncard" onclick="openCheck()">
+      <div class="t"><span class="dot" id="warnDot" style="background:var(--amber)"></span><span id="warnT">出件前检查</span></div>
+      <div class="d" id="warnD">出 Word 后在这里看结论与补料清单</div>
+    </div>
+  </div>
+</div>
+
+<div class="statusbar"><span id="sbL">完成后系统通知</span><span>· 作者 FDE-家涛</span><span style="flex:1"></span><span id="sbR"></span></div>
+<input type="file" id="filein" style="display:none" multiple onchange="njAddFiles(Array.from(this.files)); this.value='';">
+<input type="file" id="foldin" style="display:none" webkitdirectory onchange="njAddFiles(Array.from(this.files), true); this.value='';">
+<input type="file" id="refin" style="display:none" accept=".docx,.md,.txt,.pdf" onchange="addRef(this.files[0])">
+
+<!-- 拖放遮罩:明确两个去处 -->
+<div id="dropzone">
+  <div class="dz" id="dzNew"><div class="di"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><b>作为新任务</b><i>用这份招标文件开始生成标书</i></div>
+  <div class="dz ref" id="dzRef"><div class="di"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></div><b>加为参考资料</b><i>给当前任务,AI 参考它的写法</i></div>
+</div>
+
+<div class="ovl" id="ovl" onclick="closeAll()"></div>
+
+<div class="sheet" id="newjob" style="width:640px;gap:13px;z-index:52">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2>新建任务</h2>
+    <div class="desc" style="margin-top:6px">确认招标文件,补充素材和要求(都可跳过),点「开始生成」。</div></div>
+    <span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+  <div class="lbl">招标文件(主件)</div>
+  <select class="f" id="njTender" onchange="NJ.tenderIdx=+this.value"></select>
+  <div class="lbl" style="display:flex;align-items:center;gap:9px">参考素材(公司资料/资质/图片,可整个文件夹拖入)
+    <span style="flex:1"></span>
+    <button class="btn gy" style="padding:6px 12px;font-size:12px" onclick="el('filein').click()">+ 文件</button>
+    <button class="btn gy" style="padding:6px 12px;font-size:12px" onclick="el('foldin').click()">+ 文件夹</button></div>
+  <div id="njList" style="max-height:150px;overflow:auto;border:1px solid var(--line-d);border-radius:10px;padding:8px 10px;font:400 12.5px/1.7 inherit;color:var(--sub)"></div>
+  <div class="lbl" style="display:flex;align-items:baseline;gap:8px">
+    <span>你的要求(已预填一份专家提示词,可直接改)</span>
+    <span style="flex:1"></span>
+    <span class="lnk" onclick="njReqDefault()">恢复默认</span>
+    <span class="lnk" onclick="el('njReq').value='';el('njReq').focus()">清空</span>
+  </div>
+  <textarea id="njReq" class="f" rows="7" style="resize:vertical;min-height:110px;font:400 12.5px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="不填也能生成"></textarea>
+  <div style="font:400 11.5px/1.6 inherit;color:var(--dim)">这段会原样存成任务里的《你的要求.md》,agent 开工先读它,自检报告里逐条回执。想加什么直接在上面写,比如「重点展开数据安全章节」「报价部分留空」。</div>
+  <div id="njMsg" style="font:400 12.5px/1.6 inherit;color:var(--sub);display:none"></div>
+  <div style="display:flex;gap:9px;justify-content:flex-end">
+    <button class="btn gy" onclick="closeAll()">取消</button>
+    <button class="btn gy" id="njLater" onclick="njStart(false)">先存着,稍后开始</button>
+    <button class="btn" id="njGo" onclick="njStart(true)">开始生成</button>
+  </div>
+</div>
+
+<div class="sheet" id="redo" style="width:520px;gap:14px;z-index:52">
+  <h2 style="font-size:16px">定向重做</h2>
+  <div class="desc">只重做你指定的部分,其余产物保留;完成后会重新汇总并更新自检报告。例:<br>
+    「重写第三章技术方案,按评分表里的架构与安全性两项展开」「重做偏离表,逐条对齐招标文件第 5 章」</div>
+  <input class="f" id="redoTxt" placeholder="要重做哪一部分、按什么要求改?" onkeydown="if(event.key==='Enter'&&!event.isComposing)doRedo()">
+  <div style="display:flex;gap:9px;justify-content:flex-end">
+    <button class="btn gy" onclick="closeAll()">取消</button>
+    <button class="btn" onclick="doRedo()">开始重做</button>
+  </div>
+</div>
+
+<div class="sheet" id="logSheet" style="width:720px;gap:12px;z-index:52">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div><h2 style="font-size:16px">运行日志</h2>
+      <div class="desc" style="margin-top:6px" id="logSkill"></div></div>
+    <span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+  </div>
+  <div id="logBody" style="font:400 12px/1.7 'SF Mono',Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;
+    background:var(--panel);border-radius:12px;padding:14px;max-height:56vh;overflow-y:auto;color:var(--sub)"></div>
+</div>
+
+<!-- 应用内确认框:桌面壳(Tauri)里 window.confirm 会静默返回 false,原生弹窗不可用 -->
+<div class="sheet" id="confirm" style="width:400px;gap:14px;z-index:55">
+  <h2 id="cfT" style="font-size:15.5px">确认操作?</h2>
+  <div class="desc" id="cfD"></div>
+  <div style="display:flex;gap:9px;justify-content:flex-end;margin-top:4px">
+    <button class="btn gy" id="cfNo">取消</button>
+    <button class="btn" id="cfOk">确认</button>
+  </div>
+</div>
+
+<div class="drawer" id="check">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start"><div>
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px"><span class="dot" id="ckDot" style="background:var(--amber);width:8px;height:8px"></span><span id="ckLv" style="font:500 12px/1 inherit;color:var(--amber);letter-spacing:.05em">等待出件</span></div>
+    <h2 id="ckTitle">还没到出件阶段</h2></div><span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+  <div class="desc">agent 出 Word 时生成三档结论与补料清单;投标人名称、报价、资质、签章必须人工确认后才可投。</div>
+  <div id="ckList"></div>
+  <div id="ckFix" style="display:none;flex-direction:column;gap:8px">
+    <button class="btn" onclick="repairJob()">一键修复内容异常</button>
+    <span style="font:400 12px/1.6 inherit;color:var(--faint)">合并被逐字打散的段落、折叠重复灌注的样板,生成「*_已清洗.md」;核对后用它重新出 Word。</span>
+    <span id="fixMsg" style="font:400 12.5px/1.6 inherit;color:var(--sub)"></span>
+  </div>
+</div>
+
+<div class="drawer" id="preview" style="width:560px">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+    <h2 id="pvTitle" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">预览</h2>
+    <span id="pvOpen" class="pill" onclick="openArtifact(this.dataset.name)">打开</span>
+    <span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+  </div>
+  <div id="pvBody">加载中…</div>
+</div>
+
+<div class="sheet" id="providers">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2>模型接入</h2><div class="desc" style="margin-top:7px">自有模型填 base_url + key 即可,OpenAI 兼容协议。</div></div><span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+  <div style="border:1.5px solid var(--blue);border-radius:12px;padding:13px 14px;display:flex;flex-direction:column;gap:10px;background:var(--soft)">
+    <div style="font:600 13.5px/1.4 inherit">⚡ 快速接入(推荐):粘一串 Key,生成 / 对话 / 识图全部配好</div>
+    <input class="f" id="qkKey" type="password" placeholder="粘贴你收到的 Key(sk-…)">
+    <div style="display:flex;gap:9px;align-items:center">
+      <div class="segbar" id="qkMode">
+        <span class="seg on" data-mode="quality">标准(默认)</span>
+        <span class="seg" data-mode="fast">极速</span>
+      </div>
+      <span style="flex:1"></span>
+      <button class="btn" id="qkBtn" onclick="quickS2()">一键接入并测试</button>
+    </div>
+    <div id="qkModeHint" style="font:400 11.5px/1.6 inherit;color:var(--dim)">标准:用 senseaudio-s2 写正式标书,篇幅与细节更足。识图模型自动挑,不用你操心。</div>
+    <div id="qkNow" style="font:500 11.5px/1.6 inherit;color:var(--sub)"></div>
+    <div id="qkMsg" style="font:400 12.5px/1.8 inherit;color:var(--sub);display:none;white-space:pre-line"></div>
+  </div>
+  <div id="pList"></div>
+  <details id="manDet" style="border:1px solid var(--line-d);border-radius:11px;padding:2px 12px 10px">
+  <summary id="manSum" style="cursor:pointer;font:500 13px/2.4 inherit;color:var(--sub);user-select:none">高级 · 手动接入其他网关(一般用不到)</summary>
+  <div style="display:flex;flex-direction:column;gap:9px;margin-top:6px">
+    <input class="f" id="pName" placeholder="名称" value="senseaudio">
+    <input class="f" id="pUrl" placeholder="Base URL" value="https://api.senseaudio.cn/v1">
+    <input class="f" id="pKey" placeholder="API Key(sk-…)" type="password">
+    <div style="display:flex;gap:9px">
+      <div style="position:relative;flex:1">
+        <input class="f" id="pModel" placeholder="模型 ID,如 senseaudio-s2" style="width:100%;box-sizing:border-box" autocomplete="off">
+        <div class="mdrop" id="pModelDrop"></div>
+      </div>
+      <button class="btn gy" onclick="fetchModels()">获取模型列表</button>
+    </div>
+    <div style="position:relative">
+      <input class="f" id="pVision" placeholder="视觉模型(选填,用于图片 OCR 打标,如 senseaudio-vl-1.0-260319)" style="width:100%;box-sizing:border-box" autocomplete="off">
+      <div class="mdrop" id="pVisionDrop"></div>
+    </div>
+    <label style="display:flex;align-items:center;gap:7px;font:400 12px/1.5 inherit;color:var(--sub);cursor:pointer">
+      <input type="checkbox" id="pInsecure" style="cursor:pointer">跳过 HTTPS 证书校验(仅用于内网自签名网关或公司代理拦截时)
+    </label>
+    <div id="pMsg" style="font:400 12.5px/1.7 inherit;color:var(--sub);display:none"></div>
+    <div style="display:flex;gap:9px;justify-content:flex-end"><button class="btn" onclick="addProvider()">添加并测试</button></div>
+  </div>
+  </details>
+  <details id="engDet" style="border:1px solid var(--line-d);border-radius:11px;padding:2px 12px 10px">
+  <summary id="engSum" style="cursor:pointer;font:500 13px/2.4 inherit;color:var(--sub);user-select:none">生成引擎:加载中…(点开切换/高级设置)</summary>
+  <div style="display:flex;gap:9px;align-items:center;margin-top:6px">
+    <select class="f" id="agKind" style="flex:1" onchange="onKindChange()">
+      <option value="s2">自动(默认)</option>
+      <option value="mock">内置演示流程</option>
+      <option value="sowork">SoWork(商汤)</option>
+      <option value="custom">自定义命令</option>
+    </select>
+    <button class="btn gy" onclick="testAgent()">测试连接</button>
+    <button class="btn" onclick="saveAgent()">保存</button>
+  </div>
+  <div id="agS2" style="display:none;flex-direction:column;gap:9px">
+    <div style="font:400 11.5px/1.7 inherit;color:var(--sub);background:var(--soft);border-radius:9px;padding:9px 11px">
+      <b>填了 Key 就产真实标书,没填就跑内置演示流程</b>——不用你判断该选哪个。不需要 Claude/Codex 账号,也不需要登录任何东西,执行外壳已内置。<br>Key 由中标狗提供方发放,额度记在发放方的套餐上——没有的话找他要一串。
+    </div>
+    <input class="f" id="agS2Key" type="password" placeholder="API Key(你收到的 sk-… ;留空=沿用已保存的,或借用上面「模型接入」里的 Key)">
+    <div style="display:flex;gap:9px">
+      <input class="f" id="agS2Base" placeholder="网关地址(默认 https://api.senseaudio.cn/v1)" style="flex:2">
+      <div style="position:relative;flex:1.4">
+        <input class="f" id="agS2Model" placeholder="生成用哪个模型(点这里选)" style="width:100%;box-sizing:border-box" autocomplete="off">
+        <div class="mdrop" id="agS2ModelDrop"></div>
+      </div>
+      <button class="btn gy" id="agS2Fetch" style="white-space:nowrap" onclick="loadS2Models(1)">取模型</button>
+    </div>
+    <div id="agS2Hint" style="font:400 11.5px/1.6 inherit;color:var(--dim);word-break:break-all"></div>
+    <div id="agS2Shell" style="display:flex;align-items:center;gap:9px;font:400 11.5px/1.6 inherit;color:var(--dim)">
+      <span id="agS2ShellSt" style="flex:1"></span>
+      <button class="btn gy" id="agS2Install" style="display:none" onclick="provisionShell()">一键安装执行外壳</button>
+    </div>
+  </div>
+  <input class="f" id="agCmd" placeholder="命令模板,占位符 {tender} {out} {materials} {jobid} {skill}" style="display:none">
+  <div id="agAdv" style="display:none;flex-direction:column;gap:9px">
+    <input class="f" id="agCli" placeholder="CLI 路径(留空=自动查找;SoWork 通常在 /Applications/…SoWork.app/Contents/Resources/cli/openclaw)">
+    <div id="agCliHint" style="font:400 11.5px/1.6 inherit;color:var(--dim);margin-top:-4px;word-break:break-all"></div>
+    <div style="display:flex;gap:9px">
+      <select class="f" id="agThink" style="flex:1">
+        <option value="off">思考等级:off(SenseAudio-S2 只支持这个)</option>
+        <option value="medium">思考等级:medium</option>
+        <option value="high">思考等级:high</option>
+      </select>
+      <input class="f" id="agAgent" placeholder="agent 名(默认 main)" style="flex:1">
+    </div>
+    <label style="display:flex;align-items:center;gap:7px;font:400 12px/1.5 inherit;color:var(--sub);cursor:pointer">
+      <input type="checkbox" id="agLogin" checked style="cursor:pointer">用登录 shell 启动(双击打开的应用拿不到终端环境变量,勾上才能连到本机网关)
+    </label>
+    <input class="f" id="agEnv" placeholder="附加环境变量(选填,每行 KEY=VALUE;如网关地址,或试 ELECTRON_RUN_AS_NODE=1 让 CLI 不弹 Dock 图标)">
+  </div>
+  <div id="agTestMsg" style="font:400 12.5px/1.7 inherit;color:var(--sub);display:none"></div>
+  <input type="hidden" id="agMode" value="agents">
+  <div id="agMsg" style="font:400 12px/1.7 inherit;color:var(--faint)"></div>
+  </details>
+  <div style="font:400 11.5px/1.7 inherit;color:var(--faint)">Key 存本地引擎配置(生产版转系统钥匙串)。sowork / workbuddy 等平台内使用见 docs/使用与绑定指南.md。</div>
+  <div style="font:400 11.5px/1.7 inherit;color:var(--faint)">中标狗 · 作者:FDE-家涛</div>
+</div>
+
+<div class="sheet" id="assets">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2>素材库</h2><div class="desc" style="margin-top:7px">你的公司资料、资质案例、图片与章节模板都在这,生成标书时全部从这里取材。</div></div><span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+  <div class="gcard">
+    <span class="dot" style="background:var(--green)"></span>
+    <div style="flex:1;min-width:0"><div style="font:500 13px/1.4 inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="aPath">…</div><div style="font:400 11.5px/1.5 inherit;color:var(--dim)" id="aPathNote">所有素材都存在这个文件夹里,可直接打开查看</div></div>
+    <span class="a" style="font:500 12px/1 inherit;color:var(--blue);cursor:pointer;white-space:nowrap" onclick="openAssetsFolder()">打开文件夹</span>
+    <span class="a" style="font:500 12px/1 inherit;color:var(--blue);cursor:pointer;white-space:nowrap;margin-left:10px" onclick="el('adirRow').style.display=el('adirRow').style.display==='none'?'flex':'none'">更换位置</span>
+  </div>
+  <div id="adirRow" style="display:none;gap:9px;align-items:center">
+    <input class="f" id="adir" placeholder="新位置的完整路径,如 /Users/你/公司共享盘/标书素材" style="flex:1">
+    <button class="btn" onclick="saveAssetsDir(false)">保存</button>
+    <button class="btn gy" onclick="saveAssetsDir(true)">恢复默认</button>
+  </div>
+  <div class="gcard">
+    <span class="dot" style="background:var(--blue)"></span>
+    <div style="flex:1"><div style="font:500 13px/1.4 inherit">上传过往标书,自动整理成可复用素材</div><div style="font:400 11.5px/1.6 inherit;color:var(--dim)">本地解析,不调用模型:抽图片入「图片/」、按标题拆章入「章节模板/」,原件留档;重复上传自动跳过。</div></div>
+    <span class="a" style="font:500 12px/1 inherit;color:var(--blue);cursor:pointer;white-space:nowrap" onclick="el('ingestin').click()">选文件</span>
+  </div>
+  <div id="ingestMsg" style="font:400 12.5px/1.6 inherit;color:var(--sub);display:none"></div>
+  <input type="file" id="ingestin" style="display:none" accept=".docx,.md,.txt" onchange="ingestAsset(this.files[0])">
+  <div class="gcard">
+    <span class="dot" style="background:var(--amber)"></span>
+    <div style="flex:1"><div style="font:500 13px/1.4 inherit">AI 识图打标(调用你配的视觉模型)</div>
+      <div style="font:400 11.5px/1.6 inherit;color:var(--dim)">逐张 OCR 读图 → 分类、图注与<b>落位锚点</b>写入图片索引;写标书时按锚点自动插图。</div></div>
+    <span class="a" style="font:500 12px/1 inherit;color:var(--blue);cursor:pointer;white-space:nowrap" onclick="startVision()">开始打标</span>
+  </div>
+  <div id="visionMsg" style="font:400 12.5px/1.6 inherit;color:var(--sub);display:none"></div>
+  <div id="aList"></div>
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <span style="font:400 11.5px/1.7 inherit;color:var(--faint)">文件始终在你的本地文件夹里,删除应用不影响文件。</span>
+    <span class="a" style="font:500 12px/1 inherit;color:var(--red);cursor:pointer" onclick="clearAssets()">清空入库素材</span>
+  </div>
+</div>
+
+<script>
+/* ================= 连接与状态 ================= */
+const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
+/* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
+const FORCE_DEMO = /[?&]demo=1/.test(location.search);
+const API_CANDIDATES = [localStorage.getItem('bid_api'), IS_WEB ? location.origin : null,
+                        'http://127.0.0.1:8849', 'http://127.0.0.1:8848', 'http://127.0.0.1:8080'].filter(Boolean);
+let API = API_CANDIDATES[0];
+const NEED_FEATURES = ['probe_models', 'agent_binding', 'attachments', 'artifact_open', 'job_folder_open'];
+const isWin = navigator.platform.startsWith('Win');
+let S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}, atts:{}, health:{}, chips:{}, worklog:{}, stageAvgs:null, es:null,
+          typing:{}, steps:{}, names:{}, paused:{}, openGrp:{0:true, 1:true, 2:false, 3:false} };
+document.getElementById('sbL').textContent = isWin ? '任务栏显示进度 · 完成后系统通知' : 'Dock 显示进度 · 完成后系统通知 · 托盘常驻';
+
+async function api(p, opt){ const r = await fetch(API + p, opt); if(!r.ok) throw new Error(p+' '+r.status); return r.json(); }
+function el(id){ return document.getElementById(id); }
+function esc(s){ const d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; }
+function escA(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }  /* 属性里也安全 */
+function mdHtml(src){
+  /* 轻量 Markdown → HTML(先整体转义再变换,内容不可能注入):加粗/标题/有序无序列表/表格/引用/行内代码 */
+  const lines = esc(src).split('\n');
+  const inline = s => s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+  let out = [], para = [], i = 0;
+  const flushP = () => { if(para.length){ out.push('<p>'+para.map(inline).join('<br>')+'</p>'); para = []; } };
+  while(i < lines.length){
+    const s = lines[i].trim();
+    if(!s){ flushP(); i++; continue; }
+    let m = s.match(/^(#{1,3})\s+(.*)$/);
+    if(m){ flushP(); out.push('<h'+m[1].length+'>'+inline(m[2])+'</h'+m[1].length+'>'); i++; continue; }
+    if(/^\|.*\|$/.test(s)){
+      flushP(); const tb = [];
+      while(i < lines.length && /^\|.*\|$/.test(lines[i].trim())){ tb.push(lines[i].trim()); i++; }
+      const rows = tb.filter(r=>!/^\|[\s:|-]+\|$/.test(r))
+                     .map(r=>r.replace(/^\||\|$/g,'').split('|').map(c=>inline(c.trim())));
+      if(rows.length) out.push('<table><tr>'+rows[0].map(c=>'<th>'+c+'</th>').join('')+'</tr>'
+        + rows.slice(1).map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</table>');
+      continue;
+    }
+    if(/^[-*•]\s+/.test(s)){
+      flushP(); const li = [];
+      while(i < lines.length && /^[-*•]\s+/.test(lines[i].trim())){ li.push(lines[i].trim().replace(/^[-*•]\s+/,'')); i++; }
+      out.push('<ul>'+li.map(x=>'<li>'+inline(x)+'</li>').join('')+'</ul>'); continue;
+    }
+    if(/^\d{1,3}[.、)]\s+/.test(s)){
+      flushP(); const li = [];
+      while(i < lines.length && /^\d{1,3}[.、)]\s+/.test(lines[i].trim())){ li.push(lines[i].trim().replace(/^\d{1,3}[.、)]\s+/,'')); i++; }
+      out.push('<ol>'+li.map(x=>'<li>'+inline(x)+'</li>').join('')+'</ol>'); continue;
+    }
+    if(/^&gt;\s?/.test(s)){ flushP(); out.push('<blockquote>'+inline(s.replace(/^&gt;\s?/,''))+'</blockquote>'); i++; continue; }
+    if(/^(---+|\*\*\*+)$/.test(s)){ flushP(); i++; continue; }
+    para.push(s); i++;
+  }
+  flushP();
+  return '<div class="md">'+out.join('')+'</div>';
+}
+function toast(t){
+  let x = el('toast');
+  if(!x){ x = document.createElement('div'); x.id='toast'; document.body.appendChild(x); }
+  x.textContent = t; x.className = 'show';
+  clearTimeout(x._t); x._t = setTimeout(()=>{ x.className=''; }, 2600);
+}
+
+async function findEngine(){
+  let stale = null;
+  for(const base of API_CANDIDATES){
+    try{
+      const r = await fetch(base + '/v1/health', {cache:'no-store'});
+      if(!r.ok) continue;
+      const h = await r.json();
+      const feats = h.features || [];
+      if(NEED_FEATURES.every(f => feats.indexOf(f) >= 0)){ API = base; S.stale = null; return h; }
+      stale = stale || {base, h};
+    }catch(e){}
+  }
+  if(stale) S.stale = stale.h.version || '旧版';
+  return null;
+}
+async function goOnline(h){
+  S.online = true; el('conn').textContent = '本地引擎 v' + (h.version||'?') + ' · 已连接'; el('demoTag').style.display='none';
+  el('brandDot').style.background = 'var(--green)';
+  if(S.stale){
+    el('conn').textContent = '引擎版本过旧(' + S.stale + ')';
+    el('brandDot').style.background = 'var(--amber)';
+    el('demoTag').style.display='block';
+    el('demoTag').textContent = '检测到旧版引擎占用端口 · 请退出旧版应用/旧引擎进程后重开本应用';
+  }
+  el('sbR').textContent = h.data_dir + (isWin?'\\jobs':'/jobs');
+  S.jobs = await api('/v1/jobs');
+  if(S.jobs.length){ select(S.jobs[0].job_id); }
+  setInterval(async()=>{ try{ S.jobs = await api('/v1/jobs'); renderTasks(); }catch(e){} }, 4000);
+  try{ const st = await api('/v1/stats/stages'); S.stageAvgs = st.stages || null; }catch(e){}
+  renderTasks(); renderMain();
+}
+async function boot(){
+  if(FORCE_DEMO){
+    S.online = false;
+    el('conn').textContent = '在线体验版(演示数据)';
+    el('demoTag').style.display = 'block';
+    el('demoTag').textContent = '在线体验版 · 流程与交互完全真实,产出为样例;下载桌面版接入你自己的模型即可产真实标书';
+    el('brandDot').style.background = 'var(--amber)';
+    el('sbR').textContent = '在线体验 · 不上传任何文件';
+    el('heroSub').textContent = '在线体验版:拖入任意文件即可完整走一遍 12 阶段流程(不会上传,不会真跑模型)';
+    renderTasks(); renderMain();
+    return;
+  }
+  for(let i=0;i<4;i++){
+    const h = await findEngine();
+    if(h) return goOnline(h);
+    el('conn').textContent = '启动本地引擎中…';
+    await new Promise(r=>setTimeout(r,2000));
+  }
+  S.online = false; el('conn').textContent = S.stale ? '检测到旧引擎 v'+S.stale : '未连接引擎(演示模式)'; el('demoTag').style.display='block';
+  el('brandDot').style.background = 'var(--amber)';
+  if(S.stale) el('demoTag').textContent = '旧版引擎缺少新版能力，已拒绝连接；请启动最新版中标狗';
+  el('sbR').textContent = isWin ? 'C:\\Users\\me\\Documents\\中标狗\\jobs' : '~/Documents/中标狗/jobs';
+  el('heroSub').textContent = '当前是演示模式(未连接本地引擎),流程可完整体验,产出为样例';
+  renderTasks(); renderMain();
+  const re = setInterval(async()=>{ if(await findEngine()){ clearInterval(re); location.reload(); } }, 5000);
+}
+
+/* ================= 视图切换:空状态 / 任务态 ================= */
+function renderMain(){
+  const has = !!S.active;
+  el('hero').style.display = has ? 'none' : 'flex';
+  el('head').style.display = has ? 'block' : 'none';
+  el('chat').style.display = has ? 'block' : 'none';
+  el('composer').style.display = has ? 'block' : 'none';
+  el('rail').style.display = has ? 'flex' : 'none';   /* 空状态收起右栏,欢迎区真正居中 */
+  el('app').style.gridTemplateColumns = has ? '232px minmax(0,1fr) 302px' : '232px minmax(0,1fr)';
+}
+
+/* ================= 任务列表(事件委托,名字含引号也安全) ================= */
+function taskRow(j, compact){
+  const on = j.job_id===S.active, p = (S.prog[j.job_id]&&S.prog[j.job_id].pct)!=null ? S.prog[j.job_id].pct : j.pct||0;
+  const stage = (S.prog[j.job_id]&&S.prog[j.job_id].stage) || j.stage || '';
+  const dot = p>=100 ? (S.health[j.job_id] ? verdict(j.job_id).color : '#3a3a38') : 'var(--blue)';
+  const delBtn = '<span class="del" title="删除任务" data-del="'+escA(j.job_id)+'"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:12px;height:12px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>';
+  const head = '<div class="nm"><span class="dot" style="background:'+dot+'"></span><span class="tn" title="'+escA(j.name||j.job_id)+'">'+esc(j.name||j.job_id)+'</span>'+delBtn+'</div>';
+  if(compact)   /* 已完成:单行,结论色圆点自己会说话 */
+    return '<div class="task dn'+(on?' on':'')+'" data-id="'+escA(j.job_id)+'">'+head+'</div>';
+  return '<div class="task'+(on?' on':'')+'" data-id="'+escA(j.job_id)+'">'+head
+    + '<div class="st">'+esc(stage)+' · '+p+'%</div><div class="bar"><b style="width:'+p+'%"></b></div></div>';
+}
+function renderTasks(){
+  const act = [], done = [];
+  S.jobs.forEach(j=>{
+    const p = (S.prog[j.job_id]&&S.prog[j.job_id].pct)!=null ? S.prog[j.job_id].pct : j.pct||0;
+    (p>=100 ? done : act).push(j);
+  });
+  const open = S.doneOpen !== undefined ? S.doneOpen : done.length <= 4;   // 少量默认展开,多了默认收
+  let h = '';
+  if(act.length) h += '<div class="tgrp">进行中 · '+act.length+'</div>' + act.map(j=>taskRow(j,false)).join('');
+  if(done.length){
+    h += '<div class="tgrp">已完成 · '+done.length
+       + '<span class="tgx" data-tgl="'+(open?'0':'1')+'">'+(open?'收起':'展开')+'</span></div>';
+    const show = open ? done : done.filter(j=>j.job_id===S.active);   // 收起时仍显示当前选中的那条
+    h += show.map(j=>taskRow(j,true)).join('');
+  }
+  el('tasks').innerHTML = h || '<div class="empty-side">还没有任务</div>';
+}
+el('tasks').addEventListener('click', e=>{
+  const tg = e.target.closest('[data-tgl]');
+  if(tg){ S.doneOpen = tg.dataset.tgl==='1'; renderTasks(); return; }
+  const del = e.target.closest('[data-del]');
+  if(del){ e.stopPropagation(); delJob(del.dataset.del); return; }
+  const t = e.target.closest('[data-id]');
+  if(t) select(t.dataset.id);
+});
+async function delJob(id){
+  const j = S.jobs.find(x=>x.job_id===id);
+  if(!await askConfirm('删除任务「'+((j&&j.name)||id)+'」?', '该任务的招标文件与生成的产出会一并删除,不可恢复;正在生成的会先停止。', true)) return;
+  try{
+    await api('/v1/jobs/'+id, {method:'DELETE'});
+    if(S.active===id){ S.active=null; if(S.es){ S.es.close(); S.es=null; } renderMain(); }
+    S.jobs = await api('/v1/jobs'); renderTasks(); if(S.active) renderRail();
+    toast('已删除');
+  }catch(e){ toast('删除失败,请重试'); }
+}
+
+/* ================= 选择任务 + SSE(断线自动重连) ================= */
+function select(id){
+  S.active = id; renderMain(); renderTasks(); renderChat(); renderHead(); renderRail(); loadAtts(id);
+  if(S.online){ attachES(id); refreshArts(id).then(()=>{ if(S.active===id) renderRail(); }); }
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState !== 'visible' || !S.online) return;
+  api('/v1/jobs').then(j=>{ S.jobs=j; renderTasks(); renderHead(); }).catch(()=>{});
+  if(S.active && (!S.es || S.es.readyState === 2)) attachES(S.active);   // 流被浏览器挂起就重挂
+});
+function attachES(id){
+  if(S.es) S.es.close();
+  S.msgs[id]=[]; S.chips[id]=null;
+  const es = new EventSource(API+'/v1/jobs/'+id+'/events'); S.es = es;
+  es.onmessage = ev => { try{ handle(id, JSON.parse(ev.data)); }catch(e){} };
+  es.onerror = () => {           // 引擎重启/网络抖动:3 秒后自动重连,不再停在假死页面
+    es.close();
+    if(S.es === es){ S.es = null; setTimeout(()=>{ if(S.active===id && S.online && !S.es) attachES(id); }, 3000); }
+  };
+}
+function handle(id, e){
+  if(e.type==='message'){
+    const list = (S.msgs[id]=S.msgs[id]||[]);
+    if(e.role==='user'){
+      const i = list.findIndex(x=>x._local && !x._fail && x.text===e.text);   // 服务端回声与本地即显合并,不出双气泡
+      if(i>=0) list[i] = {role:'user', text:e.text}; else list.push(e);
+    } else {
+      list.push(e); S.typing[id] = false;
+      if(e.role==='agent') notify(e.text);
+    }
+  }
+  if(e.type==='worklog'){
+    const wl = (S.worklog[id]=S.worklog[id]||[]);
+    for(const ln of (e.lines||[])) wl.push(ln);
+    if(wl.length > 400) wl.splice(0, wl.length - 400);
+    if(S.active===id) renderWorklog();
+  }
+  if(e.type==='status'){ S.typing[id] = e.state==='thinking' && (Date.now()-ts2ms(e.ts) < 120000); }
+  if(e.type==='question_closed'){ const q = S.chips[id]; if(q && (!e.id || q.qid===e.id)) S.chips[id] = null; }
+  if(e.type==='progress'){
+    S.prog[id]=e;
+    const k = e.step||0;
+    if(k){
+      const st = (S.steps[id]=S.steps[id]||{});
+      if(!st[k]){
+        (S.msgs[id]=S.msgs[id]||[]).push({role:'sys', text:'第 '+k+'/'+(e.total||12)+' 步 · '+(e.stage||'')});
+        st[k] = ts2ms(e.ts) || Date.now();
+      } else if(ts2ms(e.ts)) st[k] = Math.min(st[k], ts2ms(e.ts));
+      (S.names[id]=S.names[id]||{})[k] = e.stage||'';
+      const wl = (S.worklog[id]=S.worklog[id]||[]);
+      const dv = '── 第 '+k+' 步 · '+(e.stage||'')+' ──';
+      if(wl[wl.length-1] !== dv) wl.push(dv);
+    }
+    if(e.pct>=100) notify('已出 Word · 待你确认');
+  }
+  if(e.type==='question'){ S.chips[id]={qid:e.id, options:e.options}; (S.msgs[id]=S.msgs[id]||[]).push({role:'agent',text:e.text}); }
+  if(e.type==='artifact'){
+    const list = (S.arts[id]=S.arts[id]||[]);
+    if(!list.some(a=>a.name===e.name)) list.push(e);
+    refreshArts(id).then(()=>{ if(id===S.active) renderRail(); });  // SSE 事件不带 url,拉到带 url 的清单后重画
+  }
+  if(e.type==='health'){ S.health[id]=e; }
+  if(e.type==='error'){ (S.msgs[id]=S.msgs[id]||[]).push({role:'agent', text:'⚠ '+e.text, actions:e.actions||null}); S.typing[id]=false; }
+  if(id===S.active){ renderChat(); renderHead(); renderRail(); renderTasks(); }
+}
+async function refreshArts(id){ if(S.online){ try{ S.arts[id] = await api('/v1/jobs/'+id+'/artifacts'); }catch(e){} } }
+async function loadAtts(id){ if(S.online&&id){ try{ S.atts[id] = await api('/v1/jobs/'+id+'/attachments'); }catch(e){ S.atts[id]=[]; } renderAtts(); } }
+
+/* ================= 步骤计时 ================= */
+const DEFAULT_STAGES = ['体检素材','图片入库','读懂组成','提取格式','评分废标','拆解分工',
+                        '分章撰写','逐条应答','汇总成册','配图复核','自查体检','出Word质检'];
+function ts2ms(s){ if(!s) return 0; const d = new Date(String(s).replace(/-/g,'/')); return isNaN(d) ? 0 : d.getTime(); }
+function fmtDur(ms){
+  if(!(ms>0)) return '';
+  const s = Math.round(ms/1000);
+  if(s < 60) return s+' 秒';
+  const m = Math.floor(s/60);
+  if(m < 60) return m+' 分'+(s%60 ? (s%60)+' 秒' : '');
+  return Math.floor(m/60)+' 小时 '+(m%60)+' 分';
+}
+function timing(id){
+  const st = S.steps[id]||{}; const keys = Object.keys(st).map(Number).sort((a,b)=>a-b);
+  const p = S.prog[id]||{}; const total = p.total||12, cur = p.step||0;
+  if(!keys.length) return {elapsed:0, eta:0, total, cur, rough:false};
+  const t0 = st[keys[0]], now = Date.now();
+  const elapsed = now - t0;
+  let eta = 0, rough = false;
+  if(cur >= 1 && p.pct < 100 && S.stageAvgs){
+    // 每步均值(本机历史优先,缺的用参考值):第一步就能给预计,且不被单个超长步带偏
+    let rem = 0;
+    for(let i = cur; i <= total; i++){
+      const a = S.stageAvgs[i - 1] || {}; let sec = a.avg_s || 120;
+      if(!a.from_history) rough = true;
+      if(i === cur) sec = Math.max(sec - (now - (st[cur] || now)) / 1000, sec * 0.1);
+      rem += sec;
+    }
+    eta = rem * 1000;
+  } else if(cur > 1 && p.pct < 100){
+    const per = (st[keys[keys.length-1]] - t0) / Math.max(1, cur - 1);
+    eta = per > 0 ? per * (total - cur + 1) : 0;
+  }
+  if(eta && eta < 5000) eta = 0;
+  return {elapsed, eta, total, cur, rough};
+}
+
+/* ================= 头部 / 对话 / 快捷 ================= */
+function verdict(id){
+  const h = S.health[id];
+  if(!h) return {key:'none', color:'var(--dim)', fix:false};
+  const gaps = h.gaps||[];
+  const fix = gaps.some(g=>/逐字|重复|异常/.test(g.title||''));   // 生成内容坏了,可一键修复
+  if(h.level==='red' || gaps.some(g=>g.level==='red')) return {key:'bad', color:'var(--red)', fix};
+  if(gaps.some(g=>g.level==='yellow')) return {key:'warn', color:'var(--amber)', fix};
+  return {key:'ok', color:'var(--green)', fix};
+}
+function renderHead(){
+  if(!S.active) return;
+  const p = S.prog[S.active]||{};
+  const t = timing(S.active), done = p.pct>=100;
+  const v = verdict(S.active);
+  const j = S.jobs.find(x=>x.job_id===S.active);
+  el('hTitle').textContent = (j&&j.name) || S.active;
+  const badge = el('hBadge');
+  if(done){
+    const label = {ok:'内容检查通过', warn:'待确认项待处理', bad:(v.fix?'内容异常,需修复':'有必办项,暂不可投'), none:'已完成,待体检'}[v.key];
+    badge.style.display = 'inline-flex'; badge.className = 'badge ' + v.key;
+    badge.innerHTML = '<span class="bdot"></span>' + label;
+  } else badge.style.display = 'none';
+  const act = el('hAct');
+  act.className = 'pill' + (done ? ' primary' : '');
+  act.textContent = done ? (v.key==='bad' ? (v.fix?'去修复内容异常':'看必办清单') : '出件前检查') : '出件前检查';
+  el('stopBtn').style.display = (!done && S.online && p.step) ? 'inline-block' : 'none';
+  el('redoBtn').style.display = (done && S.online) ? 'inline-block' : 'none';
+  const jj = (S.jobs||[]).find(j=>j.job_id===S.active);
+  el('startBtn').style.display = (jj && jj.staged) ? '' : 'none';
+  const pb = el('pauseBtn');
+  pb.onclick = togglePause;
+  if(!done && S.online && p.step){
+    pb.style.display='flex';
+    pb.title = S.paused[S.active] ? '继续' : '暂停';
+    pb.innerHTML = S.paused[S.active]
+      ? '<svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px"><polygon points="6 3 20 12 6 21 6 3"/></svg>'
+      : '<svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px"><rect x="5" y="4" width="4.5" height="16" rx="1"/><rect x="14.5" y="4" width="4.5" height="16" rx="1"/></svg>';
+  } else pb.style.display='none';
+  const parts = [];
+  if(done){ parts.push('全部 '+t.total+' 步完成'); if(t.elapsed) parts.push('用时 '+fmtDur(t.elapsed)); }
+  else{
+    parts.push(p.stage ? '正在:'+p.stage : '任务启动中');
+    parts.push('第 '+(p.step||1)+'/'+t.total+' 步');
+    if(t.elapsed) parts.push('已用 '+fmtDur(t.elapsed));
+    if(t.eta) parts.push((t.rough?'预计还剩约 ':'预计还剩 ')+fmtDur(t.eta));
+    if(t.eta) parts.push('约剩 '+fmtDur(t.eta));
+    if(S.paused[S.active]) parts.push('已暂停');
+  }
+  el('hSub').textContent = parts.join(' · ');
+  el('hBar').style.width = (p.pct||0)+'%';
+  renderQuick(done);
+}
+function renderQuick(done){
+  const q = el('quick');
+  if(!S.active){ q.innerHTML=''; return; }
+  const items = done
+    ? [['q','出件前我还差哪几项?'],['q','各章分别写了多少字?'],['cmd:rerun','重跑本任务']]
+    : [['q','现在到哪了?'],['q','有哪些废标风险?'],['cmd:pause', S.paused[S.active]?'继续生成':'暂停一下']];
+  q.innerHTML = items.map(([k,label])=>'<span data-k="'+escA(k)+'" data-v="'+escA(label)+'">'+esc(label)+'</span>').join('');
+}
+el('quick').addEventListener('click', e=>{
+  const s = e.target.closest('[data-k]'); if(!s) return;
+  const k = s.dataset.k, v = s.dataset.v;
+  if(k==='q') say(v);
+  else if(k==='cmd:pause') togglePause();
+  else if(k==='cmd:rerun') rerunJob();
+});
+async function togglePause(){
+  if(!S.active || !S.online) return;
+  const to = !S.paused[S.active];
+  try{
+    await api('/v1/jobs/'+S.active+'/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action: to?'pause':'resume'})});
+    S.paused[S.active] = to; renderHead();
+  }catch(e){ toast('操作失败'); }
+}
+async function stopJob(){
+  if(!S.active || !await askConfirm('停止这个任务?', '会终止正在跑的生成进程;已生成的产物全部保留,之后可以重跑或定向重做。', true)) return;
+  try{ await api('/v1/jobs/'+S.active+'/stop', {method:'POST'}); toast('已停止'); }
+  catch(e){ toast('停止失败,请重试'); }
+}
+function openRedo(){
+  el('ovl').style.display='block'; el('redo').style.display='flex';
+  el('redoTxt').value = ''; el('redoTxt').focus();
+}
+async function doRedo(){
+  const t = el('redoTxt').value.trim();
+  if(!t){ toast('先写清楚要重做哪一部分'); return; }
+  closeAll();
+  try{
+    const r = await api('/v1/jobs/'+S.active+'/redo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:t})});
+    toast(r.ok ? '定向重做已开始' : ('无法重做:'+(r.error||'')));
+  }catch(e){ toast('启动失败:任务可能正在运行,先停止再试'); }
+}
+async function openLog(){
+  if(!S.active) return;
+  el('ovl').style.display='block'; el('logSheet').style.display='flex';
+  el('logBody').textContent = '读取中…'; el('logSkill').textContent = '';
+  try{
+    const r = await api('/v1/jobs/'+S.active+'/log');
+    el('logBody').textContent = r.log || '(空)';
+    el('logSkill').innerHTML = r.skill_used
+      ? '<span style="color:var(--green)">✓ 检测到技能包被使用:'+esc((r.hits||[]).join('、'))+'</span>'
+      : '<span style="color:var(--red)">✗ 没有检测到技能包被使用</span> — '+esc(r.why||'')
+        +'<br>把生成引擎换成内置的 SoWork / Claude Code / Codex(自动带技能包路径),或在自定义命令里加入 {skill} 占位符。';
+  }catch(e){ el('logBody').textContent = '读取失败'; }
+}
+async function rerunJob(skipAsk){
+  if(!S.active) return;
+  if(!skipAsk && !await askConfirm('重新生成一个任务?', '用同一份招标文件重开一个任务(素材库补充后重跑,常用于提升质量)。')) return;
+  try{
+    const r = await api('/v1/jobs/'+S.active+'/rerun',{method:'POST'});
+    S.jobs = await api('/v1/jobs'); toast('已开始重跑'); select(r.job_id);
+  }catch(e){ toast('重跑失败:原任务的招标文件可能已不在'); }
+}
+function renderWorklog(){
+  const host = el('wlHost'); if(!host) return;
+  const id = S.active, wl = (id && S.worklog[id]) || [];
+  if(!wl.length){ host.innerHTML=''; return; }
+  const p = S.prog[id]||{}; const live = (p.pct||0) < 100;
+  const had = el('wlBody');
+  const stick = had ? (had.scrollTop + had.clientHeight >= had.scrollHeight - 30) : true;
+  host.innerHTML = '<details class="wl"'+(live?' open':'')+'><summary>'+(live?'⚙ 它正在做什么':'⚙ 工作过程回放 · '+wl.length+' 行')+'</summary>'
+    + '<pre id="wlBody">'+wl.map(esc).join('\n')+'</pre></details>';
+  const b = el('wlBody');
+  if(b && stick) b.scrollTop = b.scrollHeight;
+}
+function renderChat(){
+  setTimeout(renderWorklog, 0);
+  const box = el('chat'), wrap = el('chatWrap'); const list = S.msgs[S.active]||[];
+  const nearBottom = box.scrollTop + box.clientHeight > box.scrollHeight - 90;  // 用户上翻时不打断
+  let h = list.map((m,mi)=>{
+    if(m.role==='sys') return '<div class="sysline"><span class="sdot"></span>'+esc(m.text)+'</div>';
+    const u = m.role==='user';
+    const meta = u ? (m._fail ? '你 · <span class="rs" data-resend="'+mi+'">未送达,点此重发</span>' : '你') : '中标狗';
+    const acts = (!u && m.actions && m.actions.length)
+      ? '<div class="chips" style="margin-top:8px">'+m.actions.map((a,ai)=>'<span class="chip'+(ai?' gy':'')+'" data-eact="'+escA(a.act)+'" data-file="'+escA(a.file||'')+'" data-eparam="'+escA(a.param||'')+'">'+esc(a.label)+'</span>').join('')+'</div>' : '';
+    return '<div class="msg '+(u?'u':'a')+(m._fail?' fail':'')+'"><div class="b">'
+      + (u ? esc(m.text) : mdHtml(m.text)) + acts + '</div><div class="m">'+meta+'</div></div>';
+  }).join('');
+  const q = S.chips[S.active];
+  if(q) h += '<div class="chips">'+q.options.map((o,i)=>'<span class="chip'+(i?' gy':'')+'" data-opt="'+escA(o)+'">'+esc(o)+'</span>').join('')+'</div>';
+  if(S.typing[S.active]) h += '<div class="typing"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span><span>中标狗 正在回复…</span></div>';
+  wrap.innerHTML = h;
+  if(nearBottom) box.scrollTop = box.scrollHeight;
+}
+el('chat').addEventListener('click', e=>{
+  const rs = e.target.closest('[data-resend]');
+  if(rs){ const list = S.msgs[S.active]||[]; const m = list[+rs.dataset.resend];
+    if(m){ list.splice(+rs.dataset.resend, 1); renderChat(); say(m.text); } return; }
+  const ea = e.target.closest('[data-eact]');
+  if(ea){ errAction(ea.dataset.eact, ea.dataset.file, ea.dataset.eparam); return; }
+  const c = e.target.closest('[data-opt]'); if(c) answer(c.dataset.opt);
+});
+async function errAction(act, file, param){
+  /* 消息里的操作按钮:报错自救 + 对话指挥任务(重启/定向重做),点了才执行 */
+  if(act==='open_engine'){ openSheet('providers'); return; }
+  if(act==='open_log'){ openLog(); return; }
+  if(act==='rerun'){ rerunJob(true); return; }
+  if(act==='redo'){
+    if(!S.active || !S.online) return;
+    try{
+      const r = await api('/v1/jobs/'+S.active+'/redo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction: param||''})});
+      toast(r.ok ? '定向重做已开始,进度看右侧' : ('无法重做:'+(r.error||'')));
+    }catch(e){ toast('定向重做启动失败:任务可能正在运行'); }
+    return;
+  }
+  if(act==='open_artifact'){ openArtifact(file); return; }
+  if(act==='open_job_folder'){ openJobFolder(); return; }
+  if(act==='mock_rerun'){
+    if(!S.active || !S.online) return;
+    try{
+      await api('/v1/agent',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'mock', mode:'agents'})});
+      toast('已切到内置演示,开始重跑');
+      rerunJob(true);
+    }catch(e){ toast('切换失败,请到「设置 · 模型接入」手动选择'); }
+  }
+}
+
+/* ================= 右栏卡片 ================= */
+const ART_GROUPS = [
+  {key:0, title:'最终交付 · 先看这里'},
+  {key:1, title:'检查报告 · 提交前必看'},
+  {key:2, title:'分析依据 · 核对响应'},
+  {key:3, title:'过程稿件 · 按需查看'},
+];
+function artGroup(n){
+  if(/\.(docx|xlsx|pdf)$/i.test(n)) return 0;
+  if(/自检|门禁|检查|废标风险|补料清单/.test(n)) return 1;
+  if(/响应矩阵|响应对照|偏离表|评分|格式要求|解析版|配图清单|组成/.test(n)) return 2;
+  return 3;
+}
+function artKind(a){
+  if(a.kind) return a.kind;
+  const m=(a.name||'').match(/\.([^.]+)$/); return m ? m[1].toUpperCase() : '文件';
+}
+function artPurpose(a){
+  if(a.purpose) return a.purpose;
+  const g=artGroup(a.name||'');
+  return g===0?'最终交付文件，请人工复核后提交。':g===1?'检查风险、缺项和格式问题。':g===2?'用于核对招标要求与标书响应。':'生成过程稿件，需要时再查看。';
+}
+function toggleGrp(k){ S.openGrp[k] = S.openGrp[k] === false ? true : false; renderRail(); }
+function renderRail(){
+  if(!S.active) return;
+  const id = S.active, p = S.prog[id]||{}, t = timing(id);
+  const names = S.names[id]||{}, st = S.steps[id]||{};
+  const total = t.total, cur = p.step||0, done100 = p.pct>=100;
+  let ticks = '';
+  for(let i=1;i<=total;i++) ticks += '<i class="'+(done100||i<cur?'d':i===cur?'a':'')+'"></i>';
+  const v = verdict(id);
+  const curName = done100 ? (v.key==='ok'?'全部完成 · 内容检查通过':v.key==='warn'?'已完成 · 有待确认项':v.key==='bad'?(v.fix?'已完成 · 内容异常需修复':'已完成 · 有必办项'):'全部完成 · 待体检') : (names[cur] || DEFAULT_STAGES[cur-1] || '启动中');
+  el('miniProg').innerHTML = '<div class="ticks">'+ticks+'</div>'
+    + '<div class="curstep" style="'+(done100?'color:'+v.color:'')+'">'+(done100?'✓':'<i class="spin b"></i>')+'<span>'+esc(curName)+'</span>'
+    + '<span class="cs-r">'+(cur?cur+'/'+total:'')+'</span></div>';
+  el('stepsTgl').textContent = S.stepsOpen ? '收起' : '展开';
+  if(S.stepsOpen){
+    let rows = '';
+    for(let i=1;i<=total;i++){
+      const nm = names[i] || DEFAULT_STAGES[i-1] || ('第 '+i+' 步');
+      const isDone = done100 || i < cur, isAct = !done100 && i === cur;
+      const dur = (st[i] && st[i+1]) ? fmtDur(st[i+1]-st[i]) : (isAct && st[i] ? fmtDur(Date.now()-st[i]) : '');
+      rows += '<div class="step'+(isDone?' d':isAct?' a':'')+'">'
+        + '<span class="si">'+(isDone?'✓':isAct?'<i class="spin"></i>':i)+'</span>'
+        + '<span class="sn">'+esc(nm)+'</span><span class="sd">'+(dur||'')+'</span></div>';
+    }
+    el('phases').innerHTML = rows;
+  } else el('phases').innerHTML = '';
+  el('etaTop').textContent = done100 ? (t.elapsed?'共 '+fmtDur(t.elapsed):'') : (t.eta ? (t.rough?'约剩~':'约剩 ')+fmtDur(t.eta) : (t.elapsed?'已用 '+fmtDur(t.elapsed):''));
+  const seen = new Set(), arts = (S.arts[id]||[]).filter(a=>!seen.has(a.name) && seen.add(a.name));
+  const row = a => {
+    const md = /\.md$/i.test(a.name);
+    return '<div class="file"><div class="fmain"><div class="ftop"><span class="tag">'+esc(artKind(a))+'</span><span class="fn'+(md?' pv" data-pv="'+escA(a.name)+'" data-url="'+escA(a.url||'')+'"':'"')
+      + ' title="'+escA(a.name)+'">'+esc(a.name)+'</span></div><span class="fdesc">'+esc(artPurpose(a))+'</span></div>'
+      + '<span class="openart" data-open-art="'+escA(a.name)+'" data-url="'+escA(a.url||'')+'">'+(IS_WEB?'下载':'打开')+'</span></div>';
+  };
+  el('artCount').textContent = arts.length ? '· '+arts.length : '';
+  if(!arts.length){ el('files').innerHTML = '<span style="font:400 12px/1.6 inherit;color:var(--faint)">生成过程中陆续出现</span>'; }
+  else{
+    const groups = ART_GROUPS.map(g=>({...g, items: arts.filter(a=>(a.group==null?artGroup(a.name):a.group)===g.key)})).filter(g=>g.items.length);
+    el('files').innerHTML = groups.map(g=>{
+      const open = S.openGrp[g.key] !== false;
+      return '<div class="grp'+(open?' on':'')+'" data-grp="'+g.key+'"><span class="gt">'+g.title+'</span><span class="gc">'+g.items.length+'</span>'
+        + '<span class="gx"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px"><polyline points="9 18 15 12 9 6"/></svg></span></div>'
+        + (open ? g.items.map(row).join('') : '');
+    }).join('');
+  }
+  const hth = S.health[id];
+  el('warnDot').style.background = hth ? verdict(id).color : 'var(--amber)';
+  el('warnT').textContent = hth ? '出件前需要你 '+(hth.gaps||[]).filter(g=>g.level!=='green').length+' 项' : '出件前检查';
+  el('warnD').textContent = hth ? (hth.gaps||[]).filter(g=>g.level!=='green').map(g=>(g.title||'').split(' ')[0]).slice(0,3).join(' · ') : '出 Word 后在这里看结论与补料清单';
+  renderAtts();
+}
+el('files').addEventListener('click', e=>{
+  const g = e.target.closest('[data-grp]'); if(g){ toggleGrp(+g.dataset.grp); return; }
+  const o = e.target.closest('[data-open-art]'); if(o){ openArtifact(o.dataset.openArt, o.dataset.url); return; }
+  const f = e.target.closest('[data-pv]'); if(f) openPreview(f.dataset.pv, f.dataset.url);
+});
+async function openArtifact(name, url){
+  if(!name) return;
+  if(IS_WEB){
+    if(!url && S.active){ const hit=(S.arts[S.active]||[]).find(a=>a.name===name); url=hit&&hit.url; }
+    if(url){ const a=document.createElement('a'); a.href=API+url; a.download=name; a.click(); }
+    else toast('这个文件还没有可用的下载地址');
+    return;
+  }
+  if(!S.online || !S.active){ toast('本地引擎未连接，暂时无法打开文件'); return; }
+  try{
+    await api('/v1/jobs/'+S.active+'/artifacts/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    toast('已用默认应用打开');
+  }catch(e){ toast('打开失败，请点“打开任务文件夹”手动查看'); }
+}
+async function openJobFolder(){
+  if(!S.online || !S.active){ toast('请先选择一个已创建的任务'); return; }
+  if(IS_WEB){ toast('网页模式不能打开你电脑上的任务文件夹'); return; }
+  try{ await api('/v1/jobs/'+S.active+'/open_folder',{method:'POST'}); }
+  catch(e){ toast('任务文件夹打开失败'); }
+}
+function renderAtts(){
+  const list = S.atts[S.active]||[];
+  el('attsList').innerHTML = list.length
+    ? list.map(a=>'<div class="attrow"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escA(a.name)+'">'+esc(a.name)+'</span><span class="as">'+(a.size_kb||0)+' KB</span></div>').join('')
+    : '<span style="font:400 12px/1.6 inherit;color:var(--faint)">给 AI 的写法参照,如过往标书</span>';
+}
+async function openPreview(name, url){
+  el('ovl').style.display='block'; el('preview').style.display='flex';
+  el('pvTitle').textContent = name; el('pvTitle').title = name;
+  if(!url && S.online && S.active){          // 事件先到、清单后到:按名字现查一次
+    try{ const list = await api('/v1/jobs/'+S.active+'/artifacts');
+      const hit = list.find(a=>a.name===name); if(hit) url = hit.url; }catch(e){}
+  }
+  el('pvOpen').dataset.name = name;
+  el('pvOpen').textContent = IS_WEB ? '下载' : '打开';
+  el('pvBody').innerHTML = '';
+  if(!url){ el('pvBody').textContent = '(演示模式:样例文件,连接本地引擎后可预览真实产出)'; return; }
+  el('pvBody').textContent = '加载中…';
+  try{
+    const r = await fetch(API+url); const t = (await r.text()).slice(0, 60000);
+    if(!t){ el('pvBody').textContent = '(空文件)'; }
+    else if(/\.md$/i.test(name)){ el('pvBody').innerHTML = mdHtml(t); }   // md 按排版渲染,不再露 #、**、|---|
+    else { el('pvBody').textContent = t; }
+  }catch(e){ el('pvBody').textContent = '预览失败，请点击右上角“'+(IS_WEB?'下载':'打开')+'”查看文件'; }
+}
+
+/* ================= 建任务 / 参考资料 / 拖放 ================= */
+function pickFile(){ el('plusMenu').style.display='none'; el('filein').click(); }
+function togglePlus(ev){
+  ev.stopPropagation();
+  const m = el('plusMenu');
+  m.style.display = m.style.display==='none' ? 'block' : 'none';
+}
+document.addEventListener('click', ()=>{ const m=el('plusMenu'); if(m) m.style.display='none'; });
+function pickRef(){
+  el('plusMenu').style.display='none';
+  if(!S.active){ toast('先选中一个任务,参考资料是加给具体任务的'); return; }
+  if(!S.online){ toast('未连接本地引擎'); return; }
+  el('refin').click();
+}
+async function addRef(file){
+  if(!file || !S.active) return;
+  const fd = new FormData(); fd.append('file', file);
+  try{
+    await api('/v1/jobs/'+S.active+'/attachments', {method:'POST', body:fd});
+    toast('已加入参考资料,AI 撰写时会参考它的写法');
+    loadAtts(S.active);
+  }
+  catch(e){ toast('参考资料上传失败'); }
+  el('refin').value='';
+}
+/* ---------- 新建任务向导:先放文件(可多选/整文件夹)→ 选填要求 → 点「开始生成」才启动 ---------- */
+const NJ = { items: [], tenderIdx: -1 };            // items: [{file, rel}]
+const DOCLIKE = f => !/\.(png|jpe?g|gif|bmp|tiff?|zip)$/i.test(f);
+/* 默认要求:大多数人不知道该写什么,空着写出来的就是四平八稳的通稿。
+   预填一份「投标方案专家」提示词当起点——用户改两句比从零写一段容易得多。
+
+   ⚠ 这段是踩过坑重写的。上一版把「技术上要有实施方法论、关键技术细节、交付物、风险识别…」
+   这种**文档级清单**写了进来,弱模型直接当成**逐章小标题模板**,给 18 个章节全套了同一组
+   8 个二级标题(需求与评分点映射/实施方法论/关键技术细节/…),正文也只是换个章节名重复同一段话。
+   教训:提示词里**不能出现看起来像小标题的名词清单**——只写"怎么写"的纪律,不写"要有哪几块"。
+   章节结构由技能包按招标文件的评分办法现推,不由这里规定。 */
+const NJ_DEFAULT_REQ = [
+  '# 角色',
+  '你是有 30 年经验的投标方案专家,负责编写本项目的投标技术方案。',
+  '',
+  '# 最重要的三条',
+  '1. **每一章的小标题必须依据这一章自己的内容现拟**。严禁给所有章节套用同一组小标题——',
+  '   评审一眼就能看出是模板灌水,直接失分。两个章节的小标题重复,就是写砸了。',
+  '2. **逐条应答招标文件**。技术规格、商务条款、评分办法里的每一条,都要能在标书里找到',
+  '   对应的应答段落或表格行;偏离表的条数要和招标条款条数同量级,不能只挑几条象征性地填。',
+  '3. **不编造**。我方身份、产品能力、资质案例一律取自素材库,素材里没有的写〔需补充〕。',
+  '',
+  '# 写法',
+  '- 篇幅按招标文件的分量走,写透为准;凑字数的套话、换个说法重复一遍的段落,一律不要。',
+  '- 每一段都要有具体信息:具体的做法、参数、时间、责任人、验收口径。',
+  '  写不出具体内容的地方,说明素材不够,标〔需补充〕,不要用空话填满。',
+  '- 评分办法要求承诺函的(如违约承诺、服务期满后的服务承诺),直接写出完整承诺函正文。',
+  '- 资质单独成章,一个资质一个小标题,证书图贴在对应小标题下。',
+  '- 语言专业、严谨,不堆形容词。'
+].join('\n');
+function njReqDefault(){ el('njReq').value = NJ_DEFAULT_REQ; }
+function njReset(){ NJ.items = []; NJ.tenderIdx = -1; njReqDefault(); const m=el('njMsg'); m.style.display='none'; }
+function njOpen(){
+  el('ovl').style.display='block'; el('newjob').style.display='flex';
+  el('njLater').style.display = S.online ? '' : 'none';          // 演示模式没有"稍后开始"
+  if(!el('njReq').value.trim()) njReqDefault();   // 空着就补默认;用户改过的原样保留
+  njRender();
+}
+function njAddFiles(files, isFolder){
+  if(!files || !files.length) return;
+  for(const f of files){
+    const rel = (f.webkitRelativePath || f._rel || f.name);
+    NJ.items.push({file: f, rel});
+  }
+  if(el('newjob').style.display==='none' || !el('newjob').style.display) njOpen(); else njRender();
+}
+function njRender(){
+  // 主件候选:文档类文件;默认挑文件名像招标文件的,否则第一个文档
+  const docs = NJ.items.map((it,i)=>({i, n: it.rel.split('/').pop()})).filter(x=>DOCLIKE(x.n));
+  if(NJ.tenderIdx < 0 || !NJ.items[NJ.tenderIdx] || !DOCLIKE(NJ.items[NJ.tenderIdx].rel)){
+    const hit = docs.find(x=>/招标|采购|磋商|询价|tender|rfp/i.test(x.n)) || docs[0];
+    NJ.tenderIdx = hit ? hit.i : -1;
+  }
+  el('njTender').innerHTML = docs.length
+    ? docs.map(x=>'<option value="'+x.i+'"'+(x.i===NJ.tenderIdx?' selected':'')+'>'+esc(x.n)+'</option>').join('')
+    : '<option value="-1">(还没有文档,点上面「+ 文件」添加招标文件)</option>';
+  const rest = NJ.items.filter((_,i)=>i!==NJ.tenderIdx);
+  el('njList').innerHTML = rest.length
+    ? rest.map(it=>'<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escA(it.rel)+'">'+esc(it.rel)+' <span style="color:var(--faint)">'+(it.file.size>1048576?(it.file.size/1048576).toFixed(1)+' MB':Math.max(1,Math.round(it.file.size/1024))+' KB')+'</span></div>').join('')
+      + '<div style="color:var(--faint);margin-top:4px">共 '+rest.length+' 个素材文件,将进入本任务的「素材/」目录</div>'
+    : '<span style="color:var(--faint)">没有素材也能生成:会用「素材库」里的公司资料与图片(设置里可查看)</span>';
+}
+async function njStart(startNow){
+  if(NJ.tenderIdx < 0 || !NJ.items[NJ.tenderIdx]){ el('njMsg').style.display='block'; el('njMsg').textContent='还没有招标文件——点「+ 文件」把它加进来'; return; }
+  if(window.Notification && Notification.permission==='default') Notification.requestPermission();
+  const tender = NJ.items[NJ.tenderIdx];
+  const tname = tender.rel.split('/').pop();
+  if(!S.online){ closeAll(); demoNew(tname); njReset(); return; }
+  const go = el('njGo'), later = el('njLater');
+  go.disabled = later.disabled = true; go.textContent = '创建中…';
+  const fd = new FormData();
+  fd.append('tender', tender.file, tname);
+  const rest = NJ.items.filter((_,i)=>i!==NJ.tenderIdx);
+  const rels = [];
+  for(const it of rest){ fd.append('files', it.file, it.rel.split('/').pop()); rels.push(it.rel); }
+  fd.append('relpaths', JSON.stringify(rels));
+  fd.append('name', tname.replace(/\.[^.]+$/,''));
+  fd.append('prompt', el('njReq').value.trim());
+  fd.append('start', startNow ? '1' : '0');
+  try{
+    const r = await api('/v1/jobs', {method:'POST', body:fd});
+    S.jobs = await api('/v1/jobs'); closeAll(); njReset(); select(r.job_id);
+    if(!startNow) toast('已暂存。想跑的时候点任务标题旁的「开始生成」');
+  }catch(e){ el('njMsg').style.display='block'; el('njMsg').textContent='创建失败:'+(e&&e.message||'没连上本地引擎'); }
+  go.disabled = later.disabled = false; go.textContent = '开始生成';
+}
+async function startStaged(){
+  if(!S.active) return;
+  el('startBtn').style.display='none';
+  try{ await api('/v1/jobs/'+S.active+'/start', {method:'POST'}); S.jobs = await api('/v1/jobs'); renderJobs(); }
+  catch(e){ toast('启动失败,请重试'); el('startBtn').style.display=''; }
+}
+function createJob(file){ if(file) njAddFiles([file]); }   // 兼容旧入口:一律进向导
+/* 拖放:有当前任务时给出两个明确去处;否则直接当新任务 */
+let dragN = 0, dropFile = null;
+document.body.addEventListener('dragover', e=>e.preventDefault());
+document.body.addEventListener('dragenter', e=>{
+  e.preventDefault();
+  if(++dragN === 1 && S.active){ el('dropzone').style.display='flex'; }
+});
+document.body.addEventListener('dragleave', e=>{
+  e.preventDefault();
+  if(--dragN <= 0){ dragN = 0; el('dropzone').style.display='none'; hotDz(null); }
+});
+function walkEntries(items, done){
+  // 拖入的目录递归展开(webkitGetAsEntry);普通文件直接收
+  const out = []; let pend = 0, walked = false;
+  const finish = ()=>{ if(pend===0 && walked) done(out); };
+  const readDir = (dir, base)=>{
+    pend++;
+    const rd = dir.createReader();
+    const batch = ()=>rd.readEntries(es=>{
+      if(!es.length){ pend--; finish(); return; }
+      for(const en of es){
+        if(en.isFile){ pend++; en.file(f=>{ f._rel = base + en.name; out.push(f); pend--; finish(); }, ()=>{ pend--; finish(); }); }
+        else if(en.isDirectory) readDir(en, base + en.name + '/');
+      }
+      batch();                                   // 目录一次最多返回 100 项,要读到空为止
+    }, ()=>{ pend--; finish(); });
+    batch();
+  };
+  for(const it of (items||[])){
+    const en = it.webkitGetAsEntry && it.webkitGetAsEntry();
+    if(en && en.isDirectory) readDir(en, en.name + '/');
+    else { const f = it.getAsFile && it.getAsFile(); if(f) out.push(f); }
+  }
+  walked = true; finish();
+}
+document.body.addEventListener('drop', e=>{
+  e.preventDefault(); dragN = 0;
+  el('dropzone').style.display='none';
+  const t = e.target.closest && e.target.closest('.dz');
+  const items = e.dataTransfer.items;
+  const plainFiles = Array.from(e.dataTransfer.files||[]);
+  if(S.active && t && t.id==='dzRef'){ if(plainFiles[0]) addRef(plainFiles[0]); hotDz(null); return; }
+  hotDz(null);
+  if(items && items.length && Array.from(items).some(it=>{ const en=it.webkitGetAsEntry&&it.webkitGetAsEntry(); return en&&en.isDirectory; })){
+    walkEntries(Array.from(items), fs=>{ if(fs.length) njAddFiles(fs); });
+  }else if(plainFiles.length){ njAddFiles(plainFiles); }
+});
+function hotDz(id){ ['dzNew','dzRef'].forEach(x=>el(x).classList.toggle('hot', x===id)); }
+;['dzNew','dzRef'].forEach(id=>{
+  el(id).addEventListener('dragover', e=>{ e.preventDefault(); hotDz(id); });
+  el(id).addEventListener('dragleave', ()=>hotDz(null));
+});
+el('hero').addEventListener('click', e=>{
+  const s = e.target.closest('[data-act]'); if(!s) return;
+  const a = s.dataset.act;
+  if(a==='assets') openSheet('assets');
+  else if(a==='providers') openSheet('providers');
+  else if(a==='demo'){ if(S.online){ toast('引擎在线时请直接拖入招标文件体验'); } else demoBoot(); }
+});
+
+/* ================= 对话 ================= */
+function send(){ const v = el('draft').value.trim(); if(v){ el('draft').value=''; say(v); } }
+async function say(text){
+  if(!S.active){ toast('先拖一份招标文件建任务,我们再聊'); return; }
+  const id = S.active;
+  if(S.online){
+    const list = (S.msgs[id]=S.msgs[id]||[]);
+    const m = {role:'user', text, _local:1};
+    list.push(m); S.typing[id] = true; renderChat();          // 立刻回显 + "正在回复…",不再石沉大海
+    clearTimeout(S._typT);
+    S._typT = setTimeout(()=>{ if(S.typing[id]){ S.typing[id]=false; if(S.active===id) renderChat(); } }, 90000);
+    try{ await api('/v1/jobs/'+id+'/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'text',content:text})}); }
+    catch(e){ m._fail = 1; S.typing[id] = false; if(S.active===id) renderChat(); toast('发送失败:没连上本地引擎'); }
+  }
+  else { addLocal('user',text); setTimeout(()=>addLocal('agent','(演示)收到:「'+text+'」。已纳入当前章节,继续推进。'),500); }
+}
+async function answer(choice){
+  const q = S.chips[S.active]; S.chips[S.active]=null;
+  if(S.online){
+    const id = S.active;
+    (S.msgs[id]=S.msgs[id]||[]).push({role:'user', text:choice, _local:1}); renderChat();
+    try{ await api('/v1/jobs/'+id+'/answers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question_id:q&&q.qid,choice})}); }
+    catch(e){ toast('发送失败'); }
+  }
+  else { addLocal('user',choice); setTimeout(()=>addLocal('agent','(演示)好,按「'+choice+'」处理,继续。'),500); }
+  renderChat();
+}
+function addLocal(role,text){ (S.msgs[S.active||'demo']=S.msgs[S.active||'demo']||[]).push({role,text}); renderChat(); }
+function notify(t){ if(window.Notification && Notification.permission==='granted') new Notification('中标狗',{body:String(t).slice(0,80)}); }
+
+/* ================= 弹层 ================= */
+function openSheet(id){ el('ovl').style.display='block'; el(id).style.display='flex'; if(id==='providers') loadProviders(); if(id==='assets') loadAssets(); }
+function openCheck(){ el('ovl').style.display='block'; el('check').style.display='flex'; renderCheck(); }
+function closeAll(){ cfDone(false); ['ovl','check','providers','assets','preview','confirm','redo','logSheet','newjob'].forEach(i=>el(i).style.display='none'); }
+/* 应用内确认(替代 window.confirm:Tauri 桌面壳里原生 confirm 静默返回 false) */
+function askConfirm(title, desc, danger){
+  return new Promise(res=>{
+    el('cfT').textContent = title; el('cfD').textContent = desc || '';
+    el('cfOk').className = 'btn' + (danger ? ' danger' : '');
+    el('ovl').style.display='block'; el('confirm').style.display='flex';
+    S._cf = res;
+  });
+}
+function cfDone(v){
+  const r = S._cf; S._cf = null;
+  if(el('confirm').style.display !== 'none'){
+    el('confirm').style.display='none';
+    // 其他弹层(设置/素材库等)还开着时,遮罩要留给它们
+    const othersOpen = ['check','providers','assets','preview'].some(i=>el(i).style.display!=='none' && el(i).style.display!=='');
+    if(!othersOpen) el('ovl').style.display='none';
+  }
+  if(r) r(v);
+}
+el('cfOk').addEventListener('click', ()=>cfDone(true));
+el('cfNo').addEventListener('click', ()=>cfDone(false));
+function renderCheck(){
+  const h = S.health[S.active];
+  if(!h){ el('ckTitle').textContent='还没到出件阶段'; el('ckList').innerHTML=''; el('ckFix').style.display='none'; return; }
+  el('ckLv').textContent = h.level==='red' ? '不可交付' : '仅可作初稿'; el('ckTitle').textContent=h.summary;
+  el('ckFix').style.display = (h.gaps||[]).some(g=>/逐字|重复|异常/.test(g.title||'')) ? 'flex' : 'none';
+  const dot = {red:'var(--red)',yellow:'var(--amber)',green:'var(--green)'};
+  el('ckList').innerHTML = (h.gaps||[]).map(g=>'<div class="lrow"><span class="dot" style="background:'+(dot[g.level]||'var(--amber)')+'"></span><div class="c"><span class="n">'+esc(g.title)+'</span><span class="s">'+esc(g.detail)+'</span></div><span class="gap-act">'+(g.level==='green'?'明细':'处理')+'</span></div>').join('');
+}
+async function repairJob(){
+  if(!S.active) return;
+  el('fixMsg').textContent = '清洗中…';
+  try{
+    const r = await api('/v1/jobs/'+S.active+'/repair', {method:'POST'});
+    el('fixMsg').textContent = r.fixed && r.fixed.length ? '✓ 已生成:'+r.fixed.join('、') : '未发现需要清洗的内容异常';
+    await refreshArts(S.active); renderRail();
+  }catch(e){ el('fixMsg').textContent = '✗ 修复失败,请查看 engine.log'; }
+}
+
+/* ================= 模型接入 / 生成引擎 ================= */
+function pmsg(t){ const m = el('pMsg'); m.style.display='block'; m.textContent = t; }
+function engineHint(e, what){
+  const m = String(e && e.message || e);
+  if(/ 404$/.test(m)) return '✗ '+what+'失败:当前连接的本地引擎版本过旧(缺该接口)。多为旧版应用/旧引擎仍占用端口——退出旧版后重开本应用;也可先手填模型 ID 直接「添加并测试」。';
+  if(/ 5\d\d$/.test(m)) return '✗ '+what+'失败:本地引擎内部错误,详见 ~/Documents/中标狗/engine.log';
+  return '✗ '+what+'失败:连不上本地引擎(应用刚启动时引擎需几秒)。仍不行请看 ~/Documents/中标狗/engine.log';
+}
+async function loadProviders(){
+  let ps = [];
+  if(S.online){ try{ ps = await api('/v1/providers'); }catch(e){} }
+  el('pList').innerHTML = ps.length ? ps.map(p=>'<div class="lrow"><span class="dot" style="background:var(--green)"></span><div class="c"><span class="n">'+esc(p.name||p.id)+'</span><span class="s">'+esc(p.base_url||'')+(p.model?' · '+esc(p.model):' · 未选模型')+(p.vision_model?' · 视觉:'+esc(p.vision_model):'')+'</span></div><span class="a" data-test="'+escA(p.id)+'">测试</span><span class="a" style="color:var(--red);margin-left:10px" data-delp="'+escA(p.id)+'">删除</span></div>').join('')
+    : '<div class="lrow" style="border-top:none"><span class="dot" style="background:#e5e5ea"></span><div class="c"><span class="n" style="color:var(--sub)">还没有接入点</span><span class="s">默认已填好 senseaudio 网关,填入 API Key、选好模型,点「添加并测试」</span></div></div>';
+  loadAgent();
+}
+el('pList').addEventListener('click', e=>{
+  const t = e.target.closest('[data-test]'); if(t){ testProvider(t.dataset.test, t); return; }
+  const d = e.target.closest('[data-delp]'); if(d) delProvider(d.dataset.delp);
+});
+S.models = S.models || [];
+function bindModelDrop(inpId, dropId, src){
+  const i = el(inpId), d = el(dropId);
+  let typed = false;
+  const render = () => {
+    const all = (src ? src() : S.models) || [];
+    const q = typed ? i.value.trim().toLowerCase() : '';
+    let list = q ? all.filter(m => m.toLowerCase().includes(q)) : all;
+    if (!list.length) list = all;                 // 过滤到 0 个就回退显示全部,绝不"看起来只有几款"
+    d.innerHTML = all.length
+      ? list.slice(0, 300).map(m => '<div data-v="' + escA(m) + '">' + esc(m) + '</div>').join('')
+      : '<div class="mnone">点右侧「取模型」拉取你套餐里的全部模型</div>';
+    d.style.display = 'block';
+  };
+  i.addEventListener('focus', () => { typed = false; render(); });
+  i.addEventListener('click', () => { typed = false; render(); });   // 已聚焦时再点一下=看全部
+  i.addEventListener('input', () => { typed = true; render(); });
+  i.addEventListener('blur', () => setTimeout(() => { d.style.display = 'none'; }, 160));
+  d.addEventListener('mousedown', e => {
+    const t = e.target.closest('[data-v]');
+    if (t) { i.value = t.dataset.v; d.style.display = 'none'; e.preventDefault(); i.dispatchEvent(new Event('change')); }
+  });
+}
+bindModelDrop('pModel', 'pModelDrop');
+bindModelDrop('pVision', 'pVisionDrop');
+bindModelDrop('agS2Model', 'agS2ModelDrop', () => S.s2Models || []);
+async function fetchModels(){
+  if(!S.online){ pmsg('本地引擎未连接:应用刚启动时引擎需几秒,稍候重试'); return; }
+  const body = {base_url: el('pUrl').value.trim(), api_key: el('pKey').value.trim(), verify_ssl: !el('pInsecure').checked};
+  if(!body.base_url){ pmsg('先填 Base URL'); return; }
+  pmsg('获取模型列表中…');
+  try{
+    const r = await api('/v1/providers/probe_models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.ok && r.models.length){
+      S.models = r.models.slice();          // 真下拉直接读全量,不再受输入文字过滤之害
+      if(!el('pModel').value) el('pModel').value = r.models.find(m=>m.indexOf('s2')>=0) || r.models[0];
+      if(!el('pVision').value){ const v = r.models.find(m=>/vl|vision/i.test(m) && !/lite/i.test(m)) || r.models.find(m=>/vl|vision/i.test(m)); if(v) el('pVision').value = v; }
+      pmsg('✓ 该网关有 '+r.models.length+' 个模型,点模型输入框查看全部(可输入过滤)'+(r.cached?' · 来自缓存,即时返回':''));
+    } else pmsg('该网关不支持列出模型('+(r.error||'')+'),请手填模型 ID,如 senseaudio-s2');
+  }catch(e){ pmsg(engineHint(e, '获取模型列表')); }
+}
+async function addProvider(){
+  if(!S.online){ pmsg('本地引擎未连接:应用启动后引擎需数秒;若一直未连上,看 ~/Documents/中标狗/engine.log'); return; }
+  const body = {name:el('pName').value.trim()||'senseaudio', base_url:el('pUrl').value.trim(), api_key:el('pKey').value.trim(), model:el('pModel').value.trim(), vision_model:el('pVision').value.trim(), kind:'openai_compatible', verify_ssl: !el('pInsecure').checked};
+  if(!body.base_url){ pmsg('先填 Base URL'); return; }
+  pmsg(body.model ? '添加后用「'+body.model+'」发一次真实对话测试…' : '添加并测试通道连通性…');
+  try{
+    const r = await api('/v1/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const t = await api('/v1/providers/'+r.id+'/test',{method:'POST'});
+    pmsg(t.ok ? '✓ 测试通过:'+(t.model||'通道连通')+' · '+t.latency_ms+'ms'+(t.reply?' · 模型回复「'+t.reply+'」':'')+(t.note?' · '+t.note:'')
+              : '✗ 测试失败:'+(t.error||'未知原因'));
+  }catch(e){ pmsg(engineHint(e, '添加/测试')); }
+  loadProviders();
+}
+async function testProvider(id, node){
+  if(node) node.textContent = '测试中…';
+  try{ const r = await api('/v1/providers/'+id+'/test',{method:'POST'});
+    if(node) node.textContent = r.ok ? '✓ '+r.latency_ms+'ms' : '✗';
+    pmsg(r.ok ? '✓ 测试通过:'+(r.model||'')+' '+r.latency_ms+'ms'+(r.reply?' · 回复「'+r.reply+'」':'') : '✗ 测试失败:'+(r.error||''));
+  }catch(e){ if(node) node.textContent='✗'; pmsg('✗ 测试请求失败'); }
+}
+async function delProvider(id){
+  if(!await askConfirm('删除这个接入点?', '删除后可随时重新添加并测试。', true)) return;
+  try{ await api('/v1/providers/'+id, {method:'DELETE'}); }catch(e){ pmsg('删除失败'); }
+  loadProviders();
+}
+function onKindChange(){
+  const k = el('agKind').value;
+  el('agCmd').style.display = k==='custom' ? 'block' : 'none';
+  el('agS2').style.display = k==='s2' ? 'flex' : 'none';
+  el('agAdv').style.display = (k==='sowork'||k==='custom'||k==='claude'||k==='codex') ? 'flex' : 'none';
+  // 换了引擎,上一个引擎的 CLI 路径与就绪状态不再适用:按新引擎重取(引擎侧也有同族校验兜底)
+  const a = S.lastAgent;
+  if(a){
+    const key0 = (k==='sowork') ? 'sowork' : (k==='s2' ? 'codex' : k);
+    const found = (a.paths||{})[key0] || '';
+    el('agCli').value = '';
+    el('agCliHint').textContent = found ? '✓ 已自动检测到:'+found : '';
+    el('agCliHint').style.color = found ? 'var(--green)' : 'var(--dim)';
+    if(k==='s2'){
+      const bundled = a.codex_bundled;
+      const okk = (a.available||{}).codex;
+      el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
+        : (okk ? '✓ 执行外壳已就绪:'+((a.paths||{}).codex||'')
+               : '✗ 缺执行外壳(点右侧一键安装,装完不用登录)');
+      el('agS2ShellSt').style.color = (bundled||okk) ? 'var(--green)' : 'var(--warn, #c77b00)';
+      el('agS2Install').style.display = (bundled||okk) ? 'none' : 'inline-block';
+    }
+  }
+}
+async function testAgent(){
+  const m = el('agTestMsg'); m.style.display='block'; m.textContent = '测试中(最多 2 分钟)…';
+  try{
+    await saveAgent(true);                       // 先存再测,免得测的是旧配置
+    const r = await api('/v1/agent/test', {method:'POST'});
+    m.textContent = r.ok ? ('✓ 连接成功' + (r.latency_ms ? ' · '+r.latency_ms+'ms' : '')
+                            + (r.note ? ' · '+r.note : '') + (r.reply ? ' · 返回「'+r.reply.slice(0,60)+'」' : ''))
+                         : ('✗ ' + r.error + (r.reply ? '\n日志尾部:'+r.reply.slice(-200) : ''));
+  }catch(e){ m.textContent = '✗ 测试请求失败:本地引擎没连上'; }
+}
+async function loadS2Models(force){
+  // 生成用的模型从网关实拉:S2、DeepSeek 等你套餐里有什么就能选什么
+  const hint = el('agS2Hint');
+  try{
+    if(force) hint.textContent = '正在取模型列表…';
+    const r = await api('/v1/relay/models');
+    const ids = r.models || (r.data||[]).map(x=>x.id).filter(Boolean);
+    if(ids && ids.length){
+      S.s2Models = ids;
+      if(force){ hint.textContent = '✓ 网关有 '+ids.length+' 个模型,点模型框选择'; hint.style.color='var(--green)'; }
+      return ids;
+    }
+    if(force){ hint.textContent = '✗ 没取到模型:先填好 Key 再试'; hint.style.color='var(--dim)'; }
+  }catch(e){ if(force){ hint.textContent = '✗ 取模型失败:先填好 Key、确认网关地址'; hint.style.color='var(--dim)'; } }
+  return null;
+}
+async function provisionShell(){
+  const which = 'codex';
+  const st = el('agS2ShellSt'), btn = el('agS2Install');
+  btn.disabled = true; btn.textContent = '安装中…';
+  try{
+    let r = await api('/v1/agent/provision', {method:'POST', headers:{'Content-Type':'application/json'},
+                       body: JSON.stringify({which})});
+    // 轮询进度:下载约 130MB,慢网络可能要几分钟,把百分比一直报给用户
+    while(r.state === 'running'){
+      st.textContent = '⇣ ' + (r.note||'下载中…') + ' ' + (r.pct||0) + '%';
+      st.style.color = 'var(--sub)';
+      await new Promise(x=>setTimeout(x, 1200));
+      r = await api('/v1/agent/provision');
+    }
+    if(r.state === 'done'){
+      st.textContent = '✓ ' + (r.note || '安装完成'); st.style.color = 'var(--green)';
+      btn.style.display = 'none';
+      setTimeout(loadAgent, 800);
+    }else{
+      st.textContent = '✗ ' + (r.error || '安装失败'); st.style.color = 'var(--red, #c0392b)';
+      btn.disabled = false; btn.textContent = '重试一键安装';
+    }
+  }catch(e){
+    st.textContent = '✗ 安装请求失败:本地引擎没连上'; st.style.color = 'var(--red, #c0392b)';
+    btn.disabled = false; btn.textContent = '重试一键安装';
+  }
+}
+async function loadAgent(){
+  if(!S.online) return;
+  try{
+    const a = await api('/v1/agent');
+    S.lastAgent = a;
+    if((a.kind==='claude'||a.kind==='codex') && !el('agKind').querySelector('option[value="'+a.kind+'"]')){
+      const o = document.createElement('option');            // 老配置仍在用本机订阅引擎:补显示,不偷改
+      o.value = a.kind; o.textContent = a.kind==='claude' ? 'Claude Code' : 'Codex CLI';
+      el('agKind').appendChild(o);
+    }
+    if(a.kind !== 'env') el('agKind').value = a.kind;
+    // 撤下过的/未知的 kind 会让 select 变空白:落到 s2(有 Key)或 mock,绝不留空
+    if(!el('agKind').value) el('agKind').value = (a.s2_key_set||a.s2_borrowed) ? 's2' : 'mock';
+    el('agMode').value = a.mode || 'agents';
+    const kind0 = (a.kind === 'env' ? 'mock' : a.kind) || 'mock';
+    const found = (a.paths || {})[kind0 === 'sowork' ? 'sowork' : kind0] || '';
+    // 自动找到就直接填进来:用户看得见,保存后即固定;路径失效时引擎仍会回落自动查找
+    el('agCli').value = a.cli_path || found || '';
+    el('agCliHint').textContent = a.cli_path
+      ? '已手动指定路径' : (found ? '✓ 已自动检测到:' + found : '');
+    el('agCliHint').style.color = found || a.cli_path ? 'var(--green)' : 'var(--dim)';
+    el('agEnv').value = a.env || '';
+    el('agLogin').checked = a.login_shell !== false;
+    el('agAgent').value = a.sowork_agent || '';
+    el('agThink').value = a.thinking || 'off';
+    const d = a.s2_defaults || {};
+    el('agS2Base').value = a.s2_base_url || '';
+    el('agS2Model').value = a.s2_model || '';
+    el('agS2Key').value = '';                    // Key 只写不读:引擎从不回传,页面上也不留残影
+    el('agS2Hint').textContent = a.s2_key_set ? '✓ 已保存 Key(留空即沿用,重填会覆盖)'
+      : (a.s2_borrowed ? '↺ 未单独填 Key,将借用上面「模型接入」里已配好的那个'
+                       : '✗ 还没 Key:新建任务会先跑内置演示流程;填完 Key 点「测试连接」即产真实标书');
+    el('agS2Hint').style.color = (a.s2_key_set || a.s2_borrowed) ? 'var(--green)' : 'var(--dim)';
+    el('agS2Base').placeholder = '网关地址(默认 '+(d.base_url||'')+')';
+    el('agS2Model').placeholder = '生成用哪个模型(当前 '+(a.s2_model_effective||d.model||'')+',点这里换)';
+    if((a.s2_key_set||a.s2_borrowed) && !S.s2Models) loadS2Models(0);
+    // 执行外壳状态:内置(安装包自带)> 已装(路径)> 缺 → 给一键安装按钮
+    const bundled = a.codex_bundled;
+    const cxOk = a.available && a.available.codex;
+    el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
+      : (cxOk ? '✓ 执行外壳已就绪:'+((a.paths||{}).codex||'')
+              : '✗ 缺执行外壳(负责跑命令写文件,点右侧一键安装,装完不用登录)');
+    el('agS2ShellSt').style.color = (bundled || cxOk) ? 'var(--green)' : 'var(--warn, #c77b00)';
+    el('agS2Install').style.display = (bundled || cxOk) ? 'none' : 'inline-block';
+    el('agS2Install').textContent = '一键安装执行外壳(约 130MB)';
+    onKindChange();
+    // 折叠摘要:平时只看这一行,展开才见全部选项
+    const engName = ({mock:'内置演示流程',s2:'自动',sowork:'SoWork(商汤)',claude:'Claude Code',codex:'Codex CLI',custom:'自定义命令'})[a.kind==='env'?'custom':a.kind] || a.kind;
+    const engReady = a.kind==='mock' ? '' : (a.kind==='s2'
+      ? ((a.s2_key_set||a.s2_borrowed) ? ' · ✓ '+(a.s2_model_effective||'')+' · 产真实标书' : ' · 未填 Key,当前跑演示流程')
+      : ((a.available||{})[a.kind==='env'?'codex':a.kind] ? ' · ✓ 已就绪' : ''));
+    el('engSum').textContent = '生成引擎:' + engName + engReady + '(点开切换/高级设置)';
+    // 快速接入卡片上直说「现在真正会跑的是谁」:不是「自动」就红字点破,
+    // 否则用户在这里选了模式、实际却由别的引擎在跑(SoWork 未登录 → 任务开跑才报错)
+    if(a.kind === 's2'){
+      el('qkNow').textContent = '当前生效:自动 · 生成模型 ' + (a.s2_model_effective || '(默认)');
+      el('qkNow').style.color = 'var(--sub)';
+      const eff = a.s2_model_effective || '';
+      const want = QK_MODES[QK_MODE];
+      if(eff && want && !(eff === want.prefer || want.pick.test(eff)))
+        el('qkNow').textContent += ' —— 与所选「' + want.name + '」不一致,点一下模式按钮即可切过去';
+    }else{
+      el('qkNow').textContent = '⚠ 当前生效的生成引擎是「' + kindName(a.kind) + '」,上面的标准/极速对它不起作用。'
+                              + '粘 Key 点「一键接入并测试」即可切到「自动」。';
+      el('qkNow').style.color = 'var(--warn, #c77b00)';
+    }
+    if(a.cmd) el('agCmd').value = a.cmd;
+    const pth = a.paths||{};
+    const kk = el('agKind').value;
+    el('agMsg').textContent = '标书技能包:'+(a.skill_ok?'✓ 已内置':'✗ 未找到(解压 bidmultiagenttao_v5.3.zip 到 '+a.skill_dir+')')
+      +(kk==='sowork' ? ' · SoWork:'+(a.available.sowork?'✓ '+(pth.sowork||'已装'):'✗ 未找到(需安装并登录 SoWork)') : '')
+      +(kk==='claude' ? ' · claude CLI:'+(a.available.claude?'✓ 已装':'✗ 未装') : '')
+      +(kk==='codex' ? ' · codex CLI:'+(a.available.codex?'✓ 已装':'✗ 未装') : '')
+      +(a.kind==='env'?' · 当前由环境变量 AGENT_CMD 接管':'');
+  }catch(e){}
+}
+const QK_MODES = {
+  quality: {name:'标准', prefer:'senseaudio-s2', pick:/s2|pro|max|plus/i, avoid:/flash|lite|mini|turbo|nano/i,
+            hint:'标准:用 senseaudio-s2 写正式标书,篇幅与细节更足。识图模型自动挑,不用你操心。'},
+  fast:    {name:'极速', prefer:'deepseek-v4-flash', pick:/flash|lite|turbo|mini|nano/i, avoid:null,
+            hint:'极速:用 deepseek-v4-flash,出稿快、更省额度,适合试跑与演示;正式投标建议用标准。'}
+};
+let QK_MODE = 'quality';
+el('qkMode').addEventListener('click', e => {
+  const t = e.target.closest('[data-mode]'); if(!t) return;
+  QK_MODE = t.dataset.mode;
+  [...el('qkMode').children].forEach(c => c.classList.toggle('on', c === t));
+  el('qkModeHint').textContent = QK_MODES[QK_MODE].hint;
+  qkApplyMode();          // 点了就算数:已接入过的直接换模型并落盘,不用再点一次按钮
+});
+async function qkApplyMode(){
+  /* 「标准/极速」是设置,不是待提交的表单选项。已经接过 Key 的,点一下立刻生效并写进配置;
+     还没接 Key 的,只提示——绝不能让用户以为选了模式就已经切过去了(旧版就是这里造成
+     「选了极速、实际还在跑上一个引擎」)。 */
+  const m = el('qkMsg'); m.style.display = 'block';
+  let A = null;
+  try{ A = await api('/v1/agent'); }catch(e){ m.textContent = '✗ 没连上本地引擎,模式没能保存'; return; }
+  if(!(A.s2_key_set || A.s2_borrowed)){
+    m.textContent = '已选「' + QK_MODES[QK_MODE].name + '」。粘上 Key 后点「一键接入并测试」才会生效。';
+    return;
+  }
+  m.textContent = '切换到「' + QK_MODES[QK_MODE].name + '」…';
+  try{
+    let models = S.s2Models || [];
+    if(!models.length){ try{ models = (await api('/v1/relay/models')).models || []; }catch(e){} }
+    const gen = qkPick(models, QK_MODE);
+    await api('/v1/agent', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(
+      Object.assign(agentPayload(), {kind:'s2', s2_model: gen, cli_path:''}))});
+    const v = await qkVerify(gen);
+    m.textContent = v.ok ? ('✓ 已切到「' + QK_MODES[QK_MODE].name + '」· 生成模型:' + gen + ' —— 新建任务即生效')
+                         : ('✗ 没切成功:' + v.why);
+    if(v.ok) S.s2Models = models.length ? models : S.s2Models;
+    loadAgent();
+  }catch(e){ m.textContent = '✗ 切换失败:' + (e && e.message || '没连上本地引擎'); }
+}
+async function qkVerify(gen){
+  /* 回读校验:保存接口返回 ok 不等于真的生效(曾经出现过前端显示 ✓、配置里还是上一个引擎)。
+     以引擎回读到的 kind/model 为准,对不上就当失败讲清楚。 */
+  try{
+    const a = await api('/v1/agent');
+    if(a.kind !== 's2') return {ok:false, why:'当前生效的引擎仍是「' + kindName(a.kind) + '」,请在下面「生成引擎」里手动选「自动(默认)」'};
+    if(gen && a.s2_model && a.s2_model !== gen) return {ok:false, why:'模型没写进去(仍是 ' + a.s2_model + ')'};
+    if(!(a.s2_key_set || a.s2_borrowed)) return {ok:false, why:'Key 没保存成功'};
+    return {ok:true};
+  }catch(e){ return {ok:false, why:'读不回引擎状态'}; }
+}
+const KIND_NAME = {mock:'内置演示流程', s2:'自动(默认)', sowork:'SoWork(商汤)', claude:'Claude Code',
+                   codex:'Codex CLI', custom:'自定义命令', env:'环境变量 AGENT_CMD'};
+function kindName(k){ return KIND_NAME[k] || k || '未设置'; }
+function agentPayload(){
+  /* PUT /v1/agent 是整体覆盖写,漏字段等于把用户的高级设置清空——统一在这里取一次 */
+  return {kind: el('agKind').value, mode: el('agMode').value, cmd: el('agCmd').value.trim(),
+          cli_path: el('agCli').value.trim(), env: el('agEnv').value.trim(),
+          login_shell: el('agLogin').checked, sowork_agent: (el('agAgent').value.trim() || 'main'),
+          thinking: el('agThink').value, s2_base_url: el('agS2Base').value.trim(),
+          s2_model: el('agS2Model').value.trim(), s2_key: el('agS2Key').value.trim()};
+}
+function qkPick(models, mode){
+  // 先认名字,再认特征,最后兜底第一个——网关里没有指定模型也不至于配不上
+  const M = QK_MODES[mode];
+  if(models.includes(M.prefer)) return M.prefer;
+  const cand = models.filter(x => !/vl|vision|embed|rerank|audio|tts|whisper/i.test(x));
+  const hit = cand.find(x => M.pick.test(x) && (!M.avoid || !M.avoid.test(x)));
+  return hit || cand.find(x => !M.avoid || !M.avoid.test(x)) || cand[0] || models[0] || M.prefer;
+}
+function qkPickVision(models){
+  const vs = models.filter(x => /vl|vision|vlm/i.test(x));
+  return vs.find(x => !/lite|mini|nano/i.test(x)) || vs[0] || '';
+}
+async function quickS2(){
+  // 一串 Key 三件事:生成引擎 + 对话 + 识图,模型按所选模式自动定,识图模型自动挑
+  const key = el('qkKey').value.trim();
+  const m = el('qkMsg'); m.style.display='block';
+  const A = await api('/v1/agent').catch(()=>null);
+  if(!key && !(A && (A.s2_key_set || A.s2_borrowed))){ m.textContent='✗ 先粘贴 Key(sk- 开头那串)'; return; }
+  const btn = el('qkBtn'); btn.disabled = true;
+  const lines = []; const flush = ()=>{ m.textContent = lines.join('\n'); };
+  const d = (A && A.s2_defaults) || {};
+  const base = (A && A.s2_base_url) || d.base_url || 'https://api.senseaudio.cn/v1';
+  try{
+    lines.push('1/4 读取你套餐里的模型…'); flush();
+    let models = [];
+    try{
+      const pr = await api('/v1/providers/probe_models', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({base_url: base, api_key: key, verify_ssl: true})});
+      models = pr.models || [];
+    }catch(e){}
+    const gen = qkPick(models, QK_MODE);
+    const vis = qkPickVision(models);
+    lines[0] = '✓ 1/4 '+(models.length ? ('网关有 '+models.length+' 个模型') : '未取到列表,按默认模型配置');
+    flush();
+
+    lines.push('2/4 绑定生成引擎(' + QK_MODES[QK_MODE].name + ':' + gen + ')…'); flush();
+    el('agKind').value = 's2'; onKindChange();
+    if(key) el('agS2Key').value = key;
+    el('agS2Model').value = gen;
+    el('agCli').value = '';                    // 上一个引擎(如 SoWork)的 CLI 路径对「自动」无效,顺手清掉
+    if(!el('agS2Base').value.trim() && base) el('agS2Base').value = base;
+    await saveAgent(true);
+    // 回读校验:保存接口 ok ≠ 真的换过去了。不校验就会出现「界面全是 ✓,跑任务时还在用旧引擎」
+    const v2 = await qkVerify(gen);
+    if(!v2.ok){ lines[1] = '✗ 2/4 生成引擎没绑成功:' + v2.why; flush(); btn.disabled = false; return; }
+    lines[1] = '✓ 2/4 生成引擎:自动 · ' + gen; flush();
+
+    lines.push('3/4 配置对话与识图…'); flush();
+    if(key){
+      await api('/v1/providers', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name:'senseaudio', base_url: base, api_key: key, model: gen,
+                              vision_model: vis, kind:'openai_compatible', verify_ssl: true})});
+      loadProviders();
+    }
+    lines[2] = '✓ 3/4 对话:' + gen + ' · 识图:' + (vis || '(网关没有识图模型,图片打标改人工)'); flush();
+
+    lines.push('4/4 全链路测试(最多 2 分钟)…'); flush();
+    const r = await api('/v1/agent/test', {method:'POST'});
+    lines[3] = r.ok ? ('✓ 4/4 全链路通了'+(r.latency_ms?' · '+r.latency_ms+'ms':'')+' —— 现在拖入招标文件就能产真实标书')
+                    : ('✗ 4/4 测试未通过:'+(r.error||''));
+    flush();
+    el('qkKey').value=''; S.s2Models = models.length ? models : S.s2Models;
+    loadAgent();
+  }catch(e){ lines.push('✗ 出错:'+(e&&e.message||'没连上本地引擎')); flush(); }
+  btn.disabled = false;
+}
+async function saveAgent(quiet){
+  // 没连上引擎时必须抛错:静默 return 会让调用方(快速接入)以为存好了,配置里却还是上一个引擎
+  if(!S.online){ if(!quiet) pmsg('本地引擎未连接'); throw new Error('本地引擎未连接,设置没能保存'); }
+  const kind = el('agKind').value;
+  const mode = el('agMode').value;
+  await api('/v1/agent',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(agentPayload())});
+  if(quiet) return;
+  el('agMsg').textContent = '✓ 已保存:'+({mock:'内置演示流程',s2:'自动',sowork:'SoWork(商汤)',claude:'Claude Code',codex:'Codex CLI',custom:'自定义命令'}[kind])
+    +' · '+(mode==='workflow'?'Workflow 并行':'多子 agent 逐步')+' —— 新建任务即生效';
+  setTimeout(loadAgent, 1500);
+}
+
+/* ================= 素材库 ================= */
+async function saveAssetsDir(reset){
+  const dir = reset ? '' : el('adir').value.trim();
+  if(!reset && !dir){ toast('先填新位置的完整路径'); return; }
+  try{
+    const r = await api('/v1/assets/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir})});
+    toast(reset ? '已恢复默认位置' : '已更换素材库位置(原文件不搬迁,需要的话手动拷过去)');
+    el('adirRow').style.display='none'; loadAssets();
+  }catch(e){ toast('更换失败:路径建不出来或不可写'); }
+}
+async function loadAssets(){
+  if(!S.online){ el('aPath').textContent = isWin?'C:\\Users\\me\\Documents\\中标狗\\素材库':'~/Documents/中标狗/素材库'; el('aList').innerHTML=''; return; }
+  const a = await api('/v1/assets');
+  el('aPath').textContent = a.folder;
+  el('aPathNote').textContent = a.is_default ? '默认位置;所有素材都在这个文件夹里,生成时全部从这里取材' : '自定义位置(已替代默认);生成时全部从这里取材';
+  el('adir').value = a.is_default ? '' : a.folder;
+  el('adir').placeholder = '新位置完整路径;默认:' + (a.default || '');
+  const cats = {}; a.items.forEach(i=>{ cats[i.category]=(cats[i.category]||0)+1; });
+  let h = Object.keys(cats).map(c=>'<div class="lrow"><span class="dot" style="background:var(--blue)"></span><div class="c"><span class="n">'+esc(c)+'</span><span class="s">已整理</span></div><span style="font:400 12px/1 inherit;color:var(--faint)">'+cats[c]+' 项</span></div>').join('')
+    || '<div class="lrow" style="border-top:none"><div class="c"><span class="n" style="color:var(--sub)">文件夹还是空的</span><span class="s">上传一份过往标书试试,或把资质、业绩、图片拖进该文件夹</span></div></div>';
+  const rec = (a.recent||[]).map(r=>'<div class="lrow"><span class="dot" style="background:var(--amber)"></span><div class="c"><span class="n">'+esc(r.source)+'</span><span class="s">'+esc(r.ts)+' · '+r.sections+' 个章节 · '+r.images+' 张图</span></div></div>').join('');
+  if(rec) h += '<div class="lbl" style="padding-top:12px">最近入库</div>' + rec;
+  el('aList').innerHTML = h;
+}
+async function openAssetsFolder(){
+  try{ const r = await api('/v1/assets/open', {method:'POST'});
+    if(!r.ok) toast('无法自动打开,请手动前往:'+(r.folder||''));
+  }catch(e){ toast('云端模式不支持打开本机文件夹'); }
+}
+async function clearAssets(){
+  if(!await askConfirm('清空入库产生的素材?', '将删除:章节模板、图片、原始标书、图片索引与入库流水。你手动放进素材库的其他文件不受影响。', true)) return;
+  try{ const r = await api('/v1/assets?scope=ingested', {method:'DELETE'});
+    el('ingestMsg').style.display='block'; el('ingestMsg').textContent = '✓ 已清空 '+r.removed+' 个文件';
+  }catch(e){ toast('清空失败'); }
+  loadAssets();
+}
+async function ingestAsset(file){
+  if(!file) return;
+  if(!S.online){ toast('未连接本地引擎'); return; }
+  const m = el('ingestMsg'); m.style.display='block'; m.textContent = '整理中:'+file.name+' …';
+  const fd = new FormData(); fd.append('file', file);
+  try{
+    const r = await api('/v1/assets/ingest', {method:'POST', body:fd});
+    m.textContent = r.skipped ? ('· '+r.note)
+      : '✓ 已入库(本地解析,未调用模型):'+r.sections+' 个章节、'+r.images+' 张图片'
+        +(Object.keys(r.categories||{}).length?' · '+Object.entries(r.categories).map(([k,v])=>k+'×'+v).join(' · '):'')
+        +' — 存放于 '+(r.folder||'素材库')+'/章节模板、图片';
+  }catch(e){ m.textContent = '✗ 入库失败,请确认文件为 docx/md'; }
+  el('ingestin').value=''; loadAssets();
+}
+async function startVision(force){
+  const m = el('visionMsg'); m.style.display='block'; m.textContent = '启动中…';
+  try{
+    const r = await api('/v1/assets/vision_index'+(force?'?force=true':''), {method:'POST'});
+    if(!r.ok){ m.textContent = '✗ '+r.error; return; }
+    m.textContent = '识图中(模型:'+(r.model||'')+')…';
+    const t = setInterval(async()=>{
+      try{
+        const s = await api('/v1/assets/vision_index');
+        m.textContent = (s.running?'识图中':'已完成')+':'+s.done+'/'+s.total+' 张 · 成功打标 '+s.updated
+          + (s.errors && s.errors.length ? ' · 失败:'+s.errors[0] : '');
+        if(!s.running){ clearInterval(t); loadAssets(); }
+      }catch(e){ clearInterval(t); }
+    }, 2000);
+  }catch(e){ m.textContent = '✗ 启动失败,请先在上方配置模型接入点并填视觉模型'; }
+}
+
+/* ================= 演示模式 ================= */
+function demoBoot(){
+  S.jobs=[{job_id:'demo',name:'滨江新区智慧管网(演示)',pct:0,stage:'启动中'}];
+  select('demo'); demoRun('demo');
+}
+function demoNew(name){ const id='demo'+Date.now(); S.jobs.unshift({job_id:id,name:(name||'新任务').replace(/\.[^.]+$/,''),pct:0}); renderTasks(); select(id); demoRun(id); }
+// 演示台词:与真实运行同一条展示通道,只是内容是脚本化的样例(在线体验版没有本机引擎,不这样就只剩分隔线)
+const DEMO_LOG = {
+  '体检素材':['$ python3 preflight_check.py --tender 招标文件.pdf --materials 素材/',
+             '素材库定位成功:素材/(公司介绍.md、产品资料.md、产品能力表.md、资质与案例.md、图片索引.md)',
+             '图片索引 6 张已登记,均带落位锚点 ✓','招标文件为 PDF → 转换 招标文件_解析版.md(4.2 万字)'],
+  '读懂组成':['读 招标文件_解析版.md 第三章「投标文件组成」','识别:技术标 / 商务标 / 报价标 三册分装',
+             '附件模板 5 个已登记(投标函、法人授权书、偏离表、承诺函、报价表)','写出 投标文件组成.md'],
+  '提取格式':['提取正文字体:宋体小四 / 行距 1.5 倍 / 首行缩进 2 字符','页边距 上下 2.54cm 左右 3.17cm,装订线 0.5cm',
+             '页眉带项目名,页码分节(封面目录不编页)','写出 word_format_spec.json + 格式要求摘要.md'],
+  '评分废标':['解析评分办法表:技术分 60 / 商务分 25 / 价格分 15','高分值项 4 处已标【高】:信创适配、AI 修复、并发能力、误报治理',
+             '废标条款 7 条逐条登记(★项 3 条)','写出 评分点响应矩阵.md、废标风险清单.md'],
+  '拆解分工':['以投标文件组成为骨架设计大纲(技术方案 5 章)','每章生成招标摘录切片:章节切片/第N章_招标摘录.md',
+             '写出 00_响应矩阵.md,记录各章 must_cover'],
+  '分章撰写':['并行派出 5 个撰写子 agent(每章一个,不逐章串行)','第1章 项目理解 写入 章节/第1章.md · wc -m 3862 ✓',
+             '第2章 系统架构 写入 章节/第2章.md · wc -m 4105 ✓ · 打标 {{图:产品架构图}}',
+             '第3章 信创适配 写入 章节/第3章.md · wc -m 3711 ✓ · 打标 {{图:信创适配配置}}',
+             '第4章 实施与服务 写入 章节/第4章.md · wc -m 2980 ✗ 低于 3500,对该章重派扩写',
+             '第4章 扩写完成 · wc -m 3806 ✓','第5章 售后与培训 写入 章节/第5章.md · wc -m 3644 ✓'],
+  '逐条应答':['读 产品能力表.md(15 项能力,配图列已绑定图片ID)','逐条判定招标要求 32 条:满足 28 / 部分满足 3 / 不满足 1',
+             '不满足项已注明替代方案与说明','写出 技术应答偏离表.md、商务偏离表.md'],
+  '汇总成册':['$ python3 assemble_tender.py 章节/ --out 投标文件_技术标.md',
+             '按 投标文件组成.md 顺序拼装,逐字保留各章正文','总字数 19,028(各章之和 19,028,无缩水)',
+             '文首插入全局对照表,文末生成《投标人补料清单》'],
+  '配图复核':['$ python3 quality_gate.py 投标文件_技术标.md --materials 素材/ --fix',
+             '图片核对:6 张索引图 → 打标 5 处','「缺陷检测详情」打标位置与锚点不符 → 自动搬正到「代码缺陷检测」章',
+             '「白名单管理」有锚点未打标 → 自动补插到「误报治理」段','查重:未发现重复灌注段;字数:5 章全部 ≥3500 ✓',
+             '写出 成品质检报告.md(结论:通过)'],
+  '自查体检':['对照 00_响应矩阵.md 核对交付稿','要求覆盖率 100%(32/32) · 评分点覆盖率 100%(18/18)',
+             '废标条款 7 条逐条已规避 ✓','人工确认项 3 条已列入补料清单','写出 投标文件自检报告.md'],
+  '出Word质检':['$ python3 build_tender_docx.py 投标文件_技术标.md 技术标.docx --format-spec word_format_spec.json --images-dir 素材/',
+               '图片:自动插入 6 张,连续编号图注','$ python3 check_docx_format.py 技术标.docx',
+               '格式核验 18 项:纸张/页边距/装订线/字体/行距/缩进/页眉页脚/页码分节/目录/封面/表格 全部通过 ✓',
+               '质检通过,交付物已就位']
+};
+function demoRun(id){
+  const stages=['体检素材','读懂组成','提取格式','评分废标','拆解分工','分章撰写','逐条应答','汇总成册','配图复核','自查体检','出Word质检'];
+  let i=0; handle(id,{type:'message',role:'agent',text:'收到招标文件,开始读。读完我把结构、评分表和要你确认的事列出来。'});
+  // 台词逐行吐出:与真实运行观感一致(真实版来自引擎读 run.log 的增量)
+  let logQ = [], logT = setInterval(()=>{ if(logQ.length) handle(id,{type:'worklog',lines:[logQ.shift()]}); }, 260);
+  const tm=setInterval(()=>{
+    if(S.chips[id]){ return; }
+    if(i>=stages.length){ clearInterval(tm); setTimeout(()=>clearInterval(logT), 3000);
+      handle(id,{type:'artifact',name:'投标文件_技术标.md'}); handle(id,{type:'artifact',name:'投标文件自检报告.md'});
+      handle(id,{type:'progress',stage:'完成',pct:100,step:12,total:12});
+      handle(id,{type:'message',role:'agent',text:'已出 Word:全册与自检报告在交付目录。出件前有 3 项要你确认。'});
+      handle(id,{type:'health',level:'yellow',summary:'3 项人工确认后即可投',gaps:[
+        {level:'red',title:'投标人名称与报价未填',detail:'封面与投标函两处占位符'},
+        {level:'yellow',title:'安全生产许可证 2026-06 到期',detail:'评分表要求有效期内'},
+        {level:'yellow',title:'项目经理业绩缺一份中标通知书',detail:'要求近三年 2 个同类业绩'},
+        {level:'green',title:'格式质检全部通过',detail:'字体/行距/页边距/页码合规'}]});
+      return; }
+    handle(id,{type:'progress',stage:stages[i],pct:Math.round((i+0.5)/stages.length*100),step:i+1,total:stages.length});
+    logQ = logQ.concat(DEMO_LOG[stages[i]] || []);
+    if(stages[i]==='评分废标') handle(id,{type:'question',id:'q1',text:'安全生产许可证 2026-06 到期,等你上传新证还是按「即将换证」写?',options:['等我上传新证','按即将换证写']});
+    i++;
+  },2400);
+}
+
+/* 运行中的任务每秒刷新耗时/预估 */
+setInterval(()=>{ const p = S.prog[S.active]; if(S.active && p && (p.pct||0) < 100 && p.step){ renderHead(); renderRail(); } }, 1000);
+renderMain();
+boot();
+</script>
+</body>
+</html>
