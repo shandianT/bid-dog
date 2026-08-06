@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTM
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-ENGINE_VERSION = '0.17.3'
+ENGINE_VERSION = '0.17.6'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
@@ -259,6 +259,25 @@ def artifact_summary(job, names=None):
                    key=lambda n: (artifact_info(n)['group'], artifact_info(n)['rank'], n))
     primary = next((n for n in names if artifact_info(n)['group'] == 0 and n.lower().endswith('.docx')), None)
     checks = [n for n in names if artifact_info(n)['group'] == 1]
+    if not primary:
+        # 客户报障:「跑完了,没有生成标书」。之前这里照样播报「任务完成,已整理好 N 个文件」——
+        # 因为 md 稿件也算交付物,一堆 .md 就让 known 非空,完成态与告警全都失效。
+        # 缺最终 Word 就是没交付,必须当面说,并给一键补出的按钮(零 token,不重跑)。
+        body = _body_mds(job, names)
+        lines = ['⚠ **跑完了,但没有生成最终 Word 标书。**', '']
+        if body:
+            lines += ['正文稿已经写出来了(`%s`),缺的只是最后一步「导出 Word」——'
+                      '模型跳过了 build_tender_docx.py。点下面的按钮可以直接补出来,'
+                      '**不消耗额度、不用重跑**。' % '`、`'.join(body[:3]), '']
+        else:
+            lines += ['任务目录里连正文稿(投标文件_*.md)都没有,说明生成环节就没写成。'
+                      '请看运行日志确认是哪一步停的,然后重跑本任务。', '']
+        lines.append('已产出的 %d 个文件仍在右侧“已产出”里,可以逐个查看。' % len(names))
+        actions = ([{'act': 'export_docx', 'label': '立即补出 Word'}] if body else []) \
+            + [{'act': 'open_log', 'label': '查看运行日志'},
+               {'act': 'rerun', 'label': '重跑本任务'},
+               {'act': 'open_job_folder', 'label': '打开任务文件夹'}]
+        return '\n'.join(lines), actions
     lines = ['任务完成，已整理好 **%d 个文件**。' % len(names), '', '**建议按这个顺序查看：**']
     if primary: lines.append('1. `%s` — 最终 Word，先检查内容与排版。' % primary)
     if checks: lines.append('%d. `%s` — 查看风险、缺项和人工确认事项。' % (2 if primary else 1, checks[0]))
@@ -489,6 +508,128 @@ def _job_find(job, *pats):
             if hits: return hits[0]
     return None
 
+# 收拢产物时跳过的目录。「参考资料」是客户自己上传的输入件,收上来会被当成我们的产出,
+# 既污染交付清单,又让「跑完却没产出」的告警失灵——和 NOT_DELIVERABLE 是同一个坑。
+HARVEST_SKIP = {'素材', '章节', '参考资料', 'materials', 'node_modules', '__pycache__',
+                'venv', '.venv', 'bid-multiagent-tao', 'references', 'images', '图片', 'assets'}
+
+def harvest(job, depth=3):
+    """把写进子目录的交付物收回任务根目录。
+
+    AGENT_PROMPT 第 1 条写着「所有产物直接写入 outDir,不要另建下层输出目录」,
+    但模型照建不误——`outDir/投标文件/技术标.docx` 这种。以前只扫一层、
+    而且文件名必须以「投标」开头,漏掉的就等于没产出:任务跑完客户一份标书都看不到
+    (完成播报里列的「② 产物写到别处了」说的就是这个,只是当时没真的去捞)。
+    现在按目录深度递归,凡是交付扩展名的文件都往上收。"""
+    moved = []
+    def walk(d, lv):
+        if lv > depth: return
+        try: entries = sorted(os.listdir(d))
+        except Exception: return
+        for name in entries:
+            p = os.path.join(d, name)
+            if os.path.isdir(p):
+                if name in HARVEST_SKIP or name.startswith(('.', '_')): continue
+                walk(p, lv + 1)
+            elif name.endswith(DELIVER_EXT) and not name.startswith(('_', '.')) \
+                    and name not in NOT_DELIVERABLE:
+                dst = os.path.join(job, name)
+                if os.path.exists(dst): continue     # 根目录已有同名:根目录那份才是终稿,不覆盖
+                try: shutil.move(p, dst); moved.append(name)
+                except Exception: pass
+    for name in sorted(os.listdir(job)):
+        p = os.path.join(job, name)
+        if os.path.isdir(p) and name not in HARVEST_SKIP and not name.startswith(('.', '_')):
+            walk(p, 1)
+    return moved
+
+# 正文稿识别:这些关键词一出现就不是正文,是报告/分析/中间件
+_NOT_BODY = ('自检', '清洗', '报告', '质检', '门禁', '矩阵', '偏离表', '解析版',
+             '配图清单', '补料', '废标', '组成', '索引', '格式要求', '大纲', '.bak')
+
+def _body_mds(job, known=None):
+    """挑出「可以拿去导出 Word 的正文稿」。
+
+    原来只认 fn.startswith('投标'),模型把正文命名成《技术标.md》《XX项目标书.md》时
+    全链路都当它不存在:质检退回旧门禁、修复稿不重建 docx、缺 Word 也不告警。
+    现在放宽到常见命名,再兜底"最大的那份 md",宁可多认一份也不要漏掉正文。"""
+    names = list(known) if known is not None else list_deliverables(job)
+    mds = [fn for fn in sorted(names)
+           if fn.endswith('.md') and not any(k in fn for k in _NOT_BODY)]
+    hit = [fn for fn in mds if fn.startswith('投标')]
+    if not hit:
+        hit = [fn for fn in mds if any(k in fn for k in ('投标文件', '技术标', '商务标', '标书', '方案'))]
+    if not hit and mds:
+        # 还是认不出来:取最大的一份。门槛 1200 字节 ≈ 400 汉字——再小的多半是清单/说明而不是正文,
+        # 硬导出只会给客户一份空壳 Word;报告清单类文件名前面已经排除过了,这里的误判风险很低。
+        big = max(mds, key=lambda f: os.path.getsize(os.path.join(job, f)))
+        if os.path.getsize(os.path.join(job, big)) > 1200: hit = [big]
+    return hit
+
+def ensure_docx(job, known):
+    """兜底导出 Word:有正文 md、却一个 docx 都没有时,引擎自己把 Word 出出来。
+
+    客户报障的真实场景:任务跑到 100%「完成」,右侧一堆 .md,就是没有标书。
+    根因是 agent 写完正文就收工,没跑 build_tender_docx.py;而引擎这边
+    只有「质检修复动作真实发生」时才会重建 docx,green 直接放过去了。
+    导出是确定性脚本、零 token,没有任何理由不兜。返回新出的文件名列表。"""
+    if any(fn.lower().endswith('.docx') for fn in known): return []
+    body = _body_mds(job, known)
+    if not body: return []
+    bt = _skill_module('build_tender_docx')
+    if not bt:
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '⚠ 正文已写好但没出 Word,而技能包里的导出脚本 build_tender_docx.py 也没找到。'
+                           '请到「设置 · 生成引擎」确认技能包路径,或重跑本任务。'})
+        return []
+    mdir = os.path.join(job, '素材')
+    mat = mdir if os.path.isdir(mdir) else assets_dir()
+    spec_f = _job_find(job, 'word_format_spec.json')
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    made = []
+    for fn in body:
+        stem = os.path.splitext(fn)[0]
+        target = stem + '.docx'
+        argv = [os.path.join(job, fn), os.path.join(job, target),
+                '--title', str(meta.get('name') or stem), '--images-dir', mat]
+        if spec_f: argv += ['--format-spec', spec_f]
+        old_argv = sys.argv
+        try:
+            sys.argv = ['build_tender_docx.py'] + argv
+            try: bt.main()
+            except SystemExit as e:
+                if e.code: raise RuntimeError('导出脚本退出码 %s' % e.code)
+        except Exception as e:
+            emit(job, {'type': 'message', 'role': 'agent',
+                       'text': '⚠ 自动补出 Word 失败(%s):`%s` 的正文是好的,'
+                               '可以先打开 md 查看,或点「重跑本任务」。' % (e, fn)})
+            continue
+        finally:
+            sys.argv = old_argv
+        if os.path.isfile(os.path.join(job, target)):
+            made.append(target); known.add(target)
+            emit(job, {'type': 'artifact', 'name': target})
+    if made:
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '📄 模型写完正文就收工了,没执行最后一步导出。已由引擎**自动补出 Word**:`%s`'
+                           '(确定性脚本,零额度消耗;封面/目录/页眉页脚/图片落位都按格式规范生成)。'
+                           % '`、`'.join(made),
+                   'actions': [{'act': 'open_artifact', 'label': '打开 Word', 'file': made[0]}]})
+    return made
+
+@app.post('/v1/jobs/{jid}/export_docx')
+def export_docx(jid: str):
+    """手动补出 Word:任务跑完没有 docx 时,前端「立即补出 Word」按钮调它。"""
+    job = jpath(jid)
+    if not os.path.isdir(job):      # 任务被删了/换了机器:要返 404,别让 os.listdir 抛成 500
+        return JSONResponse({'ok': False, 'error': '任务不存在(可能已被删除)'}, 404)
+    known = set(list_deliverables(job))
+    made = ensure_docx(job, known)
+    if made: return {'ok': True, 'made': made}
+    if any(fn.lower().endswith('.docx') for fn in known):
+        return {'ok': True, 'made': [], 'error': '任务里已经有 Word 了,不用再补'}
+    return JSONResponse({'ok': False, 'error': '没有找到可导出的正文稿(投标文件_*.md),请重跑本任务'}, 400)
+
 def quality_audit(job, known):
     """完成后的确定性质检 + 自动修复 + 重出 Word(引擎兜底,不管模型有没有自觉跑过):
     图片按索引锚点搬正/补插/剔除、重复段折叠、按章字数、应答覆盖率 → 《成品质检报告》。
@@ -499,8 +640,7 @@ def quality_audit(job, known):
     mat = mdir if os.path.isdir(mdir) else assets_dir()
     score = _job_find(job, '评分点响应矩阵.md')
     devs = [p for p in [_job_find(job, '技术应答偏离表.md'), _job_find(job, '商务偏离表.md')] if p]
-    mds = [fn for fn in sorted(known) if fn.endswith('.md') and fn.startswith('投标')
-           and not any(k in fn for k in ('自检', '清洗', '报告', '.bak'))]
+    mds = _body_mds(job, known)     # 与兜底导出共用同一套正文识别,避免命名一变全链路失灵
     if not mds: return content_gate(job, known)
     worst, fixed_total, lines = 'green', 0, []
     order = {'green': 0, 'yellow': 1, 'red': 2}
@@ -721,18 +861,14 @@ def real_agent(job, cmd):
         emit(job, ev)
         emit(job, {'type': 'progress', 'stage': '已停止(未能启动生成)', 'pct': 0, 'step': 0, 'total': 12})
     stop.set(); log.close(); RUNNING.discard(base)
-    for d in os.listdir(job):
-        sub = os.path.join(job, d)
-        if os.path.isdir(sub) and d not in ('素材', '章节') and not d.startswith(('.', '_')):
-            for fn in os.listdir(sub):
-                if fn.endswith(DELIVER_EXT) and not fn.startswith(('_', '.')) and \
-                        (fn.startswith('投标') or '自检' in fn or fn.endswith(('.docx', '.xlsx'))):
-                    dst = os.path.join(job, fn)
-                    if not os.path.exists(dst):
-                        try: shutil.move(os.path.join(sub, fn), dst)
-                        except Exception: pass
+    harvest(job)
     for fn in list_deliverables(job):
         if fn not in known: known.add(fn); emit(job, {'type': 'artifact', 'name': fn})
+    # 正文写了却没出 Word → 引擎零 token 补出来。放在分支判断之前:成功、异常退出、3 小时超时
+    # 三条路都可能停在"正文写完、最后一步没跑"这个位置,救的动作是同一个。
+    try: ensure_docx(job, known)
+    except Exception as e:
+        emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 补出 Word 未能执行:%s' % e})
     if rc == 0 and known:
         emit(job, {'type': 'progress', 'stage': '完成', 'pct': 100, 'step': 12, 'total': 12})
         summary, actions = artifact_summary(job, known)
@@ -822,6 +958,9 @@ AGENT_PROMPT = ('你是标书生成 agent。先完整阅读 {skill}/SKILL.md,然
     '{"type":"progress","stage":"<阶段名>","pct":<0-100>,"step":<序号>,"total":12};'
     '需要用户决策时追加 {"type":"question","id":"q<n>","text":"<问题>","options":["<选项1>","<选项2>"]} 并继续可并行工作;'
     '5) 最终交付物(投标文件_*.md、*.docx、投标文件自检报告.md)落在 outDir 根目录,出 Word 后必跑 check_docx_format.py 格式门禁;'
+    '**没有 .docx 就等于这一单没交付**——客户要的是能直接提交的 Word,不是 md。'
+    '正文写完必须亲自跑 build_tender_docx.py 出 Word,跑完 ls 确认文件真的在 outDir 根目录、体积不为 0,'
+    '确认到了才允许结束;哪怕时间紧、哪怕正文还想再润色,也要先把 Word 出出来;'
     '6) **素材库是唯一事实来源**:开工前先 ls materialsDir 并通读其中的 公司介绍.md / 产品资料.md / 产品能力表.md / '
     '资质与案例.md / 应答要点.md / 图片索引.md 与 章节模板/ 目录;我方身份、产品能力、资质案例一律取自这里,'
     '缺什么写〔需补充〕,严禁编造,也不要另建空素材目录;'
@@ -829,13 +968,15 @@ AGENT_PROMPT = ('你是标书生成 agent。先完整阅读 {skill}/SKILL.md,然
     '(ID 只能用索引里登记过的,按索引的"落位锚点"插),出 Word 时给 build_tender_docx.py 传 --images-dir "<materialsDir>",'
     '让图片真正插进文档;索引不存在则在正文标注〔配图建议:说明〕;'
     '8) **正文必须是完整段落**:严禁把一句话拆成一行一个字、严禁同一段落反复灌注多次(会被内容门禁判定为废稿);'
-    '**每章正文≥3500 字**,每章写完用 wc -m 自查,不达标就地扩写该章再继续;'
+    '**篇幅按招标文件的分量走,不设统一字数目标**——给定一个数字,弱模型就会靠复制模板去凑'
+    '(真机事故:给了「8—9 万字符」,它给 18 个章节套同一组小标题灌到 12 万字)。'
+    '论述章写完用 wc -m 看一眼,明显偏薄的就地扩写;**格式件、证明件、表单本来就短,不要往里灌内容**;'
     '9) **出 Word 之前必跑质检脚本**:python3 {skill}/references/quality_gate.py <交付稿.md> '
     '--materials {materials} --fix ——它会按图片索引的锚点自动校正图片位置、补插漏图、剔除不存在的图片ID、'
     '折叠重复段落,并产出《成品质检报告.md》;跑完再出 Word。图片ID 只准用图片索引里登记过的,严禁自造。'
     '10) **开工第一件事:读 outDir/你的要求.md**(存在的话)——那是本次客户自己写的要求,'
     '优先级仅次于招标文件的强制条款与格式门禁,高于你自己的写作习惯;'
-    '里面的角色设定、篇幅目标、章节侧重、语气风格、必须生成的承诺函等,逐条落实,'
+    '里面的角色设定、章节侧重、语气风格、必须生成的承诺函等,逐条落实(客户自己写了字数要求才按它来),'
     '并在《投标文件自检报告》里逐条说明落实情况(未落实的必须写明原因)。')
 
 # 生成方式:agents=主控编排(SKILL.md 路径B,稳;分析与撰写环节并行提速);workflow=一条流水线并行(快,但更易半路失败)
@@ -855,7 +996,7 @@ def skill_dir_conf(conf=None):
     custom = eng.get('skill_dir') or os.environ.get('SKILL_DIR')
     return custom or ensure_skill()   # 托管默认目录必须走 ensure_skill:带版本标记,升级后自动刷新存量目录
 
-SKILL_VERSION = '5.7'   # 技能包内容版本:已解压目录比它旧(或无标记)时,用内置 zip 自动刷新
+SKILL_VERSION = '5.8'   # 技能包内容版本:已解压目录比它旧(或无标记)时,用内置 zip 自动刷新
 
 def ensure_skill():
     """内置技能包:首次运行自动解压到数据目录;版本升级后老目录自动刷新,修复能到存量用户手里"""
@@ -2357,6 +2498,15 @@ def split_md_sections(text):
         secs.append((cur_t or '未命名章节', '\n'.join(cur).strip()))
     return [(t, c) for t, c in secs if c.strip()]
 
+def _style_name(p):
+    """安全取段落样式名。真实招标/投标 docx(尤其 .doc 转来的、或 WPS 出的)常有 p.style 为 None,
+    直接 p.style.name 会抛 AttributeError 把整个解析打崩——用户给的那份工程招标文件就崩在这里。"""
+    try:
+        st = p.style
+        return (st.name if st is not None and st.name else '') or ''
+    except Exception:
+        return ''
+
 def docx_to_sections_and_images(path, img_dir):
     """docx → (按标题拆分的章节, 提取出的图片文件名);表格转 markdown 表"""
     import hashlib
@@ -2382,7 +2532,7 @@ def docx_to_sections_and_images(path, img_dir):
             p = Paragraph(child, doc)
             t = p.text.strip()
             if not t: continue
-            style = (p.style.name or '').lower()
+            style = _style_name(p).lower()      # p.style 可能为 None(真实招标文件里常见),不能直接取 .name
             if 'heading 1' in style or style == '标题 1': out.append('# ' + t)
             elif 'heading 2' in style or style == '标题 2': out.append('## ' + t)
             elif 'heading' in style or style.startswith('标题'): out.append('### ' + t)

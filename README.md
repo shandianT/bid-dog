@@ -4,7 +4,7 @@
 **给谁用** — 拿到 Key 的同事和客户：装上、粘 Key、拖文件，不用注册 AI 账号。写代码的看文末架构小节。
 **怎么开始** — 到 [Releases](https://github.com/shandianT/bid-dog/releases/latest) 下载 dmg / exe → 打开后粘一串 Key、选一个模式 → 把招标文件拖进窗口。
 
-[![release](https://img.shields.io/badge/release-v0.17.3-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
+[![release](https://img.shields.io/badge/release-v0.17.6-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
 [![build](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/macOS%20Apple%20Silicon%20%7C%20Windows%20x64-111111)
 
@@ -59,8 +59,8 @@ https://bid-dog.vercel.app/demo.html?demo=1
 
 | 系统 | 安装包 | 说明 |
 |---|---|---|
-| macOS | [`bid-dog_0.17.3_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.3/bid-dog_0.17.3_aarch64.dmg) | Apple Silicon（M 系列） |
-| Windows | [`bid-dog_0.17.3_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.3/bid-dog_0.17.3_x64-setup.exe) | Windows 10 / 11 64 位 |
+| macOS | [`bid-dog_0.17.6_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.6/bid-dog_0.17.6_aarch64.dmg) | Apple Silicon（M 系列） |
+| Windows | [`bid-dog_0.17.6_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.6/bid-dog_0.17.6_x64-setup.exe) | Windows 10 / 11 64 位 |
 
 安装包目前未做商业代码签名，两个系统各有一次放行动作，做完就再也不会提示：
 
@@ -79,7 +79,7 @@ https://bid-dog.vercel.app/demo.html?demo=1
 2. **粘 Key、选模式** —— 打开「设置 · 模型接入」，把发给你的 Key 粘进快速接入卡，选**标准**（写正式标书）或**极速**（试跑更快、更省额度），点一键接入。生成、对话、识图三件事一次全配好，四步实时打勾，配完当场测通。
 3. **拖招标文件** —— 把招标文件（PDF / DOCX / Markdown）拖进窗口任意位置，按向导确认一下哪份是招标文件，点开始。跑的过程中可以随时提要求、补材料、暂停或重跑。
 
-向导里的「你的要求」**预填了一份投标方案专家提示词**（小标题必须每章现拟、逐条应答招标条款、不编造、资质单独成章），改两句就能用，也可以整段换掉。这段会存进任务目录的《你的要求.md》，agent 开工先读，自检报告里逐条回执。
+向导里的「你的要求」**预填了一份投标方案专家提示词**（小标题必须每章现拟、逐条应答招标条款、不编造、资质整块留位给人粘贴），改两句就能用，也可以整段换掉。这段会存进任务目录的《你的要求.md》，agent 开工先读，自检报告里逐条回执。
 
 不用注册账号、不用登录 AI 服务、不用装 Node.js 和 Python、不用开终端。不填配置也能先跑一遍内置演示。
 
@@ -93,14 +93,15 @@ https://bid-dog.vercel.app/demo.html?demo=1
 
 | 查什么 | 结果 |
 |---|---|
-| **图片落位** | 放错章节的图搬回去，漏配的补上，模型编出来的图剔掉。 |
+| **图片落位** | 放错章节的图搬回去，漏配的补上，模型编出来的图剔掉。资质/合同/证照类只留粘贴位，不自动插——插错一张就是造假风险。 |
 | **查重** | 同一段话换个说法反复写、逐字打散的碎片，折叠合并。 |
 | **篇幅** | 按章核字数，太薄的标出来。 |
 | **应答覆盖率** | 拿偏离表逐条对评分点，漏答的列清单。 |
 | **Word 格式** | 字体、页边距、页码、表格列宽等三十多项挨个核，宽表转横排、表头跨页重复。 |
 
-还有两条：
+还有三条：
 
+- **没出 Word 不算跑完。** 模型偶尔会把正文写完就收工、不执行最后一步导出。这种时候引擎自己把 Word 出出来——确定性脚本、不重跑、不花额度；实在出不来就直说「跑完了，但没有生成最终 Word」，而不是报一句「完成」让你自己去找。
 - **不编造。** 素材库（公司资料、资质案例、图片索引）是唯一事实来源。资质、案例、报价缺了就标〔需补充〕，进补料清单。
 - **不替你签字。** 投标人名称、报价、资质有效期、承诺与签章都留给人确认，出件前检查里的红色项不处理就不让出件。
 
