@@ -104,8 +104,8 @@ jobs:
           ls -la out
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: desktop-v0.17.8
-          name: 中标狗桌面版 v0.17.8
+          tag_name: desktop-v0.17.9
+          name: 中标狗桌面版 v0.17.9
           # 不再标 prerelease:标了的话 /releases/latest 与 /releases/latest/download/… 全部 404,
           # 官网和 README 的「下载最新版」就没法用一条稳定链接
           prerelease: false
@@ -117,13 +117,23 @@ jobs:
             在线体验(不用装):
             https://bid-dog.vercel.app/demo.html?demo=1
 
-            - macOS Apple Silicon(M 系列): `bid-dog_0.17.8_aarch64.dmg`
-            - Windows: `bid-dog_0.17.8_x64-setup.exe`
+            - macOS Apple Silicon(M 系列): `bid-dog_0.17.9_aarch64.dmg`
+            - Windows: `bid-dog_0.17.9_x64-setup.exe`
             -(需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可)
 
             **macOS 提示「已损坏,无法打开」?** 不是文件坏了,是系统对未签名应用的拦截。把应用拖入「应用程序」后,终端执行:
             `xattr -cr /Applications/中标狗.app` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。详见仓库 docs/Mac安装说明.md。
             Windows SmartScreen 提示时点「更多信息 → 仍要运行」。
+
+            v0.17.9:
+            - **参考资料真的送到 agent 手上**(第五例「界面承诺、链路没接」)。用户传一份去年的
+              中标标书想让它照着写,界面三处都写着「AI 撰写时会参考它的写法」——而「参考资料」
+              这三个字在 agent 指令与整个技能包里一次都没出现过,文件只是躺在任务目录里。
+              现在复制进素材目录(agent 开工必读),并附清单写明「只作行文与口径参照,
+              事实数据不得从参考件里搬」;回执也不再承诺做不到的事。
+            - **「它正在做什么」不再全程空白**。实时台词靠读 agent 的控制台输出,而三个引擎里
+              只有 codex 真往控制台写 —— 另外两个跑一个多小时界面上一个字都没有,谁都以为卡住了。
+              现在降级显示「正在:分章撰写 · 第 7/12 步 · 已用 41 分钟」并说明原因。
 
             v0.17.8:
             - **修 OpenCode 每一单都永久挂死**(拿真实招标文件做引擎对比时挖出来的)。

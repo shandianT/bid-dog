@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTM
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-ENGINE_VERSION = '0.17.8'
+ENGINE_VERSION = '0.17.9'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
@@ -1023,6 +1023,10 @@ AGENT_PROMPT = ('你是标书生成 agent。先完整阅读 {skill}/SKILL.md,然
     '6) **素材库是唯一事实来源**:开工前先 ls materialsDir 并通读其中的 公司介绍.md / 产品资料.md / 产品能力表.md / '
     '资质与案例.md / 应答要点.md / 图片索引.md 与 章节模板/ 目录;我方身份、产品能力、资质案例一律取自这里,'
     '缺什么写〔需补充〕,严禁编造,也不要另建空素材目录;'
+    '**materialsDir 下若有 参考资料/ 目录**(投标人上传的过往中标标书等),开工前通读它,'
+    '**照着它的章节组织方式、行文口径、详略分配写**——那是这家公司真实中过标的写法;'
+    '但事实数据(公司名、业绩、资质、人员、报价)一律以素材库其余文件为准,'
+    '**绝不许从参考件里搬**,那是另一个项目的,搬过来就是编造;'
     '7) **必须配图**:若 materialsDir/图片索引.md 存在,撰写时在讲到对应能力/架构/资质处独立成行打标 {{图:图片ID}}'
     '(ID 只能用索引里登记过的,按索引的"落位锚点"插),出 Word 时给 build_tender_docx.py 传 --images-dir "<materialsDir>",'
     '让图片真正插进文档;索引不存在则在正文标注〔配图建议:说明〕;'
@@ -1640,21 +1644,55 @@ def chat_reply(job, jid, question):
 
 @app.post('/v1/jobs/{jid}/attachments')
 async def add_attachment(jid: str, file: UploadFile = File(...)):
-    """给当前任务加参考资料(如过往标书),agent 与追问都会读到它"""
+    """给当前任务加参考资料(如过往中标标书),让 agent 能照着它的写法与口径写。
+
+    以前这里只把文件存进 job/参考资料/ 再往 inbox.jsonl 写一条 —— 而 inbox.jsonl 没有
+    任何消费者,`参考资料` 三个字在 AGENT_PROMPT 与整个技能包里**一次都没出现过**。
+    界面上三处却都写着「AI 撰写时会参考它的写法」。用户传一份去年的中标标书想让它照着写,
+    agent 一个字都读不到 —— 这是「界面承诺、链路没接」的第五例。
+
+    现在改成确定性投递:把文件复制进 **materialsDir 下的 参考资料/**(agent 被明令
+    开工先 ls materialsDir),并维护一份《参考资料清单.md》说明每份是什么、该怎么用。
+    这条通道是 A 级的:引擎自己写、agent 一定看得到目录,不依赖任何模型纪律。"""
     job = jpath(jid)
     if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': 'not found'}, 404)
     d = os.path.join(job, '参考资料'); os.makedirs(d, exist_ok=True)
     fn = os.path.basename(file.filename or '参考资料')
-    open(os.path.join(d, fn), 'wb').write(await file.read())
+    blob = await file.read()
+    open(os.path.join(d, fn), 'wb').write(blob)
+    # 关键一步:进 materialsDir,agent 才够得着
+    delivered = False
+    try:
+        md = os.path.join(merged_materials(job), '参考资料')
+        os.makedirs(md, exist_ok=True)
+        open(os.path.join(md, fn), 'wb').write(blob)
+        idx = os.path.join(os.path.dirname(md), '参考资料清单.md')
+        if not os.path.isfile(idx):
+            open(idx, 'w', encoding='utf-8').write(
+                '# 参考资料清单\n\n'
+                '> 投标人上传的参考件(多为过往中标标书)。**只作行文与口径的参照**:\n'
+                '> 章节怎么组织、话怎么说、详略怎么分配可以学它。\n'
+                '> **事实数据一律以本素材库其余文件为准**,不得从参考件里搬公司名、\n'
+                '> 业绩、资质、人员、报价——那是另一个项目的,搬过来就是编造。\n\n'
+                '| 文件 | 上传时间 |\n|---|---|\n')
+        open(idx, 'a', encoding='utf-8').write('| 参考资料/%s | %s |\n' % (fn, now()))
+        delivered = True
+    except Exception:
+        pass
     emit(job, {'type': 'message', 'role': 'user', 'text': '（已上传参考资料:%s）' % fn})
-    note = {'type': 'reference', 'file': '参考资料/' + fn,
-            'hint': '这是用户提供的参考资料,撰写时可参考其写法与口径,但事实数据仍以素材库为准'}
-    open(os.path.join(job, 'inbox.jsonl'), 'a', encoding='utf-8').write(json.dumps(note, ensure_ascii=False) + '\n')
-    running = os.path.basename(jid) in RUNNING
-    emit(job, {'type': 'message', 'role': 'agent',
-               'text': ('已收到参考资料「%s」,会在后续章节里参考它的写法。' % fn) if running
-                       else ('已收到参考资料「%s」,已存入任务的「参考资料」目录;现在可以直接问我关于它的问题。' % fn)})
-    return {'ok': True, 'name': fn}
+    running = job_state(job) == 'running'
+    if not delivered:
+        txt = ('已存到任务的「参考资料」目录,但**没能放进素材目录**,这一单的 agent 可能读不到它。'
+               '可以打开任务文件夹手动把它放进素材库。')
+    elif running:
+        # 正在跑的这一轮,agent 早就 ls 过素材目录了 —— 别再承诺「后续章节会参考」
+        txt = ('已收到「%s」并放进素材目录。**这一轮多半已经错过了**(agent 开工时就读完了素材目录),'
+               '它会在下次「重跑」或「定向重做」时被读到。现在也可以直接问我关于它的问题。' % fn)
+    else:
+        txt = ('已收到「%s」并放进素材目录,开跑时 agent 会读到它,照着它的写法与口径写'
+               '(事实数据仍以素材库其余文件为准)。现在也可以直接问我关于它的问题。' % fn)
+    emit(job, {'type': 'message', 'role': 'agent', 'text': txt})
+    return {'ok': True, 'name': fn, 'delivered': delivered}
 
 @app.get('/v1/jobs/{jid}/attachments')
 def list_attachments(jid: str):

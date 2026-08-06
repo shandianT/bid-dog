@@ -4,7 +4,7 @@
 **给谁用** — 拿到 Key 的同事和客户：装上、粘 Key、拖文件，不用注册 AI 账号。写代码的看文末架构小节。
 **怎么开始** — 到 [Releases](https://github.com/shandianT/bid-dog/releases/latest) 下载 dmg / exe → 打开后粘一串 Key、选一个模式 → 把招标文件拖进窗口。
 
-[![release](https://img.shields.io/badge/release-v0.17.8-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
+[![release](https://img.shields.io/badge/release-v0.17.9-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
 [![build](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/macOS%20Apple%20Silicon%20%7C%20Windows%20x64-111111)
 
@@ -59,8 +59,8 @@ https://bid-dog.vercel.app/demo.html?demo=1
 
 | 系统 | 安装包 | 说明 |
 |---|---|---|
-| macOS | [`bid-dog_0.17.8_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.8/bid-dog_0.17.8_aarch64.dmg) | Apple Silicon（M 系列） |
-| Windows | [`bid-dog_0.17.8_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.8/bid-dog_0.17.8_x64-setup.exe) | Windows 10 / 11 64 位 |
+| macOS | [`bid-dog_0.17.9_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.9/bid-dog_0.17.9_aarch64.dmg) | Apple Silicon（M 系列） |
+| Windows | [`bid-dog_0.17.9_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.9/bid-dog_0.17.9_x64-setup.exe) | Windows 10 / 11 64 位 |
 
 安装包目前未做商业代码签名，两个系统各有一次放行动作，做完就再也不会提示：
 

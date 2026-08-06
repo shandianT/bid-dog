@@ -1035,8 +1035,27 @@ async function rerunJob(skipAsk){
 function renderWorklog(){
   const host = el('wlHost'); if(!host) return;
   const id = S.active, wl = (id && S.worklog[id]) || [];
-  if(!wl.length){ host.innerHTML=''; return; }
-  const p = S.prog[id]||{}; const live = (p.pct||0) < 100;
+  const p0 = S.prog[id]||{};
+  const j0 = (S.jobs||[]).find(x=>x.job_id===id);
+  const running = j0 ? jobState(j0)==='running' : (p0.pct||0)<100 && p0.step;
+  /* 台词是从 agent 的 stdout 增量读出来的,而三个引擎里只有 codex 真往 stdout 写:
+     claude 的 -p 模式跑完才吐(全程 0 字节)、opencode 的子 agent 输出走它自己的 SQLite
+     会话库 —— 实测下来「它正在做什么」对三分之二的用户是全程空白的,
+     任务跑一个多小时界面上一个字都没有,谁都会以为卡住了。
+     没有台词时降级成「进度 + 已等多久」,至少让人知道它还活着、活在哪一步。 */
+  if(!wl.length){
+    if(!running){ host.innerHTML=''; return; }
+    const t = timing(id);
+    const bits = [p0.stage ? '正在:'+esc(p0.stage) : '正在启动'];
+    if(p0.step) bits.push('第 '+p0.step+'/'+(p0.total||12)+' 步');
+    if(t && t.elapsed) bits.push('已用 '+fmtDur(t.elapsed));
+    host.innerHTML = '<details class="wl" open><summary>⚙ 它正在做什么</summary>'
+      + '<pre id="wlBody">' + bits.join(' · ')
+      + '\n\n这个引擎不往控制台输出实时台词(不同引擎行为不同),所以这里只显示阶段进度。'
+      + '\n产物会在右侧「已产出」里逐个出现——那是它真的在干活的证据。</pre></details>';
+    return;
+  }
+  const p = p0; const live = (p.pct||0) < 100;
   const had = el('wlBody');
   const stick = had ? (had.scrollTop + had.clientHeight >= had.scrollHeight - 30) : true;
   host.innerHTML = '<details class="wl"'+(live?' open':'')+'><summary>'+(live?'⚙ 它正在做什么':'⚙ 工作过程回放 · '+wl.length+' 行')+'</summary>'
