@@ -11,6 +11,8 @@
     "windows": [
       {
         "title": "中标狗",
+        "url": "index.html?desktop=0.18.2-18802",
+        "incognito": true,
         "width": 1440,
         "height": 940,
         "minWidth": 1100,

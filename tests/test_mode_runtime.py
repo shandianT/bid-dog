@@ -29,7 +29,7 @@ def test_probe_cache_is_scoped_to_effective_mode(engine, monkeypatch):
 
 def test_running_task_rejects_global_mode_switch(engine):
     engine.write_json(engine.conf_path(), _config("senseaudio-s2"))
-    engine.RUNNING.add("job-1")
+    assert engine._reserve_running("job-1")
     with TestClient(engine.app) as client:
         response = client.put(
             "/v1/agent",
@@ -125,3 +125,127 @@ def test_interrupted_server_run_is_never_replayed_from_scratch(engine, job, monk
 
     assert cli_calls == []
     assert settle_calls and "中断" in settle_calls[-1].get("stop_reason", "")
+
+
+def test_clean_exit_stops_detached_opencode_server(engine, monkeypatch):
+    class FakeProcess:
+        pid = 12345
+
+        @staticmethod
+        def poll():
+            return None
+
+    proc = FakeProcess()
+    detached = FakeProcess()
+    killed = []
+    exited = []
+    engine.OC.update(
+        {
+            "proc": proc,
+            "port": 9123,
+            "base": "http://127.0.0.1:9123",
+            "pw": "synthetic-password",
+            "fingerprint": "synthetic-fingerprint",
+        }
+    )
+    engine.DETACHED_CHILDREN[id(detached)] = detached
+    monkeypatch.setattr(engine, "kill_tree", lambda target: killed.append(target))
+    monkeypatch.setattr(engine.os, "_exit", lambda code: exited.append(code))
+
+    engine._exit_process_cleanly()
+
+    assert killed == [detached, proc]
+    assert exited == [0]
+    assert engine.OC == {"proc": None, "port": 0, "base": "", "pw": "", "fingerprint": ""}
+
+
+def test_shutdown_rejects_new_launches_until_desktop_reconnects(engine, monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(
+        engine, "_schedule_clean_exit",
+        lambda generation, delay: scheduled.append((generation, delay)),
+    )
+
+    result = engine.shutdown()
+
+    assert result["exiting"] is True
+    assert scheduled and scheduled[-1][1] == 0.3
+    assert engine._reserve_running("late-job") is None
+
+    engine.health()
+    owner = engine._reserve_running("late-job")
+    assert owner
+    assert engine._release_running("late-job", owner) is True
+
+
+def test_stale_shutdown_generation_cannot_exit_after_health_reconnect(engine, monkeypatch):
+    exits = []
+    monkeypatch.setattr(engine, "_exit_process_cleanly", lambda: exits.append(1))
+    with engine.RUNNING_LOCK:
+        engine.SHUTDOWN_GENERATION = 7
+        engine.SHUTTING_DOWN = True
+        engine.HOST_GONE = True
+
+    response = engine.health()
+
+    assert response["ok"] is True
+    assert engine._exit_if_shutdown(7) is False
+    assert exits == []
+
+
+def test_shutdown_waits_for_job_control_before_exit_commit(engine, monkeypatch):
+    exits = []
+    monkeypatch.setattr(engine, "_exit_process_cleanly", lambda: exits.append(1))
+    control, owner = engine._begin_job_control("job-being-deleted")
+    assert control and owner is None
+    with engine.RUNNING_LOCK:
+        engine.SHUTDOWN_GENERATION = 11
+        engine.SHUTTING_DOWN = True
+        engine.HOST_GONE = True
+
+    assert engine._exit_if_shutdown(11) is False
+    assert exits == []
+
+    engine._end_job_control("job-being-deleted", control)
+    assert engine._exit_if_shutdown(11) is True
+    assert exits == [1]
+
+
+def test_shutdown_waits_for_skill_evidence_replay_before_exit_commit(engine, monkeypatch):
+    exits = []
+    monkeypatch.setattr(engine, "_exit_process_cleanly", lambda: exits.append(1))
+    with engine.RUNNING_LOCK:
+        engine.SHUTDOWN_GENERATION = 12
+        engine.SHUTTING_DOWN = True
+        engine.HOST_GONE = True
+        engine.OC_REPLAYING = True
+
+    assert engine._exit_if_shutdown(12) is False
+    assert exits == []
+
+    engine._end_oc_replay()
+    assert engine._exit_if_shutdown(12) is True
+    assert exits == [1]
+
+
+def test_job_control_and_skill_replay_are_mutually_exclusive_in_both_orders(engine):
+    control, _owner = engine._begin_job_control("job-1")
+    assert control
+    assert engine._begin_oc_replay() is False
+    engine._end_job_control("job-1", control)
+
+    assert engine._begin_oc_replay() is True
+    blocked_control, blocked_owner = engine._begin_job_control("job-1")
+    assert blocked_control is None
+    assert blocked_owner is None
+    engine._end_oc_replay()
+
+
+def test_irreversible_exit_rejects_new_job_control(engine):
+    with engine.RUNNING_LOCK:
+        engine.EXITING = True
+
+    control, owner = engine._begin_job_control("job-1")
+
+    assert control is None
+    assert owner is None

@@ -8,8 +8,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
-// 应用自带引擎用专属端口:8080 上若有旧版/手动引擎也绝不会被误用
-const ENGINE_PORT: u16 = 8848;
+// v0.18.2 使用版本专属端口：覆盖安装时旧 PyInstaller onefile 进程可能仍驻留，
+// 不能因历史端口“有人监听”就复用旧引擎。下一次不兼容升级也应换新端口。
+const ENGINE_PORT: u16 = 18802;
 
 fn port_busy(port: u16) -> bool {
     TcpStream::connect_timeout(
@@ -21,7 +22,23 @@ fn port_busy(port: u16) -> bool {
 
 fn data_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    let dir = PathBuf::from(home).join("Documents").join("标书助手");
+    let base = PathBuf::from(home).join("Documents");
+    let new = base.join("中标狗");
+    let old = base.join("标书助手");
+    let has_user_data = |dir: &PathBuf| {
+        dir.join("config.json").is_file()
+            || dir.join("jobs").is_dir()
+            || dir.join("素材库").is_dir()
+    };
+    // 壳层会先创建 engine.log，所以数据目录迁移必须在打开日志之前完成。
+    // 若两边都存在，绝不合并或覆盖：优先已有新目录；只有新目录没有用户数据时才继续用旧目录。
+    let dir = if new.exists() {
+        if !has_user_data(&new) && has_user_data(&old) { old } else { new }
+    } else if old.exists() {
+        if fs::rename(&old, &new).is_ok() { new } else { old }
+    } else {
+        new
+    };
     fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
@@ -41,6 +58,7 @@ fn spawn_engine() -> Option<Child> {
     let mut cmd = Command::new(&path);
     cmd.env("PORT", ENGINE_PORT.to_string());
     if let Some(data) = data_dir() {
+        cmd.env("BID_HOME", &data);
         if let Ok(log) = fs::File::create(data.join("engine.log")) {
             if let Ok(log2) = log.try_clone() {
                 cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log2));

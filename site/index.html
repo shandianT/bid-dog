@@ -365,7 +365,7 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   <div class="stats">
     <div class="st"><b>12 阶段</b><span>流水线,每步落盘验收</span></div>
     <div class="st"><b>36+ 项</b><span>出件前格式与内容质检</span></div>
-    <div class="st"><b>104 项</b><span>自动化回归,每版全跑</span></div>
+    <div class="st"><b>161 项</b><span>自动化回归,每版全跑</span></div>
     <div class="st"><b>0 上传</b><span>文件全程留在你电脑</span></div>
   </div>
 </div></section>
@@ -465,7 +465,7 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
       const rel = (list || []).find(x => x && !x.draft && !x.prerelease && (x.assets || []).length);
       if(!rel) return;
       const pick = re => (rel.assets.find(a => re.test(a.name)) || {}).browser_download_url;
-      const dmg = pick(/\.dmg$/i), exe = pick(/\.exe$/i);
+      const dmg = pick(/_aarch64\.dmg$/i), exe = pick(/_x64-setup\.exe$/i);
       const ver = (rel.tag_name || '').replace(/^desktop-v?/, '');
       document.querySelectorAll('.dl-mac').forEach(a => { if(dmg) a.href = dmg; });
       document.querySelectorAll('.dl-win').forEach(a => { if(exe) a.href = exe; });

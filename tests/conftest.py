@@ -24,8 +24,20 @@ import engine_v1 as _engine  # noqa: E402
 def engine(tmp_path, monkeypatch):
     monkeypatch.setattr(_engine, "DATA", str(tmp_path))
     _engine.RUNNING.clear()
+    _engine.SHUTTING_DOWN = False
+    _engine.EXITING = False
+    _engine.OC_REPLAYING = False
+    _engine.JOB_CONTROL.clear()
+    _engine.SHUTDOWN_GENERATION = 0
+    if getattr(_engine, "_EXIT_TIMER", [None])[0]:
+        _engine._EXIT_TIMER[0].cancel()
+        _engine._EXIT_TIMER[0] = None
     _engine.CANCEL.clear()
+    if hasattr(_engine, "TERMINAL_OWNERS"):
+        _engine.TERMINAL_OWNERS.clear()
     _engine.PROCS.clear()
+    _engine.PROC_OWNERS.clear()
+    _engine.DETACHED_CHILDREN.clear()
     _engine.RELAY_LAST.clear()
     _engine.OC.update({"proc": None, "port": 0, "base": "", "pw": ""})
     if hasattr(_engine, "_OC_PROBED"):

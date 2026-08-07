@@ -7,7 +7,7 @@
 真实 agent:环境变量 AGENT_CMD 命令模板(占位符 {tender}/{out}/{materials}),不配则跑内置 mock 流程。
 打包:pyinstaller -F engine_v1.py → 作为 Tauri sidecar 随安装包分发(见 BUILD.md)。
 """
-import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, base64, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error, urllib.parse, io, platform
+import os, re, sys, ssl, json, glob, time, signal, hashlib, hmac, secrets, base64, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error, urllib.parse, io, platform
 import xml.etree.ElementTree as ET
 from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, Request
@@ -282,14 +282,9 @@ STAGE_EVIDENCE = [
 
 def mock_agent(job):
     """内置模拟 agent:走完 12 阶段,发问一次,产出样例交付物 —— 演示与前端联调用"""
-    RUNNING.add(os.path.basename(job))
-    try:
-        _mock_agent(job)
-    finally:
-        RUNNING.discard(os.path.basename(job))
-        CANCEL.discard(os.path.basename(job))
+    _mock_agent(job)
 
-def _cancelled(job): return os.path.basename(job) in CANCEL or not os.path.isdir(job)
+def _cancelled(job): return _cancel_requested(os.path.basename(job)) or not os.path.isdir(job)
 
 def _mock_agent(job):
     emit(job, {'type': 'message', 'role': 'agent', 'text': '收到招标文件,开始读。读完我会把结构、评分表和要你确认的事列出来。'})
@@ -448,9 +443,152 @@ def worklog_clean(chunk):
         out.append(ln)
     return out
 
-RUNNING = set()   # 正在跑 agent 的任务(mock 与真实都算,用于判断对话有没有人接收)
-CANCEL = set()    # 用户删除的任务:通知执行线程立即收工
+RUNNING = {}      # jid → 本轮 owner token；完整收尾前一直占位，旧 worker 不能释放新一轮
+RUNNING_LOCK = threading.Lock()
+SHUTTING_DOWN = False
+EXITING = False
+SHUTDOWN_GENERATION = 0
+OC_REPLAYING = False
+JOB_CONTROL = {} # jid → stop/delete/pause 控制令牌；控制动作期间禁止下一轮抢跑
+CANCEL = {}      # jid → owner token；取消只作用于指定运行代际
+TERMINAL_OWNERS = {} # jid → 已原子提交完成态的 owner；停止不能再把同一代伪装成已停止
 PROCS = {}        # jid → 真实 agent 的 Popen 句柄(删除任务时用来杀进程)
+PROC_OWNERS = {}  # jid → 与 PROCS 同一代的 owner token
+
+def _reserve_running_reason(base):
+    """返回 (owner, reason)。调用方据此区分同单重复点击与全局暂时禁入。"""
+    with RUNNING_LOCK:
+        # 同一任务已经占位时必须先返回 running；shutdown/replay 不能借一次重复点击
+        # 把真实活跃任务改写成 staged。
+        if base in RUNNING: return None, 'running'
+        if EXITING: return None, 'exiting'
+        if SHUTTING_DOWN: return None, 'shutdown'
+        if OC_REPLAYING: return None, 'replay'
+        if base in JOB_CONTROL: return None, 'control'
+        owner = secrets.token_hex(16)
+        CANCEL.pop(base, None)  # 历史异常退出留下的脏标记不能污染新一轮
+        TERMINAL_OWNERS.pop(base, None)
+        RUNNING[base] = owner
+        return owner, ''
+
+def _reserve_running(base):
+    """在启动线程前原子占位；快速双击/并发请求只能有一个派发者成功。"""
+    return _reserve_running_reason(base)[0]
+
+def _release_running(base, owner):
+    """只允许预约本轮的 owner 释放；迟到的旧 worker 永远碰不到新一轮。"""
+    with RUNNING_LOCK:
+        if not owner or RUNNING.get(base) != owner: return False
+        if CANCEL.get(base) == owner: CANCEL.pop(base, None)
+        if TERMINAL_OWNERS.get(base) == owner: TERMINAL_OWNERS.pop(base, None)
+        del RUNNING[base]
+        return True
+
+def _is_running(base):
+    with RUNNING_LOCK: return base in RUNNING
+
+def _has_running():
+    with RUNNING_LOCK: return bool(RUNNING)
+
+def _running_snapshot():
+    with RUNNING_LOCK: return tuple(RUNNING)
+
+def _running_owner(base):
+    with RUNNING_LOCK: return RUNNING.get(base)
+
+def _begin_job_control(base):
+    """给 stop/delete/pause 加 tombstone，避免旧轮结束后新轮在控制动作中间抢跑。"""
+    with RUNNING_LOCK:
+        # replay 会读持久会话与任务证据；退出提交后也不允许再开始文件破坏性操作。
+        if SHUTTING_DOWN or EXITING or OC_REPLAYING or base in JOB_CONTROL:
+            return None, None
+        token = secrets.token_hex(16)
+        JOB_CONTROL[base] = token
+        return token, RUNNING.get(base)
+
+def _end_job_control(base, token):
+    with RUNNING_LOCK:
+        if token and JOB_CONTROL.get(base) == token:
+            JOB_CONTROL.pop(base, None)
+
+def _request_cancel(base, owner):
+    with RUNNING_LOCK:
+        if not owner or RUNNING.get(base) != owner: return False
+        # 完成态提交与取消请求共用这把锁：谁先拿到锁谁成为这一代唯一终态。
+        if TERMINAL_OWNERS.get(base) == owner: return False
+        CANCEL[base] = owner
+        return True
+
+def _cancel_requested(base, owner=None):
+    with RUNNING_LOCK:
+        current = RUNNING.get(base)
+        expected = owner or current
+        return bool(current and expected == current and CANCEL.get(base) == expected)
+
+def _owner_running(base, owner):
+    with RUNNING_LOCK: return bool(owner and RUNNING.get(base) == owner)
+
+def _commit_done(job, word):
+    """原子提交 done；若 stop/pause 已拿到本代取消权，绝不再覆盖为完成。"""
+    base = os.path.basename(job)
+    with RUNNING_LOCK:
+        owner = RUNNING.get(base)
+        if owner and CANCEL.get(base) == owner:
+            return False
+        if owner:
+            TERMINAL_OWNERS[base] = owner
+        try:
+            write_json(os.path.join(job, 'outcome.json'),
+                       {'state': 'done', 'word': word, 'ts': now()})
+            emit(job, {'type': 'progress', 'stage': '完成', 'pct': 100, 'step': 12,
+                       'total': 12, 'terminal': True, 'verified': True})
+        except Exception:
+            if owner and TERMINAL_OWNERS.get(base) == owner:
+                TERMINAL_OWNERS.pop(base, None)
+            raise
+        return True
+
+def _register_proc(base, proc):
+    with RUNNING_LOCK:
+        PROCS[base] = proc
+        PROC_OWNERS[base] = RUNNING.get(base)
+
+def _take_proc(base, owner):
+    """stop/delete 只拿走同一 owner 的 CLI，绝不误杀后来一轮。"""
+    with RUNNING_LOCK:
+        if PROC_OWNERS.get(base) != owner: return None
+        PROC_OWNERS.pop(base, None)
+        return PROCS.pop(base, None)
+
+def _clear_proc(base, proc):
+    with RUNNING_LOCK:
+        if PROCS.get(base) is proc:
+            PROCS.pop(base, None)
+            PROC_OWNERS.pop(base, None)
+
+def _begin_oc_replay():
+    global OC_REPLAYING
+    with RUNNING_LOCK:
+        if SHUTTING_DOWN or EXITING or OC_REPLAYING or RUNNING or JOB_CONTROL: return False
+        OC_REPLAYING = True
+        return True
+
+def _end_oc_replay():
+    global OC_REPLAYING
+    with RUNNING_LOCK: OC_REPLAYING = False
+
+def _run_reserved_worker(base, owner, target, args):
+    try:
+        target(*args)
+    finally:
+        # owner 的生命周期覆盖 fallback、收拢产物、补 Word、settle 与质检；只在全部结束后释放。
+        _release_running(base, owner)
+
+def _start_reserved_worker(base, owner, target, *args):
+    thread = threading.Thread(target=_run_reserved_worker,
+                              args=(base, owner, target, args), daemon=True)
+    thread.start()
+    return thread
 
 # GUI 方式启动的 App(Finder/Dock 双击)继承不到 shell 的 PATH,Homebrew/npm 装的 CLI 会"明明装了却找不到"。
 # 解决:按增补 PATH 查找 + 扫常见安装位置,拿绝对路径执行。
@@ -470,6 +608,8 @@ def aug_path_env():
 # SoWork(商汤)桌面端自带的 openclaw CLI:装在 App 包内,不在 PATH 上,得按包路径找
 # 子进程与本会话解绑:POSIX 用新会话;Windows 不开控制台窗口
 DETACH = {'start_new_session': True} if os.name != 'nt' else {'creationflags': 0x08000000}
+DETACHED_CHILDREN = {}
+DETACHED_CHILDREN_LOCK = threading.Lock()
 
 SOWORK_GLOBS = [
     # 应用名可能是「商汤输入法SoWork.app」「SoWork.app」等,CLI 也可能不在 Resources/cli 下,
@@ -1100,6 +1240,12 @@ def kill_tree(p):
     try: pgid = os.getpgid(p.pid)
     except Exception: pgid = None
     if os.name == 'nt':
+        # Popen.kill 只杀直接子进程；CLI/执行外壳还会拉工具子进程，必须按精确 PID 杀整棵树。
+        try:
+            subprocess.run(['taskkill', '/PID', str(int(p.pid)), '/T', '/F'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=10, check=False, creationflags=0x08000000)
+        except Exception: pass
         try: p.kill()
         except Exception: pass
         return
@@ -1115,6 +1261,39 @@ def kill_tree(p):
                 os.killpg(pgid, 0)
             except Exception:
                 return
+
+def _tracked_detached_run(cmd, timeout, **kwargs):
+    """subprocess.run 的可清理版本：关 App 时能找回并终止测试/校验子进程。"""
+    capture = bool(kwargs.pop('capture_output', False))
+    if capture:
+        kwargs.setdefault('stdout', subprocess.PIPE)
+        kwargs.setdefault('stderr', subprocess.PIPE)
+    with RUNNING_LOCK:
+        if SHUTTING_DOWN or EXITING:
+            raise RuntimeError('应用正在退出，未启动新的外部命令')
+        proc = subprocess.Popen(cmd, **kwargs, **DETACH)
+        with DETACHED_CHILDREN_LOCK:
+            DETACHED_CHILDREN[id(proc)] = proc
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            kill_tree(proc)
+            try: stdout, stderr = proc.communicate(timeout=1)
+            except Exception: stdout, stderr = exc.output, exc.stderr
+            raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    finally:
+        with DETACHED_CHILDREN_LOCK:
+            DETACHED_CHILDREN.pop(id(proc), None)
+
+def _kill_tracked_detached_children():
+    with DETACHED_CHILDREN_LOCK:
+        children = list(DETACHED_CHILDREN.values())
+        DETACHED_CHILDREN.clear()
+    for proc in children:
+        try: kill_tree(proc)
+        except Exception: pass
 
 CLI_STALL_SECONDS = float(os.environ.get('BIDDOG_CLI_STALL_SECONDS', os.environ.get('BID_CLI_STALL_SECONDS', 15 * 60)))
 CLI_STALL_POLL = float(os.environ.get('BIDDOG_CLI_STALL_POLL', os.environ.get('BID_CLI_STALL_POLL', 2)))
@@ -1153,9 +1332,13 @@ def wait_cli_process(proc, job, stall_seconds=None, total_seconds=None, poll_sec
     poll_seconds = CLI_STALL_POLL if poll_seconds is None else float(poll_seconds)
     started = changed = time.monotonic()
     sig = cli_activity_signature(job)
+    base = os.path.basename(job)
     while True:
         rc = proc.poll()
         if rc is not None: return {'status': 'exited', 'rc': rc}
+        if _cancel_requested(base):
+            kill_tree(proc)
+            return {'status': 'cancelled', 'rc': proc.poll()}
         cur = cli_activity_signature(job)
         now_m = time.monotonic()
         if cur != sig:
@@ -1169,8 +1352,16 @@ def wait_cli_process(proc, job, stall_seconds=None, total_seconds=None, poll_sec
         time.sleep(max(0.01, poll_seconds))
 
 def read_tail(path, n=800):
-    try: return open(path, encoding='utf-8', errors='ignore').read()[-n:]
-    except Exception: return ''
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            limit = min(size, max(0, int(n)))
+            f.seek(max(0, size - limit))
+            # 文件可能在 tell/seek 后继续增长；read(limit) 仍保证内存上界。
+            return f.read(limit).decode('utf-8', 'ignore')
+    except Exception:
+        return ''
 
 def _tail_lines(path, count=8):
     try:
@@ -1220,17 +1411,23 @@ def settle(job, known=None, stop_reason=None):
         if redo:
             meta.pop('redo_baseline', None)
             write_json(os.path.join(job, '任务.json'), meta)
-        write_json(os.path.join(job, 'outcome.json'), {'state': 'done', 'word': words[0], 'ts': now()})
-        emit(job, {'type': 'progress', 'stage': '完成', 'pct': 100, 'step': 12,
-                   'total': 12, 'terminal': True, 'verified': True})
+        if not _commit_done(job, words[0]):
+            # stop/pause 已经原子取得本轮终态；由控制请求写 stopped/paused，旧 worker 不得翻盘。
+            return {'state': 'stopped', 'reason': '本轮已收到停止或暂停请求',
+                    'artifacts': sorted(known)}
         summary, actions = artifact_summary(job, known)
         used = skill_evidence(job)
-        if not used['ok']:
-            summary += ('\n\n⚠ **没有检测到技能包被使用**（%s）。请先查看日志并人工复核内容、'
+        if used['state'] == 'unverifiable':
+            summary += ('\n\n⚠ **技能包运行证据暂时无法核验**（%s）请人工复核内容、'
+                        '响应矩阵和格式门禁，再决定是否交付。' % used['why'])
+            actions = (actions or []) + [{'act': 'open_log', 'label': '查看运行日志'}]
+        elif used['state'] == 'missing':
+            summary += ('\n\n⚠ **技能包没有完成装载或派发**（%s）请先检查执行外壳设置，并人工复核内容、'
                         '响应矩阵和格式门禁，再决定是否交付。' % used['why'])
             actions = (actions or []) + [{'act': 'open_log', 'label': '查看运行日志'}]
         emit(job, {'type': 'message', 'role': 'agent', 'text': summary, 'actions': actions})
-        emit(job, {'type': 'skill_used', 'ok': used['ok'], 'hits': used['hits'], 'why': used['why']})
+        emit(job, {'type': 'skill_used', 'state': used['state'], 'ok': used['ok'],
+                   'hits': used['hits'], 'why': used['why']})
         try: quality_audit(job, known)
         except Exception as e:
             emit(job, {'type': 'message', 'role': 'agent',
@@ -1280,23 +1477,332 @@ def settle(job, known=None, stop_reason=None):
     halt(job, why)
     return {'state': 'stopped', 'reason': why, 'artifacts': sorted(known)}
 
-SKILL_MARKS = ['SKILL.md', 'bid-multiagent', 'build_tender_docx', 'check_docx_format',
-               'fill_tender_template', '格式门禁', '响应矩阵']
+SKILL_EVENT_FILE = 'skill_events.jsonl'
+_SKILL_EVENT_KEY = secrets.token_bytes(32)  # 仅存于本次引擎进程内；任务 cwd 中的 agent 拿不到
+_SKILL_EVENT_FIELDS = ('run_id', 'type', 'status', 'path_sha256', 'manifest_sha256', 'ts')
+_OC_SKILL_READS = {}  # durable event 的 tool.called → tool.success，仅在内存关联原始路径/内容
+
+def _sha256_text(value):
+    return hashlib.sha256(str(value or '').encode('utf-8')).hexdigest()
+
+def _new_run_id():
+    """一次 launch/redo 对应一个证据域；resume 则继续沿用原证据域。"""
+    return uuid.uuid4().hex
+
+def _dispatch_digest(dispatch):
+    """只冻结派发内容的指纹，绝不把原始 prompt/cmd/path 写入任务元数据。"""
+    if isinstance(dispatch, (list, tuple)):
+        value = json.dumps([str(x) for x in dispatch], ensure_ascii=False, separators=(',', ':'))
+    else:
+        value = str(dispatch or '')
+    return _sha256_text(value) if value else ''
+
+def _dispatch_contains_skill(dispatch, skill_dir):
+    values = dispatch if isinstance(dispatch, (list, tuple)) else [dispatch]
+    text = '\0'.join(str(x or '') for x in values)
+    skill_dir = os.path.realpath(skill_dir or '')
+    skill_path = os.path.join(skill_dir, 'SKILL.md') if skill_dir else ''
+    return bool(skill_dir and (skill_dir in text or skill_path in text))
+
+def _skill_manifest(run_id, skill_dir, dispatch, injected, execution_path):
+    """构造可落盘的非敏感技能派发收据：只有版本、布尔值与不可逆哈希。"""
+    skill_dir = os.path.realpath(skill_dir or '')
+    skill_path = os.path.realpath(os.path.join(skill_dir, 'SKILL.md')) if skill_dir else ''
+    present = bool(skill_path and os.path.isfile(skill_path))
+    version = ''
+    if skill_dir:
+        try:
+            raw_bytes = open(os.path.join(skill_dir, '.skill_version'), 'rb').read(80)
+            try: raw_version = raw_bytes.decode('ascii').strip()
+            except UnicodeDecodeError: raw_version = ''
+            # 只允许明显的数字版本标签原样落盘（兼容内置 5.8 与标准 0.18.2）；
+            # PAT/Key/备注等任意 token 一律只留不可逆摘要。
+            safe_version = re.fullmatch(
+                r'v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?'
+                r'(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?', raw_version
+            )
+            version = (raw_version if safe_version and len(raw_version) <= 40
+                       else ('custom-' + hashlib.sha256(raw_bytes).hexdigest()[:12]
+                             if raw_bytes else ''))
+        except OSError:
+            version = ''
+    return {
+        'run_id': run_id,
+        'version': version or 'unversioned',
+        'manifest_sha256': _file_digest(skill_path) if present else '',
+        'path_sha256': _sha256_text(skill_path) if skill_path else '',
+        'dispatch_sha256': _dispatch_digest(dispatch),
+        'injected': bool(injected and present),
+        'accepted': False,
+        'execution_path': str(execution_path or ''),
+        'file_present': present,
+    }
+
+def _set_skill_manifest(job, skill_dir, dispatch, injected, execution_path):
+    meta_path = os.path.join(job, '任务.json')
+    meta = read_json(meta_path, {})
+    run_id = str(meta.get('run_id') or '')
+    if not run_id: return None
+    manifest = _skill_manifest(run_id, skill_dir, dispatch, injected, execution_path)
+    meta['skill_manifest'] = manifest
+    write_json(meta_path, meta)
+    return manifest
+
+def _mark_skill_accepted(job, execution_path=None):
+    """只有外壳真实接收派发（HTTP 2xx/Popen 成功）后才把 accepted 置真。"""
+    meta_path = os.path.join(job, '任务.json')
+    meta = read_json(meta_path, {})
+    manifest = meta.get('skill_manifest')
+    if not isinstance(manifest, dict) or manifest.get('run_id') != meta.get('run_id'): return False
+    manifest = dict(manifest)
+    manifest['accepted'] = True
+    if execution_path: manifest['execution_path'] = str(execution_path)
+    meta['skill_manifest'] = manifest
+    write_json(meta_path, meta)
+    return True
+
+def _skill_event_auth(record):
+    payload = {k: record.get(k) for k in _SKILL_EVENT_FIELDS if record.get(k) not in (None, '')}
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return hmac.new(_SKILL_EVENT_KEY, raw, hashlib.sha256).hexdigest()
+
+def _skill_events(job):
+    """只返回本次引擎进程签发的事件；agent 可写任务目录，但不能伪造进程内 HMAC。"""
+    try:
+        # 证据文件正常只有几行。被任务进程灌入大量垃圾时只看末尾，宁可降级为 unverifiable，
+        # 也不能让日志接口无界读内存。
+        lines = read_tail(os.path.join(job, SKILL_EVENT_FILE), 1024 * 1024).splitlines()
+    except OSError:
+        return []
+    records = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+            signature = str(record.get('auth') or '') if isinstance(record, dict) else ''
+            if (isinstance(record, dict) and signature
+                    and hmac.compare_digest(signature, _skill_event_auth(record))):
+                records.append(record)
+        except (TypeError, ValueError):
+            pass
+    return records
+
+def _append_skill_event(job, record):
+    """结构化证据只允许安全字段；调用方不得传原始工具参数。"""
+    safe = {k: record.get(k) for k in _SKILL_EVENT_FIELDS if record.get(k) not in (None, '')}
+    if not safe.get('ts'): safe['ts'] = now()
+    # SSE 断线重连会重放历史；同一轮完全相同的读取证据只落一次。
+    identity = tuple(safe.get(k) for k in (
+        'run_id', 'type', 'status', 'path_sha256', 'manifest_sha256'
+    ))
+    if any(tuple(old.get(k) for k in (
+            'run_id', 'type', 'status', 'path_sha256', 'manifest_sha256'
+        )) == identity for old in _skill_events(job)):
+        return
+    safe['auth'] = _skill_event_auth(safe)
+    try:
+        with open(os.path.join(job, SKILL_EVENT_FILE), 'a', encoding='utf-8') as f:
+            f.write(json.dumps(safe, ensure_ascii=False) + '\n')
+    except OSError:
+        pass
+
+def _read_output_covers_file(state, path):
+    """OpenCode 1.18.13 read 是按行返回；只有从首行连续覆盖到末行才算完整读取。"""
+    tool_input = state.get('input') or {}
+    try:
+        offset = int(tool_input.get('offset', 1))
+        limit = int(tool_input.get('limit', 2000))
+    except (TypeError, ValueError):
+        return False
+    if offset != 1: return False
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            line_count = sum(1 for _ in f)
+    except OSError:
+        return False
+    if limit < line_count: return False
+    metadata = state.get('metadata') or {}
+    if metadata.get('truncated') is True: return False
+    numbered = []
+    for line in str(state.get('output') or '').splitlines():
+        match = re.match(r'^\s*(\d+):(?: |$)', line)
+        if match: numbered.append(int(match.group(1)))
+    if line_count == 0: return bool(re.search(r'End of file|0\s+lines', str(state.get('output') or ''), re.I))
+    expected = list(range(1, line_count + 1))
+    return any(numbered[i:i + line_count] == expected
+               for i in range(max(0, len(numbered) - line_count + 1)))
+
+def _observe_oc_skill_event(job, event, sid):
+    """从 OpenCode SSE 观测精确的完整 read；原始路径与内容只在进程内短暂关联。"""
+    if not isinstance(event, dict): return False
+    event_type = str(event.get('type') or '')
+    # 内置 OpenCode 1.18.13 的单会话 event 端点回放 durable `session.next.*`，
+    # called 持有 path，success 才持有完整 content，必须用 sessionID + callID 关联。
+    if event_type in ('session.next.tool.called', 'session.next.tool.success',
+                      'session.next.tool.failed'):
+        data = event.get('data') if isinstance(event.get('data'), dict) else event.get('properties')
+        data = data if isinstance(data, dict) else {}
+        event_sid = str(data.get('sessionID') or '')
+        call_id = str(data.get('callID') or '')
+        meta = read_json(os.path.join(job, '任务.json'), {})
+        manifest = meta.get('skill_manifest') or {}
+        run_id = str(meta.get('run_id') or '')
+        if (not sid or event_sid != sid or not call_id or not run_id
+                or str(meta.get('oc_session') or '') != sid
+                or manifest.get('run_id') != run_id):
+            return False
+        pending_key = (os.path.realpath(job), run_id, sid, call_id)
+        if event_type == 'session.next.tool.failed':
+            _OC_SKILL_READS.pop(pending_key, None)
+            return False
+        if event_type == 'session.next.tool.called':
+            if str(data.get('tool') or '').lower() != 'read': return False
+            tool_input = data.get('input') or {}
+            raw_path = tool_input.get('path') or tool_input.get('filePath')
+            if not isinstance(raw_path, str) or not raw_path.strip(): return False
+            try: offset = int(tool_input.get('offset', 1))
+            except (TypeError, ValueError): return False
+            if offset != 1: return False
+            candidate = os.path.expanduser(raw_path.strip())
+            if not os.path.isabs(candidate): candidate = os.path.join(job, candidate)
+            candidate = os.path.realpath(candidate)
+            path_sha256 = _sha256_text(candidate)
+            manifest_sha256 = str(manifest.get('manifest_sha256') or '')
+            if path_sha256 != manifest.get('path_sha256') or not manifest_sha256:
+                return False
+            if tool_input.get('limit') is not None:
+                try:
+                    if int(tool_input.get('limit')) <= 0: return False
+                except (TypeError, ValueError):
+                    return False
+            # 有界缓存，异常事件洪泛时丢最旧项；丢证据只会降级 amber，不会误判 verified。
+            while len(_OC_SKILL_READS) >= 256:
+                _OC_SKILL_READS.pop(next(iter(_OC_SKILL_READS)))
+            _OC_SKILL_READS[pending_key] = {
+                'path_sha256': path_sha256, 'manifest_sha256': manifest_sha256,
+            }
+            return False
+        pending = _OC_SKILL_READS.pop(pending_key, None)
+        structured = data.get('structured') or {}
+        content = structured.get('content') if isinstance(structured, dict) else None
+        if (not pending or not isinstance(content, str)
+                or structured.get('truncated') is True or structured.get('next') is not None
+                or _sha256_text(content) != pending.get('manifest_sha256')
+                or pending.get('path_sha256') != manifest.get('path_sha256')
+                or pending.get('manifest_sha256') != manifest.get('manifest_sha256')):
+            return False
+        _append_skill_event(job, {
+            'run_id': run_id, 'type': 'read_manifest', 'status': 'completed',
+            'path_sha256': pending['path_sha256'],
+            'manifest_sha256': pending['manifest_sha256'], 'ts': now(),
+        })
+        return True
+
+    # 兼容标准 v2 `message.part.updated` 事件；当前 1.18.13 的 durable 端点不走此形状。
+    if not event_type.endswith('message.part.updated'): return False
+    properties = event.get('properties') or {}
+    part = properties.get('part') or {}
+    event_sid = str(properties.get('sessionID') or '')
+    part_sid = str(part.get('sessionID') or '')
+    if not sid or event_sid != sid or part_sid != sid: return False
+    state = part.get('state') or {}
+    if part.get('type') != 'tool' or str(part.get('tool') or '').lower() != 'read': return False
+    if str(state.get('status') or '').lower() != 'completed': return False
+    raw_path = (state.get('input') or {}).get('filePath')
+    if not isinstance(raw_path, str) or not raw_path.strip(): return False
+
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    manifest = meta.get('skill_manifest') or {}
+    run_id = str(meta.get('run_id') or '')
+    if (not run_id or manifest.get('run_id') != run_id
+            or str(meta.get('oc_session') or '') != sid): return False
+    candidate = os.path.expanduser(raw_path.strip())
+    if not os.path.isabs(candidate): candidate = os.path.join(job, candidate)
+    candidate = os.path.realpath(candidate)
+    path_sha256 = _sha256_text(candidate)
+    manifest_sha256 = _file_digest(candidate)
+    if (path_sha256 != manifest.get('path_sha256')
+            or not manifest_sha256
+            or manifest_sha256 != manifest.get('manifest_sha256')):
+        return False
+    if not _read_output_covers_file(state, candidate): return False
+    _append_skill_event(job, {
+        'run_id': run_id, 'type': 'read_manifest', 'status': 'completed',
+        'path_sha256': path_sha256, 'manifest_sha256': manifest_sha256, 'ts': now(),
+    })
+    return True
+
+def _replay_oc_skill_evidence(job, timeout=4):
+    """引擎重启后从 OpenCode 的持久会话重放证据，再用本进程临时密钥重新签发。"""
+    if not _begin_oc_replay(): return False
+    try:
+        meta = read_json(os.path.join(job, '任务.json'), {})
+        if not isinstance(meta, dict): return False
+        manifest = meta.get('skill_manifest')
+        sid = str(meta.get('oc_session') or '')
+        if (not isinstance(manifest, dict) or manifest.get('execution_path') != 'opencode'
+                or manifest.get('run_id') != meta.get('run_id') or not sid):
+            return False
+        try:
+            # 历史会话固定保存在中标狗隔离的 OpenCode XDG 目录；用户后来切到
+            # Codex/Claude 也必须从同一目录重放，不能跟着当前 kind 改数据库。
+            replay_eng = dict((read_json(conf_path(), {}) or {}).get('engine') or {})
+            replay_eng['kind'] = 's2'
+            replay_eng.pop('cli_path', None)
+            base_url = oc_serve(replay_eng)
+            if not base_url: return False
+            url = base_url + '/api/session/%s/event' % urllib.parse.quote(sid, safe='')
+            req = urllib.request.Request(url, headers=oc_auth())
+            deadline = time.monotonic() + max(1, min(int(timeout or 4), 10))
+            count = 0
+            with urllib.request.urlopen(req, timeout=max(1, min(int(timeout or 4), 10))) as response:
+                for raw in response:
+                    if time.monotonic() >= deadline or count >= 20000: break
+                    line = raw.decode('utf-8', 'ignore').strip()
+                    if not line.startswith('data:'): continue
+                    count += 1
+                    try: event = json.loads(line[5:].strip())
+                    except (TypeError, ValueError): continue
+                    if _observe_oc_skill_event(job, event, sid): return True
+        except Exception:
+            return False
+        return False
+    finally:
+        _end_oc_replay()
 
 def skill_evidence(job):
-    """技能包到底有没有被用上——只认硬证据:日志里读过 SKILL.md/跑过门禁脚本,或产出里有门禁报告。
-    没有证据就如实说「没用上」,不粉饰:这是产出质量差最常见的根因。"""
-    log = read_tail(os.path.join(job, 'run.log'), 200000)
-    hits = [m for m in SKILL_MARKS if m in log]
-    try:
-        files = os.listdir(job)
-    except Exception:
-        files = []
-    if any(('格式自检' in f or '门禁' in f) for f in files): hits.append('产出含格式自检报告')
-    if hits: return {'ok': True, 'hits': hits, 'why': ''}
-    why = '运行日志里没有出现 SKILL.md、门禁脚本或响应矩阵等任何技能包痕迹'
-    if not log: why = '没有拿到运行日志,无法确认(agent 可能没有输出)'
-    return {'ok': False, 'hits': [], 'why': why}
+    """返回 verified / unverifiable / missing，避免把“看不见”误说成“没使用”。"""
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    run_id = str(meta.get('run_id') or '')
+    manifest = meta.get('skill_manifest')
+    if not run_id and not isinstance(manifest, dict):
+        why = ('任务尚未启动，当前没有运行证据。' if meta.get('staged') else
+               '这是旧版本创建的历史任务，当时没有结构化技能证据，无法倒推是否读取。')
+        return {'state': 'unverifiable', 'ok': False, 'hits': [], 'why': why}
+    missing = []
+    if not run_id: missing.append('本轮运行标识缺失')
+    if not isinstance(manifest, dict):
+        missing.append('没有技能派发收据')
+        manifest = {}
+    if manifest.get('run_id') != run_id: missing.append('技能派发收据不属于本轮')
+    if not manifest.get('file_present') or not manifest.get('manifest_sha256') or not manifest.get('path_sha256'):
+        missing.append('技能清单文件缺失或无法计算指纹')
+    if not manifest.get('injected'): missing.append('技能指令没有注入本轮派发')
+    if not manifest.get('accepted'): missing.append('执行外壳没有确认接收本轮派发')
+    if not manifest.get('execution_path'): missing.append('执行路径没有冻结')
+    if missing:
+        return {'state': 'missing', 'ok': False, 'hits': [],
+                'why': '技能包未能完整装载或派发：%s。' % '；'.join(dict.fromkeys(missing))}
+
+    for record in _skill_events(job):
+        if (record.get('run_id') == run_id
+                and record.get('type') == 'read_manifest'
+                and record.get('status') == 'completed'
+                and record.get('path_sha256') == manifest.get('path_sha256')
+                and record.get('manifest_sha256') == manifest.get('manifest_sha256')):
+            return {'state': 'verified', 'ok': True,
+                    'hits': ['本轮已核验 SKILL.md 精确读取事件'], 'why': ''}
+    return {'state': 'unverifiable', 'ok': False, 'hits': [],
+            'why': '技能指令已注入并由执行外壳接收，但本轮没有留下可验证的 SKILL.md 精确读取事件，无法核验实际读取情况。'}
 
 # ==================== OpenCode server 模式 ====================
 # 以前是 `opencode run --auto`:喂一条 prompt、等进程死,中间什么都看不见、停不掉、崩了从头来。
@@ -1398,7 +1904,9 @@ def oc_serve(eng=None):
                                  stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
                                  env=env, cwd=DATA, **DETACH)
         except Exception:
+            logf.close()
             return ''
+        logf.close()  # 子进程已复制句柄；父进程不应为常驻 server 永久泄漏一个文件描述符
         OC.update({'proc': p, 'port': port, 'base': 'http://127.0.0.1:%d' % port,
                    'pw': pw, 'fingerprint': fingerprint})
         for _ in range(60):
@@ -1496,7 +2004,7 @@ def oc_session(job, directory):
         write_json(os.path.join(job, '任务.json'), meta)
     return sid
 
-def oc_send(sid, text, delivery='queue', model=None):
+def oc_send(sid, text, delivery='queue', model=None, job=None):
     """给会话投一条消息。**这个接口是异步的:0 秒返回 200,不等跑完。**
 
     delivery 是 1.18.13 的原生字段:
@@ -1505,7 +2013,9 @@ def oc_send(sid, text, delivery='queue', model=None):
     产品负责人定的「想到什么先记下来、下个环节带上」就是 queue。"""
     st, b = oc_api('/api/session/%s/prompt' % sid,
                    {'model': model or oc_model(), 'delivery': delivery, 'prompt': {'text': text}}, timeout=60)
-    return st in (200, 201, 202, 204), b
+    ok = st in (200, 201, 202, 204)
+    if ok and job: _mark_skill_accepted(job, 'opencode')
+    return ok, b
 
 def oc_interrupt(sid):
     st, _ = oc_api('/api/session/%s/interrupt' % sid, {}, timeout=20)
@@ -1571,6 +2081,9 @@ def oc_watch(job, sid, stop, beat=None):
                     if idx <= seen: continue
                     seen = idx
                     if beat is not None: beat['ts'] = time.time()
+                    # 证据判断与工作台词分离：只把 completed + read + 精确 SKILL.md 指纹
+                    # 写成结构化收据，原始 filePath/command/prompt 均不落盘。
+                    _observe_oc_skill_event(job, ev, sid)
                     t = ev.get('type') or ''
                     if 'question.asked' in t:
                         q = (ev.get('properties') or {})
@@ -1658,21 +2171,31 @@ def oc_run(job, prompt):
       · 问得着 —— agent 的提问推给用户,答案经 /question/reply 真的回到它上下文
       · 崩了能续 —— 会话 id 落在 任务.json,重开应用凭它接着做
     """
+    base = os.path.basename(job)
+    if _cancel_requested(base): return OC_RUN_CANCELLED
     if not oc_serve(): return OC_RUN_FALLBACK
+    if _cancel_requested(base): return OC_RUN_CANCELLED
     sid = oc_session(job, job)
     if not sid: return OC_RUN_FALLBACK
+    if _cancel_requested(base):
+        oc_interrupt(sid)
+        return OC_RUN_CANCELLED
     ok, why = oc_probe_once()
+    if _cancel_requested(base):
+        oc_interrupt(sid)
+        return OC_RUN_CANCELLED
     if not ok:
         emit(job, {'type': 'message', 'role': 'agent',
                    'text': '⚠ 执行外壳起来了但链路没通(%s),这一单改用兼容模式跑。' % why})
         return OC_RUN_FALLBACK
-    base = os.path.basename(job)
     stop = threading.Event()
     beat = {'ts': time.time()}          # oc_watch 每收到一条事件就刷新
     threading.Thread(target=oc_watch, args=(job, sid, stop, beat), daemon=True).start()
     snap = read_json(os.path.join(job, '任务.json'), {}).get('engine_snapshot') or {}
     pinned_model = {'providerID': 'biddog-s2', 'modelID': snap.get('model')} if snap.get('model') else oc_model()
-    sent, _ = oc_send(sid, prompt, delivery='queue', model=pinned_model)
+    if _cancel_requested(base):
+        stop.set(); oc_interrupt(sid); return OC_RUN_CANCELLED
+    sent, _ = oc_send(sid, prompt, delivery='queue', model=pinned_model, job=job)
     if not sent:
         # 请求已经尝试派发，无法证明服务端完全没收到；禁止从头自动重放。
         stop.set(); return OC_RUN_INTERRUPTED
@@ -1682,7 +2205,8 @@ def oc_run(job, prompt):
     result = OC_RUN_INTERRUPTED
     try:
         for _ in range(3 * 3600):
-            if base in CANCEL:
+            if _cancel_requested(base):
+                oc_interrupt(sid)  # 停本地监控之前先停 server 会话，不能留它后台继续耗 Key/写文件
                 result = OC_RUN_CANCELLED
                 break
             time.sleep(1)
@@ -1737,7 +2261,8 @@ def real_agent(job, cmd):
         halt(job, '已停止（执行外壳配置失败）')
         return
     env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS'] = '0'  # 增补 PATH/附加环境变量 + -p 模式等后台任务跑完
-    RUNNING.add(os.path.basename(job))
+    base = os.path.basename(job)
+    if _cancel_requested(base): return
     log = open(os.path.join(job, 'run.log'), 'a', encoding='utf-8')
     emit(job, {'type': 'message', 'role': 'agent', 'text': '真实 agent 已启动,进度见事件流。'})
     stop = threading.Event(); known = set(list_deliverables(job)); agent_line = [0]
@@ -1775,13 +2300,15 @@ def real_agent(job, cmd):
     watcher_thread = threading.Thread(target=watcher, daemon=True)
     watcher_thread.start()
     rc = -1; spawn_err = ''; spawn_actions = None; stop_reason = None
-    base = os.path.basename(job)
     proc = None
     try:
+        if _cancel_requested(base):
+            stop.set(); watcher_thread.join(timeout=5); log.close(); return
         # 后台跑:stdin 关掉(CLI 不会等交互/弹窗)、新会话(不占当前终端会话,少被 macOS 当前台程序)
         proc = subprocess.Popen(cmd, shell=isinstance(cmd, str), cwd=job, stdin=subprocess.DEVNULL,
                                 stdout=log, stderr=log, env=env, **DETACH)
-        PROCS[base] = proc
+        _register_proc(base, proc)
+        _mark_skill_accepted(job, 'cli')
         waited = wait_cli_process(proc, job)
         rc = waited.get('rc') if waited.get('rc') is not None else -1
         if waited['status'] == 'stalled':
@@ -1803,9 +2330,9 @@ def real_agent(job, cmd):
                          {'act': 'open_engine', 'label': '去绑定已装的生成引擎'}]
     except Exception as e: spawn_err = '运行异常:%s' % e
     finally:
-        PROCS.pop(base, None)
-    if base in CANCEL:                       # 用户删了任务:什么都不用再说
-        stop.set(); log.close(); RUNNING.discard(base); CANCEL.discard(base); return
+        _clear_proc(base, proc)
+    if _cancel_requested(base):              # 用户停止/删除了任务:控制端已经给出明确回执
+        stop.set(); watcher_thread.join(timeout=5); log.close(); return
     if spawn_err:
         ev = {'type': 'error', 'text': spawn_err}
         if spawn_actions: ev['actions'] = spawn_actions
@@ -1813,7 +2340,7 @@ def real_agent(job, cmd):
     stop.set(); watcher_thread.join(timeout=5)
     # 进程最后几毫秒写下的声明不能因 watcher 的 4 秒轮询周期丢掉。
     agent_line[0], _accepted = drain_agent_events(job, agent_line[0])
-    log.close(); RUNNING.discard(base)
+    log.close()
     harvest(job)
     for fn in list_deliverables(job):
         if fn not in known: known.add(fn); emit(job, {'type': 'artifact', 'name': fn})
@@ -1828,15 +2355,16 @@ def real_agent(job, cmd):
         return settle(job, known)
         summary, actions = artifact_summary(job, known)
         used = skill_evidence(job)
-        if not used['ok']:      # 技能包没被读到:产出多半是"自由发挥",必须当面说清而不是假装完成
-            summary += ('\n\n⚠ **没有检测到技能包被使用**(%s)。这一版是模型自由发挥的结果,'
-                        '通常表现为:结构不全、格式门禁不过、没有响应矩阵与偏离表。'
-                        '到「设置 · 生成引擎」把引擎换成内置的 SoWork / Claude Code / Codex(它们会自动带上技能包路径),'
-                        '或在自定义命令里加入 {skill} 占位符,然后重跑本任务。' % used['why'])
+        if used['state'] == 'unverifiable':
+            summary += ('\n\n⚠ **技能包运行证据暂时无法核验**(%s)请人工复核响应矩阵与格式门禁。' % used['why'])
+            actions = (actions or []) + [{'act': 'open_log', 'label': '查看运行日志'}]
+        elif used['state'] == 'missing':
+            summary += ('\n\n⚠ **技能包没有完成装载或派发**(%s)请检查生成引擎设置后重跑。' % used['why'])
             actions = (actions or []) + [{'act': 'open_engine', 'label': '去修生成引擎设置'},
                                          {'act': 'open_log', 'label': '查看运行日志'}]
         emit(job, {'type': 'message', 'role': 'agent', 'text': summary, 'actions': actions})
-        emit(job, {'type': 'skill_used', 'ok': used['ok'], 'hits': used['hits'], 'why': used['why']})
+        emit(job, {'type': 'skill_used', 'state': used['state'], 'ok': used['ok'],
+                   'hits': used['hits'], 'why': used['why']})
         try: quality_audit(job, known)
         except Exception as e:
             emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 成品质检未能执行:%s' % e})
@@ -2143,7 +2671,7 @@ def agent_status():
 
 def config_locked_jobs():
     """运行中或可恢复的暂停会话都锁住全局模型，避免同一任务跨模型续写。"""
-    locked = set(RUNNING)
+    locked = set(_running_snapshot())
     try: ids = os.listdir(jobs_dir())
     except Exception: ids = []
     for jid in ids:
@@ -2260,9 +2788,10 @@ def agent_test():
                                       '多为数据目录不可写。' % conf_err}
     t0 = time.time()
     try:
-        r = subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, timeout=int(eng.get('test_timeout') or 120),
-                           env=run_env, cwd=DATA, **DETACH)
+        r = _tracked_detached_run(
+            cmd, shell=isinstance(cmd, str), capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, timeout=int(eng.get('test_timeout') or 120),
+            env=run_env, cwd=DATA)
     except subprocess.TimeoutExpired:
         return {'ok': False, 'error': '测试超时(超过 2 分钟没有返回)。多为网关不通或 CLI 在等待登录/授权。'}
     except FileNotFoundError as e:
@@ -2348,8 +2877,10 @@ async def create_job(tender: UploadFile = File(None), materials: UploadFile = Fi
         z = os.path.join(job, '_m.zip'); open(z, 'wb').write(await materials.read())
         try: zipfile.ZipFile(z).extractall(_mk(mdir))
         except Exception: pass
+    # 先落 staged，再取得 admission 后由 _launch_job_reserved 原子切为运行；
+    # 即使 replay/shutdown 暂时拒绝，也不会留下“看似运行但没有 worker”的孤儿。
     write_json(os.path.join(job, '任务.json'), {'name': name or tname, 'created_at': now(),
-               'paused': False, 'staged': start == '0', 'tender': tname, 'prompt': prompt})
+               'paused': False, 'staged': True, 'tender': tname, 'prompt': prompt})
     if prompt:
         # 落盘成文件,agent 才真的看得到(以前只发了一条聊天消息,界面写着「会作为生成指令的一部分」其实没进指令)
         open(os.path.join(job, '你的要求.md'), 'w', encoding='utf-8').write(prompt)
@@ -2365,15 +2896,77 @@ async def create_job(tender: UploadFile = File(None), materials: UploadFile = Fi
     if start == '0':
         emit(job, {'type': 'progress', 'stage': '待开始(素材已就位,点「开始生成」)', 'pct': 0, 'step': 0, 'total': 12})
         return {'job_id': jid, 'mode': 'staged'}
-    return _launch_job(jid, job, mock)
+    return _launch_http_result(_launch_job(jid, job, mock))
+
+def _launch_blocked(jid, job, reason):
+    """全局/控制态禁入时保留一个可见的待开始任务，绝不假报 running。"""
+    messages = {
+        'replay': '正在恢复运行日志证据，请稍后在任务列表点“开始生成”重试。',
+        'control': '任务正在停止或删除，请稍后重试。',
+        'shutdown': '应用正在安全退出，请重新打开后在任务列表点“开始生成”。',
+        'exiting': '引擎正在退出，请等待应用重新连接后再开始生成。',
+    }
+    meta_path = os.path.join(job, '任务.json')
+    meta = read_json(meta_path, {})
+    # 只有本来就是待开始的新建/重跑任务才写 staged；历史/活跃任务绝不能被拒绝路径改状态。
+    if meta.get('staged'):
+        emit(job, {'type': 'progress', 'stage': '待开始（%s）' % messages.get(reason, '当前暂不能启动'),
+                   'pct': 0, 'step': 0, 'total': 12})
+    return {'ok': False, 'job_id': jid, 'mode': 'staged', 'blocked': reason,
+            'retryable': True, 'error': messages.get(reason, '当前暂不能启动，请稍后重试。'),
+            '_status': 409 if reason == 'control' else 503}
+
+def _launch_http_result(result, include_ok=False):
+    """把内部 admission 结果转换成 HTTP；`_status` 永不泄漏给前端。"""
+    if isinstance(result, dict) and result.get('_status'):
+        body = dict(result); status = int(body.pop('_status'))
+        return JSONResponse(body, status)
+    if include_ok and isinstance(result, dict):
+        return {'ok': result.get('mode') != 'error', **result}
+    return result
+
+def _admission_failure(reason, running_error):
+    errors = {
+        'running': running_error,
+        'control': '任务正在停止或删除，请稍后重试。',
+        'replay': '正在恢复运行日志证据，请稍后重试。',
+        'shutdown': '应用正在安全退出，请重新打开后重试。',
+        'exiting': '引擎正在退出，请等待应用重新连接后重试。',
+    }
+    return JSONResponse({'ok': False, 'retryable': True,
+                         'error': errors.get(reason, '当前暂不能启动，请稍后重试。'),
+                         'blocked': reason},
+                        409 if reason in ('running', 'control') else 503)
 
 def _launch_job(jid, job, mock='auto'):
+    base = os.path.basename(jid)
+    owner, reason = _reserve_running_reason(base)
+    if not owner:
+        if reason == 'running':
+            return {'job_id': jid, 'mode': 'running', 'already_running': True}
+        return _launch_blocked(jid, job, reason)
+    try:
+        result = _launch_job_reserved(jid, job, mock, owner)
+    except Exception:
+        _release_running(base, owner)
+        raise
+    if result.get('mode') == 'error': _release_running(base, owner)
+    return result
+
+def _launch_job_reserved(jid, job, mock, owner):
     """按当前引擎配置启动生成。主件路径只信 任务.json 的 tender 字段(建任务时就定死,不做猜测)。"""
     meta = read_json(os.path.join(job, '任务.json'), {})
     tpath = os.path.join(job, os.path.basename(meta.get('tender') or ''))
     if not os.path.isfile(tpath):
         emit(job, {'type': 'error', 'text': '找不到招标文件「%s」,请删除本任务重新创建。' % meta.get('tender')})
         return {'job_id': jid, 'mode': 'error'}
+    # launch 是全新证据轮次：轮换 run_id，并丢弃上一轮会话/证据引用。
+    # resume 不经过这里，因此会保留原 run_id 与会话。
+    meta['run_id'] = _new_run_id()
+    meta['staged'] = False
+    meta.pop('skill_manifest', None)
+    meta.pop('oc_session', None)
+    meta.pop('oc_questions', None)
     # 新开/重跑会重新结算；不能沿用上一次 stopped/done 终态。
     try: os.unlink(os.path.join(job, 'outcome.json'))
     except FileNotFoundError: pass
@@ -2398,7 +2991,7 @@ def _launch_job(jid, job, mock='auto'):
                        'text': '当前还没填 API Key,先用**内置演示流程**把全流程跑给你看(产出为样例稿)。'
                                '到「设置 · 模型接入」把 Key 填上再重跑本任务,产出的就是真实标书。',
                        'actions': [{'act': 'open_engine', 'label': '去填 Key'}]})
-        threading.Thread(target=mock_agent, args=(job,), daemon=True).start()
+        _start_reserved_worker(os.path.basename(jid), owner, mock_agent, job)
     else:
         mat = merged_materials(job)     # 这一处最要紧:它决定 agent 命令行里的 materialsDir
         sd_path = skill_dir_conf(read_json(conf_path(), {}))
@@ -2412,11 +3005,17 @@ def _launch_job(jid, job, mock='auto'):
         kind_now = ((read_json(conf_path(), {}).get('engine') or {}).get('kind') or 's2')
         oc_prompt = sub(next((a for a in (agent_cmd if isinstance(agent_cmd, list) else [])
                               if 'SKILL.md' in str(a) or len(str(a)) > 300), ''))
-        if kind_now in ('s2', 'opencode') and oc_prompt and not os.environ.get('BID_NO_OC_SERVER'):
-            threading.Thread(target=agent_via_server_or_cli,
-                             args=(job, oc_prompt, cmd), daemon=True).start()
+        use_oc_server = bool(kind_now in ('s2', 'opencode') and oc_prompt
+                             and not os.environ.get('BID_NO_OC_SERVER'))
+        dispatch = oc_prompt if use_oc_server else cmd
+        _set_skill_manifest(job, sd_path, dispatch,
+                            _dispatch_contains_skill(dispatch, sd_path),
+                            'opencode' if use_oc_server else 'cli')
+        if use_oc_server:
+            _start_reserved_worker(os.path.basename(jid), owner, agent_via_server_or_cli,
+                                   job, oc_prompt, cmd)
         else:
-            threading.Thread(target=real_agent, args=(job, cmd), daemon=True).start()
+            _start_reserved_worker(os.path.basename(jid), owner, real_agent, job, cmd)
     return {'job_id': jid, 'mode': 'mock' if use_mock else 'agent'}
 
 def finish_job(job):
@@ -2424,8 +3023,7 @@ def finish_job(job):
     收拢子目录产物 → 缺 Word 就零 token 补出来 → 完成播报 → 技能包证据 → 成品质检。
     两条路的收尾必须一致,否则会出现「换了条路跑,完成播报就不一样」这种说不清的差异。"""
     base = os.path.basename(job)
-    if base in CANCEL:
-        CANCEL.discard(base); return
+    if _cancel_requested(base): return
     return settle(job)
     harvest(job)
     known = set(list_deliverables(job))
@@ -2444,12 +3042,15 @@ def finish_job(job):
     # 终态只能由 settle() 写入；以下旧收尾保留为迁移注释路径且不可达。
     summary, actions = artifact_summary(job, known)
     used = skill_evidence(job)
-    if not used['ok']:
-        summary += ('\n\n⚠ **没有检测到技能包被使用**(%s)。这一版多半是模型自由发挥的结果,'
-                    '通常表现为:结构不全、格式门禁不过、没有响应矩阵与偏离表。' % used['why'])
+    if used['state'] == 'unverifiable':
+        summary += ('\n\n⚠ **技能包运行证据暂时无法核验**(%s)请人工复核响应矩阵与格式门禁。' % used['why'])
+        actions = (actions or []) + [{'act': 'open_log', 'label': '查看运行日志'}]
+    elif used['state'] == 'missing':
+        summary += ('\n\n⚠ **技能包没有完成装载或派发**(%s)请检查生成引擎设置后重跑。' % used['why'])
         actions = (actions or []) + [{'act': 'open_log', 'label': '查看运行日志'}]
     emit(job, {'type': 'message', 'role': 'agent', 'text': summary, 'actions': actions})
-    emit(job, {'type': 'skill_used', 'ok': used['ok'], 'hits': used['hits'], 'why': used['why']})
+    emit(job, {'type': 'skill_used', 'state': used['state'], 'ok': used['ok'],
+               'hits': used['hits'], 'why': used['why']})
     try: quality_audit(job, known)
     except Exception as e:
         emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 成品质检未能执行:%s' % e})
@@ -2458,7 +3059,6 @@ def agent_via_server_or_cli(job, prompt, cmd):
     """先试 server 模式,不成回落 CLI。两条路的收尾(收拢产物/补出 Word/质检/播报)必须一致 ——
     否则会出现「换了条路跑,完成播报就不一样」这种说不清的差异。"""
     base = os.path.basename(job)
-    RUNNING.add(base)
     result = OC_RUN_INTERRUPTED
     try:
         result = oc_run(job, prompt)
@@ -2468,16 +3068,11 @@ def agent_via_server_or_cli(job, prompt, cmd):
                            redact(str(e)[:120]),
                    'actions': [{'act': 'rerun', 'label': '确认后重跑'},
                                {'act': 'open_log', 'label': '查看运行日志'}]})
-    finally:
-        RUNNING.discard(base)
     if result == OC_RUN_FALLBACK:
-        if base in CANCEL:
-            CANCEL.discard(base)
-            return
-        real_agent(job, cmd)      # 回落:它自己会管 RUNNING 与全部收尾
+        if _cancel_requested(base): return
+        real_agent(job, cmd)      # 回落仍沿用外层同一个 reservation，直到全部收尾完成
         return
     if result == OC_RUN_CANCELLED:
-        CANCEL.discard(base)
         return
     if result == OC_RUN_COMPLETED:
         finish_job(job)
@@ -2489,28 +3084,62 @@ def start_job(jid: str, mock: str = 'auto'):
     """启动「待开始」的暂存任务(向导里点「稍后开始」建出来的)"""
     job = jpath(jid)
     if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
-    meta = read_json(os.path.join(job, '任务.json'), {})
-    base = os.path.basename(jid)
-    if not meta.get('staged') and (base in RUNNING):
-        return {'ok': True, 'note': '任务已在运行'}
-    meta['staged'] = False
-    write_json(os.path.join(job, '任务.json'), meta)
     r = _launch_job(jid, job, mock)
-    return {'ok': r.get('mode') != 'error', **r}
+    return _launch_http_result(r, include_ok=True)
+
+def _interrupt_or_finished(sid):
+    """中断 OpenCode 会话；已进入终态也算安全停住，网络/服务失败则返回 False。"""
+    if not sid or not OC.get('base'): return True
+    if oc_interrupt(sid): return True
+    try:
+        done, _why = oc_turn(sid)
+        return bool(done)
+    except Exception:
+        return False
+
+def _stop_running_owner(job, base, owner):
+    """停止指定 owner 的 server/CLI/mock；控制 tombstone 必须由调用方持有。"""
+    if not owner: return True, False
+    sid = (read_json(os.path.join(job, '任务.json'), {}) or {}).get('oc_session')
+    server_active = bool(sid and OC.get('base'))
+    interrupted = _interrupt_or_finished(sid) if server_active else True
+    proc = _take_proc(base, owner)
+    # 有匹配 CLI 说明当前已走 fallback；旧 sid 中断失败不影响杀掉真正执行体。
+    if server_active and not interrupted and not proc:
+        return False, False
+    requested = _request_cancel(base, owner)
+    if proc: kill_tree(proc)
+    return True, requested
+
+def _wait_owner_exit(base, owner, timeout=8):
+    deadline = time.monotonic() + max(0.1, float(timeout))
+    while _owner_running(base, owner) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return not _owner_running(base, owner)
 
 @app.delete('/v1/jobs/{jid}')
 def del_job(jid: str):
     job = jpath(jid)                      # jpath 已做 basename,防目录穿越
     if not os.path.isdir(job): return {'ok': True}   # 已经没了=删除成功,幂等
     base = os.path.basename(jid)
-    CANCEL.add(base)                      # 通知 mock 线程收工
-    kill_tree(PROCS.pop(base, None))      # 真实 agent 还在跑:连子孙进程一起收掉
-    for _ in range(3):                    # 进程退出与文件句柄释放有竞态,小重试
-        shutil.rmtree(job, ignore_errors=True)
-        if not os.path.isdir(job): break
-        time.sleep(0.4)
-    RUNNING.discard(base)
-    return {'ok': True}
+    control, owner = _begin_job_control(base)
+    if not control:
+        return JSONResponse({'ok': False, 'error': '任务正在执行另一个停止或删除操作，请稍后重试'}, 409)
+    try:
+        ok, _requested = _stop_running_owner(job, base, owner)
+        if not ok:
+            return JSONResponse({'ok': False, 'error': '执行外壳没有确认停止当前会话，任务未删除；请稍后重试'}, 502)
+        if owner and not _wait_owner_exit(base, owner):
+            return JSONResponse({'ok': False, 'error': '生成进程尚未完全退出，任务未删除；请稍后重试'}, 409)
+        for _ in range(3):                # 文件句柄释放仍可能晚几十毫秒，小重试后必须验真
+            shutil.rmtree(job, ignore_errors=True)
+            if not os.path.isdir(job): break
+            time.sleep(0.4)
+        if os.path.isdir(job):
+            return JSONResponse({'ok': False, 'error': '任务目录仍被占用，删除没有完成；请稍后重试'}, 500)
+        return {'ok': True}
+    finally:
+        _end_job_control(base, control)
 
 def job_state(job, meta=None, prog=None):
     """任务当前处于哪个状态 —— 由引擎给出结论,不让前端从进度百分比反推。
@@ -2522,7 +3151,7 @@ def job_state(job, meta=None, prog=None):
     meta = read_json(os.path.join(job, '任务.json'), {}) if meta is None else meta
     prog = read_json(os.path.join(job, 'progress.json'), {}) if prog is None else prog
     if meta.get('staged'): return 'staged'                       # 暂存,还没开跑
-    if os.path.basename(job) in RUNNING: return 'running'
+    if _is_running(os.path.basename(job)): return 'running'
     outcome = read_json(os.path.join(job, 'outcome.json'), {})
     if outcome.get('state') == 'done':
         return 'done' if _body_docxs(job) else 'stopped'
@@ -2751,21 +3380,11 @@ async def rerun_job(jid: str):
     if os.path.isfile(req): shutil.copy2(req, os.path.join(nj, '你的要求.md'))
     write_json(os.path.join(nj, '任务.json'),
                {'name': (meta.get('name', '') or tname) + ' · 重跑', 'created_at': now(), 'paused': False,
-                'tender': tname, 'prompt': meta.get('prompt', '')})
-    agent_cmd = config_agent_cmd()
-    use_mock = not agent_cmd
-    if use_mock:
-        threading.Thread(target=mock_agent, args=(nj,), daemon=True).start()
-    else:
-        mat = assets_dir()
-        sd_path = skill_dir_conf(read_json(conf_path(), {}))
-        if not os.path.isfile(os.path.join(sd_path, 'SKILL.md')): sd_path = ensure_skill()
-        sub = lambda s: (s.replace('{tender}', os.path.join(nj, tname)).replace('{out}', nj)
-                          .replace('{materials}', mat).replace('{jobid}', nid).replace('{skill}', sd_path))
-        cmd = [sub(a) for a in agent_cmd] if isinstance(agent_cmd, list) else sub(agent_cmd)
-        cmd = login_shell_wrap(cmd, (read_json(conf_path(), {}).get('engine') or {}))
-        threading.Thread(target=real_agent, args=(nj, cmd), daemon=True).start()
-    return {'ok': True, 'job_id': nid, 'mode': 'mock' if use_mock else 'agent'}
+                'staged': True, 'tender': tname, 'prompt': meta.get('prompt', '')})
+    # 重跑与新建/暂存启动必须走同一条派发路径：轮换 run_id、冻结模型与技能收据，
+    # 再决定 OpenCode server / CLI / mock，避免旁路漏掉出件证据。
+    result = _launch_job(nid, nj, 'auto')
+    return _launch_http_result(result, include_ok=True)
 
 RESUME_PROMPT = (
     '接着做这一单。**先看一眼任务目录里已经有什么** —— 已经写好的不要重写、不要推翻,'
@@ -2774,15 +3393,12 @@ RESUME_PROMPT = (
 
 def resume_worker(job, cmd):
     """「继续做」的执行体。刻意跟正常跑同一套收尾,免得续做完的播报跟跑完的不一样。"""
-    base = os.path.basename(job)
-    RUNNING.add(base)
     result = OC_RUN_INTERRUPTED
     try:
         result = oc_run(job, RESUME_PROMPT)
     except Exception as e:
         emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 续做异常:%s' % str(e)[:160]})
-    finally:
-        RUNNING.discard(base)
+    if result == OC_RUN_CANCELLED: return
     if result != OC_RUN_COMPLETED:
         # 这里**不能**回落成从头重跑:用户点的是「继续做」,悄悄从头来会把已有产物覆盖掉
         emit(job, {'type': 'error', 'text': '没能接着做(执行外壳没起来或原会话已失效)。'
@@ -2802,31 +3418,39 @@ async def resume_job(jid: str):
     job = jpath(jid)
     if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
     base = os.path.basename(jid)
-    if base in RUNNING: return JSONResponse({'ok': False, 'error': '这一单正在跑,不用续'}, 400)
-    meta = read_json(os.path.join(job, '任务.json'), {})
-    sid = meta.get('oc_session')
-    if not sid:
-        return JSONResponse({'ok': False, 'error': '这一单没有留下可以接着做的会话'
-                                                   '(多半是用兼容模式跑的),只能「重跑本任务」从头来。'}, 400)
-    if not oc_serve():
-        return JSONResponse({'ok': False, 'error': '执行外壳没起来,接不上原来的会话'}, 400)
-    st, _s = oc_api('/api/session/%s' % sid, timeout=20)
-    if st != 200:
-        return JSONResponse({'ok': False, 'error': '原来的会话已经不在了(执行外壳重装过或数据被清理),'
-                                                   '只能「重跑本任务」从头来。'}, 400)
-    meta['paused'] = False; write_json(os.path.join(job, '任务.json'), meta)
-    CANCEL.discard(base)
-    emit(job, {'type': 'message', 'role': 'agent',
-               'text': '好,接着上次的地方往下做。它还记得前面读过什么、写到哪,不会推翻已经写好的。'})
-    emit(job, {'type': 'progress', 'stage': '继续做', 'pct': max(1, int(
-        (read_json(os.path.join(job, 'progress.json'), {}).get('pct') or 1))), 'step': int(
-        read_json(os.path.join(job, 'progress.json'), {}).get('step') or 1), 'total': 12})
-    threading.Thread(target=resume_worker, args=(job, None), daemon=True).start()
-    return {'ok': True}
+    owner, reason = _reserve_running_reason(base)
+    if not owner:
+        return _admission_failure(reason, '这一单正在跑，不用重复续做。')
+    try:
+        # 先占位再读会话；否则 redo/start 可在读取后轮换 run_id/session，续做会串到旧轮。
+        meta = read_json(os.path.join(job, '任务.json'), {})
+        sid = meta.get('oc_session')
+        if not sid:
+            _release_running(base, owner)
+            return JSONResponse({'ok': False, 'error': '这一单没有留下可以接着做的会话'
+                                                       '(多半是用兼容模式跑的),只能「重跑本任务」从头来。'}, 400)
+        if not oc_serve():
+            _release_running(base, owner)
+            return JSONResponse({'ok': False, 'error': '执行外壳没起来,接不上原来的会话'}, 400)
+        st, _s = oc_api('/api/session/%s' % sid, timeout=20)
+        if st != 200:
+            _release_running(base, owner)
+            return JSONResponse({'ok': False, 'error': '原来的会话已经不在了(执行外壳重装过或数据被清理),'
+                                                       '只能「重跑本任务」从头来。'}, 400)
+        meta['paused'] = False; write_json(os.path.join(job, '任务.json'), meta)
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '好,接着上次的地方往下做。它还记得前面读过什么、写到哪,不会推翻已经写好的。'})
+        emit(job, {'type': 'progress', 'stage': '继续做', 'pct': max(1, int(
+            (read_json(os.path.join(job, 'progress.json'), {}).get('pct') or 1))), 'step': int(
+            read_json(os.path.join(job, 'progress.json'), {}).get('step') or 1), 'total': 12})
+        _start_reserved_worker(base, owner, resume_worker, job, None)
+        return {'ok': True}
+    except Exception:
+        _release_running(base, owner)
+        raise
 
 def mock_redo(job, instruction):
     """演示引擎的定向重做:三步小流程,产出重做说明,进度回到完成态"""
-    RUNNING.add(os.path.basename(job))
     try:
         steps = ['定位相关内容', '按指令重写', '重新汇总自检']
         for i, st in enumerate(steps):
@@ -2839,16 +3463,20 @@ def mock_redo(job, instruction):
         emit(job, {'type': 'artifact', 'name': fn})
         settle(job)
     finally:
-        RUNNING.discard(os.path.basename(job)); CANCEL.discard(os.path.basename(job))
+        pass  # reservation wrapper 负责 owner-scoped 取消清理与释放
 
 @app.get('/v1/jobs/{jid}/log')
 def job_log(jid: str, n: int = 20000):
-    """agent 原始运行日志:判断「到底有没有用到技能包/为什么没产出」的唯一硬证据"""
+    """agent 文本日志 + 引擎观测到的结构化技能证据状态。"""
     job = jpath(jid)
     txt = read_tail(os.path.join(job, 'run.log'), max(1000, min(int(n or 20000), 200000)))
     ev = skill_evidence(job)
-    return {'ok': True, 'log': _redact_runtime(txt) or '(没有运行日志:该任务用的是内置演示流程,或 agent 没有任何输出)',
-            'skill_used': ev['ok'], 'hits': ev['hits'], 'why': ev['why']}
+    if ev['state'] == 'unverifiable' and _replay_oc_skill_evidence(job):
+        ev = skill_evidence(job)
+    return {'ok': True,
+            'log': _redact_runtime(txt) or '(没有文本运行日志：OpenCode 内置执行路径可能只产生结构化事件，或执行外壳没有文本输出)',
+            'skill_state': ev['state'], 'skill_used': ev['ok'],
+            'hits': ev['hits'], 'why': ev['why']}
 
 def _redact_config(value, key=''):
     if _sensitive_config_key(key) or str(key).lower() in ('cmd', 'env'):
@@ -2932,33 +3560,32 @@ def stop_job(jid: str):
     """停止正在跑的任务(保留已生成的产物,不删任务)"""
     base = os.path.basename(jid); job = jpath(jid)
     if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': 'not found'}, 404)
-    if base not in RUNNING: return {'ok': True, 'note': '任务本来就没有在运行'}
-    CANCEL.add(base)          # 由 real_agent 收尾时清除;提前清会让"手动停止"被误报成"异常退出"
-    # server 模式:先请它优雅中断(半截产物完整落盘、会话保留、之后能续跑),
-    # 而不是直接杀进程组 —— kill 掉的是共用的常驻 server,会把别的任务一起打死。
-    sid = (read_json(os.path.join(job, '任务.json'), {}) or {}).get('oc_session')
-    if sid and OC.get('base'):
-        oc_interrupt(sid)
-    else:
-        kill_tree(PROCS.pop(base, None))
-    RUNNING.discard(base)
-    emit(job, {'type': 'message', 'role': 'agent', 'text': '已按你的要求停止。已生成的产物都保留着,可以「重跑」或「定向重做」。'})
-    halt(job, '已停止(手动)')
-    return {'ok': True}
+    control, owner = _begin_job_control(base)
+    if not control:
+        return JSONResponse({'ok': False, 'error': '任务正在执行另一个停止或删除操作，请稍后重试'}, 409)
+    try:
+        if not owner: return {'ok': True, 'note': '任务本来就没有在运行'}
+        ok, requested = _stop_running_owner(job, base, owner)
+        if not ok:
+            return JSONResponse({'ok': False, 'error': '执行外壳没有确认停止，会话可能仍在运行；未宣告停止，请稍后重试'}, 502)
+        if not requested:
+            return {'ok': True, 'note': '任务刚刚已经结束'}
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '已按你的要求停止。已生成的产物都保留着,可以「重跑」或「定向重做」。'})
+        halt(job, '已停止(手动)')
+        return {'ok': True}
+    finally:
+        _end_job_control(base, control)
 
-@app.post('/v1/jobs/{jid}/redo')
-async def redo_job(jid: str, req: Request):
-    """定向重做:在当前任务里只重做用户指定的部分,其余产物保留,完成后重新汇总自检"""
-    body = await req.json()
-    instruction = (body.get('instruction') or '').strip()
-    job = jpath(jid)
-    if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': 'not found'}, 404)
-    if not instruction: return JSONResponse({'ok': False, 'error': '缺少重做指令'}, 400)
-    if os.path.basename(jid) in RUNNING:
-        return JSONResponse({'ok': False, 'error': '任务正在运行,等它停下或先暂停再定向重做'}, 409)
+def _redo_job_reserved(jid, job, instruction, owner):
     try: os.unlink(os.path.join(job, 'outcome.json'))
     except FileNotFoundError: pass
     meta0 = read_json(os.path.join(job, '任务.json'), {})
+    # redo 是新一次执行尝试，不能继承旧轮次的技能读取证据或 OpenCode 会话。
+    meta0['run_id'] = _new_run_id()
+    meta0.pop('skill_manifest', None)
+    meta0.pop('oc_session', None)
+    meta0.pop('oc_questions', None)
     harvest(job)
     conf0 = read_json(conf_path(), {})
     up0 = s2_conf(conf0); eng0 = conf0.get('engine') or {}
@@ -2973,7 +3600,7 @@ async def redo_job(jid: str, req: Request):
     write_json(os.path.join(job, '任务.json'), meta0)
     agent_cmd = config_agent_cmd()
     if not agent_cmd:
-        threading.Thread(target=mock_redo, args=(job, instruction), daemon=True).start()
+        _start_reserved_worker(os.path.basename(jid), owner, mock_redo, job, instruction)
         return {'ok': True, 'mode': 'mock'}
     conf = read_json(conf_path(), {})
     meta = read_json(os.path.join(job, '任务.json'), {})
@@ -2998,9 +3625,28 @@ async def redo_job(jid: str, req: Request):
             json.dumps({'type': 'redo', 'instruction': instruction}, ensure_ascii=False) + '\n')
         cmd = sub(raw)
     cmd = login_shell_wrap(cmd, conf.get('engine') or {})
+    _set_skill_manifest(job, sd, cmd, _dispatch_contains_skill(cmd, sd), 'cli')
     emit(job, {'type': 'progress', 'stage': '定向重做启动', 'pct': 5, 'step': 1, 'total': 12})
-    threading.Thread(target=real_agent, args=(job, cmd), daemon=True).start()
+    _start_reserved_worker(os.path.basename(jid), owner, real_agent, job, cmd)
     return {'ok': True, 'mode': 'agent'}
+
+@app.post('/v1/jobs/{jid}/redo')
+async def redo_job(jid: str, req: Request):
+    """定向重做:在当前任务里只重做用户指定的部分,其余产物保留,完成后重新汇总自检"""
+    body = await req.json()
+    instruction = (body.get('instruction') or '').strip()
+    job = jpath(jid)
+    if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': 'not found'}, 404)
+    if not instruction: return JSONResponse({'ok': False, 'error': '缺少重做指令'}, 400)
+    base = os.path.basename(jid)
+    owner, reason = _reserve_running_reason(base)
+    if not owner:
+        return _admission_failure(reason, '任务正在运行，等它停下后再定向重做。')
+    try:
+        return _redo_job_reserved(jid, job, instruction, owner)
+    except Exception:
+        _release_running(base, owner)
+        raise
 
 def route_command(job, jid, text, running):
     """对话即遥控器:把自然语言识别成任务指令。可逆的(暂停/继续)直接执行;
@@ -3009,14 +3655,15 @@ def route_command(job, jid, text, running):
     t = (text or '').strip()
     if not t or t.endswith(('?', '?', '吗', '么')): return False
     if running and re.match(r'^(暂停|停一下|先停|暂停一下|先暂停)', t):
-        meta = read_json(os.path.join(job, '任务.json'), {}); meta['paused'] = True
-        write_json(os.path.join(job, '任务.json'), meta)
-        emit(job, {'type': 'message', 'role': 'agent', 'text': '好,已暂停。说「继续」随时接着跑。'})
+        # 聊天路由没有资格只改 paused 标志就宣称真外壳停了；真实暂停必须走 /control，
+        # 由它确认 OpenCode interrupt 或明确告知兼容模式无法暂停。
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '收到暂停请求。请点任务标题旁的“暂停按钮”执行；按钮会先确认执行外壳真的停下，'
+                           '如果当前兼容模式不支持暂停，会明确提示你改用“停止”。'})
         return True
     if running and re.match(r'^(继续|接着跑|恢复|继续生成|接着写)', t):
-        meta = read_json(os.path.join(job, '任务.json'), {}); meta['paused'] = False
-        write_json(os.path.join(job, '任务.json'), meta)
-        emit(job, {'type': 'message', 'role': 'agent', 'text': '已继续。'})
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '请点任务标题旁的“继续做”恢复原会话；只有执行外壳确认接上后才算继续成功。'})
         return True
     targeted = re.search(r'第.{1,6}(章|节|步|部分)|某一步|目录|封面|报价|偏离表|自检', t)
     if re.search(r'重新启动|重新生成|整个重|重跑|再来一遍|全部重来', t) and not targeted:
@@ -3037,9 +3684,9 @@ async def message(jid: str, req: Request):
     body = await req.json()
     job = jpath(jid); text = body.get('content', '')
     emit(job, {'type': 'message', 'role': 'user', 'text': text})
-    if route_command(job, jid, text, os.path.basename(jid) in RUNNING):
+    if route_command(job, jid, text, _is_running(os.path.basename(jid))):
         return {'ok': True}
-    if os.path.basename(jid) not in RUNNING:
+    if not _is_running(os.path.basename(jid)):
         # 任务已结束:不管生成引擎是哪种,都用已配模型基于产出回答(没配模型则给出指引);
         # thinking 状态让前端立刻显示"正在回复…",答案/失败原因随后必到
         emit(job, {'type': 'status', 'state': 'thinking'})
@@ -3107,24 +3754,38 @@ async def control(jid: str, req: Request):
     body = await req.json(); job = jpath(jid)
     base = os.path.basename(jid)
     want_pause = body.get('action') == 'pause'
-    meta = read_json(os.path.join(job, '任务.json'), {})
     if not want_pause:                       # 继续 = 走「接着做」那条路
         return await resume_job(jid)
-    sid = meta.get('oc_session')
-    if base in RUNNING and config_agent_cmd():
-        if not (sid and OC.get('base') and oc_interrupt(sid)):
+    control, owner = _begin_job_control(base)
+    if not control:
+        return JSONResponse({'ok': False, 'error': '任务正在执行另一个停止或删除操作，请稍后重试'}, 409)
+    try:
+        meta = read_json(os.path.join(job, '任务.json'), {})
+        if not owner:
+            return JSONResponse({'ok': False, 'error': '任务当前没有在运行，不需要暂停'}, 409)
+        if not config_agent_cmd():
+            # mock worker 只能轮询 paused 标志且仍占 RUNNING；若在这里假暂停，resume 会因
+            # 同一 owner 尚在而永远进不去。演示流程明确不支持暂停，比制造死锁可靠。
+            emit(job, {'type': 'message', 'role': 'agent',
+                       'text': '内置演示流程不支持暂停；可以让它很快跑完，或使用“停止”结束本单。'})
+            return JSONResponse({'ok': False, 'error': '内置演示流程不支持暂停，请改用停止'}, 400)
+        sid = meta.get('oc_session')
+        if not (sid and OC.get('base') and _interrupt_or_finished(sid)):
             emit(job, {'type': 'message', 'role': 'agent',
                        'text': '⚠ 这一轮停不下来(没有可中断的会话,多半是兼容模式跑的)。'
                                '它还在继续写 —— 要真停请用「停止」,那会结束整单。'})
             return JSONResponse({'ok': False, 'error': '当前这轮不支持暂停'}, 400)
-        CANCEL.add(base)                     # 让 finish_job 知道这不是跑完了,别播完成
-    meta['paused'] = True
-    write_json(os.path.join(job, '任务.json'), meta)
-    emit(job, {'type': 'message', 'role': 'agent',
-               'text': '已停下来。写到哪儿就停在哪儿,产物都在;点「继续做」它会回到原来的思路往下接。',
-               'actions': [{'act': 'resume', 'label': '继续做'}]})
-    halt(job, '已暂停')
-    return {'ok': True}
+        if not _request_cancel(base, owner):
+            return {'ok': True, 'note': '任务刚刚已经结束'}
+        meta['paused'] = True
+        write_json(os.path.join(job, '任务.json'), meta)
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '已停下来。写到哪儿就停在哪儿,产物都在;点「继续做」它会回到原来的思路往下接。',
+                   'actions': [{'act': 'resume', 'label': '继续做'}]})
+        halt(job, '已暂停')
+        return {'ok': True}
+    finally:
+        _end_job_control(base, control)
 
 @app.get('/v1/jobs/{jid}/artifacts')
 def artifacts(jid: str):
@@ -3847,8 +4508,8 @@ def _provision_codex(which='codex'):
                 t.extract(m, dstdir)
             os.chmod(dst, 0o755)
             PROV.update({'pct': 92, 'note': '正在校验…'})
-            r = subprocess.run([dst, '--version'], capture_output=True, text=True, timeout=30,
-                               stdin=subprocess.DEVNULL, **DETACH)
+            r = _tracked_detached_run([dst, '--version'], capture_output=True, text=True, timeout=30,
+                                      stdin=subprocess.DEVNULL)
             ver = (r.stdout or r.stderr or '').strip()
             if r.returncode != 0: raise RuntimeError('校验失败:%s' % ver[-200:])
             PROV.update({'state': 'done', 'pct': 100, 'path': dst, 'note': '已安装:%s' % (ver or exe)})
@@ -3874,8 +4535,8 @@ async def agent_provision(req: Request):
     b = bundled_cli('opencode-cli' if which == 'opencode' else 'codex-cli')
     if b:
         try:
-            r = subprocess.run([b, '--version'], capture_output=True, text=True, timeout=30,
-                               stdin=subprocess.DEVNULL, **DETACH)
+            r = _tracked_detached_run([b, '--version'], capture_output=True, text=True, timeout=30,
+                                      stdin=subprocess.DEVNULL)
             if r.returncode == 0:
                 PROV.update({'state': 'done', 'pct': 100, 'path': b,
                              'note': '已就绪:%s' % (r.stdout or '').strip()[:60]})
@@ -4224,6 +4885,7 @@ def transcribe():
     return JSONResponse({'error': '本机未装转写模型;接 whisper.cpp sidecar 或云端转写'}, 501)
 
 HOST_GONE = False       # 桌面壳已经退出,但还有任务在跑:跑完自己走
+_EXIT_TIMER = [None]
 RELEASES_API = os.environ.get('BIDDOG_RELEASES_URL', os.environ.get(
     'BID_RELEASES_URL', 'https://api.github.com/repos/shandianT/bid-dog/releases/latest'))
 UPDATE_TIMEOUT = float(os.environ.get('BIDDOG_UPDATE_TIMEOUT', os.environ.get('BID_UPDATE_TIMEOUT', 3)))
@@ -4266,6 +4928,40 @@ def start_update_check():
     if _env_true('BID_NO_UPDATE_CHECK'): return
     threading.Thread(target=check_for_update, daemon=True, name='bid-dog-update-check').start()
 
+def _exit_process_cleanly():
+    """正常退出必须带走 detached OpenCode server；会话数据库保留供下次续做/验签。"""
+    _kill_tracked_detached_children()
+    invalidate_oc_runtime()
+    os._exit(0)
+
+def _runtime_work_locked():
+    """调用方持有 RUNNING_LOCK；控制动作/证据重放也可能正在改文件或 OpenCode 状态。"""
+    return bool(RUNNING or JOB_CONTROL or OC_REPLAYING)
+
+def _exit_if_shutdown(generation):
+    """退出提交点：generation 与所有状态在同一把锁下复核，重连可在提交前取消。"""
+    global EXITING
+    with RUNNING_LOCK:
+        if (generation != SHUTDOWN_GENERATION or not SHUTTING_DOWN
+                or not HOST_GONE or _runtime_work_locked() or EXITING):
+            return False
+        EXITING = True
+        _EXIT_TIMER[0] = None
+    # EXITING 是不可逆提交点；health 会返回 503。锁外清理避免和 OC replay 的 finally 锁反转。
+    _exit_process_cleanly()
+    return True
+
+def _schedule_clean_exit(generation, delay=0.3):
+    """调用方持有 RUNNING_LOCK，避免 health 在保存 timer 之前穿过。"""
+    timer = threading.Timer(delay, _exit_if_shutdown, args=(generation,))
+    timer.daemon = True
+    old = _EXIT_TIMER[0]
+    if old:
+        try: old.cancel()
+        except Exception: pass
+    _EXIT_TIMER[0] = timer
+    timer.start()
+
 @app.post('/v1/shutdown')
 def shutdown():
     """桌面壳关窗时调它。有任务在跑就先把任务跑完再退,不当场自尽。
@@ -4275,33 +4971,59 @@ def shutdown():
     负责收尾的那段代码(收拢产物、补出 Word、质检、完成播报)却已经死了:
     用户关窗去开个会,回来看到的是一个永远没有结局的任务。
     云端多用户模式下不接受这个请求——那是共享服务,不能被某个客户端关掉。"""
-    global HOST_GONE
+    global HOST_GONE, SHUTTING_DOWN, SHUTDOWN_GENERATION
     if MULTIUSER:
         return JSONResponse({'ok': False, 'error': '云端模式不支持远程关闭'}, 403)
-    running = sorted(RUNNING)
-    if not running:
-        threading.Timer(0.3, lambda: os._exit(0)).start()   # 先把响应发出去再退
+    with RUNNING_LOCK:
+        SHUTDOWN_GENERATION += 1
+        generation = SHUTDOWN_GENERATION
+        SHUTTING_DOWN = True       # 从这一刻起拒绝新派发，封住“看到空闲后又启动一单”的窗口
+        HOST_GONE = True
+        running = sorted(RUNNING)
+        controls = sorted(JOB_CONTROL)
+        replaying = bool(OC_REPLAYING)
+        busy = _runtime_work_locked()
+        if not busy:
+            _schedule_clean_exit(generation, 0.3)  # 先把响应发出去，再停 OpenCode 并退出
+    if not busy:
         return {'ok': True, 'exiting': True, 'running': 0}
-    HOST_GONE = True
-    threading.Thread(target=_exit_when_idle, daemon=True).start()
+    threading.Thread(target=_exit_when_idle, args=(generation,), daemon=True).start()
+    if running:
+        note = '还有 %d 个任务在跑，我先把它们跑完、收好尾再退出' % len(running)
+    elif controls:
+        note = '任务正在完成停止或删除操作，收好尾后自动退出'
+    else:
+        note = '正在恢复运行证据，完成后自动退出'
     return {'ok': True, 'exiting': False, 'running': len(running), 'jobs': running,
-            'note': '还有 %d 个任务在跑,我先把它们跑完、收好尾再退出' % len(running)}
+            'controls': controls, 'replaying': replaying, 'note': note}
 
-def _exit_when_idle():
+def _exit_when_idle(generation):
     """桌面壳走了之后守着:任务全部收尾完成就自己退出,不留孤儿进程。"""
     while True:
         time.sleep(5)
-        if not HOST_GONE: return            # 用户又把应用打开了(端口复用),继续正常服务
-        if RUNNING: continue
+        with RUNNING_LOCK:
+            if generation != SHUTDOWN_GENERATION or not SHUTTING_DOWN or not HOST_GONE:
+                return                     # 用户又把应用打开了(端口复用),继续正常服务
+            busy = _runtime_work_locked()
+        if busy: continue
         time.sleep(8)                       # 给 finalize/质检/出 Word 收尾留出余量
-        if RUNNING or not HOST_GONE: continue
-        os._exit(0)
+        if _exit_if_shutdown(generation): return
 
 @app.get('/v1/health')
 def health():
     # 桌面壳重新打开时会复用这个还活着的引擎:把 HOST_GONE 撤回,否则它会在半路自退
-    global HOST_GONE
-    HOST_GONE = False
+    global HOST_GONE, SHUTTING_DOWN, SHUTDOWN_GENERATION
+    with RUNNING_LOCK:
+        if EXITING:
+            return JSONResponse({'ok': False, 'error': '引擎正在退出，请等待应用自动重连'}, 503)
+        SHUTDOWN_GENERATION += 1             # 使已排队 timer/idle watcher 全部失效
+        HOST_GONE = False
+        SHUTTING_DOWN = False
+        timer = _EXIT_TIMER[0]
+        if timer:
+            try: timer.cancel()
+            except Exception: pass
+            _EXIT_TIMER[0] = None
     return {'ok': True, 'data_dir': DATA, 'agent': bool(config_agent_cmd()),
             'version': ENGINE_VERSION, 'author': AUTHOR, 'features': ENGINE_FEATURES,
             'update': dict(UPDATE_STATE)}

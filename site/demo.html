@@ -55,10 +55,21 @@ aside{background:var(--panel);border-right:1px solid var(--line);padding:14px 12
 .task .bar{margin-left:13px;height:2px;border-radius:2px;background:#e4e4e2;overflow:hidden}
 .task .bar b{display:block;height:100%;background:var(--blue);transition:width .5s}
 .task.dn{padding:6px 10px;gap:0}          /* 已完成任务:单行紧凑,不占进度条 */
-.tgrp{display:flex;align-items:center;font:500 11px/1 inherit;color:var(--faint);letter-spacing:.05em;
-  padding:10px 6px 5px;user-select:none}
+.tgrp{display:flex;align-items:center;width:100%;border:0;background:transparent;text-align:left;
+  font:500 11px/1 inherit;color:var(--faint);letter-spacing:.05em;padding:10px 6px 5px;user-select:none;cursor:pointer}
+.tgrp:hover{color:var(--dim)}
 .tgrp .tgx{margin-left:auto;color:var(--blue);cursor:pointer;letter-spacing:0;padding:2px 4px;border-radius:4px}
 .tgrp .tgx:hover{background:var(--hover)}
+.taskbulk{display:flex;flex-direction:column;align-items:stretch;gap:5px;padding:2px 4px 7px;position:sticky;top:0;z-index:2;background:var(--panel)}
+.taskbulk .tbrow{display:flex;align-items:center;gap:6px;width:100%;min-width:0}
+.taskbulk .tbsp{flex:1;min-width:0;color:var(--faint);font:400 11px/1 inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.taskbulk button{border:0;background:transparent;color:var(--blue);padding:5px 4px;border-radius:5px;
+  min-height:44px;font:500 11px/1 inherit;cursor:pointer;white-space:nowrap}
+.taskbulk .tbacts button{flex:1;min-width:0}
+.taskbulk button:hover{background:var(--hover)}
+.taskbulk button.danger{color:var(--red)}
+.taskbulk button:disabled{color:var(--faint);cursor:not-allowed;background:transparent}
+.task-check{width:14px;height:14px;margin:0;accent-color:var(--blue);flex:none;cursor:pointer}
 .empty-side{font:400 12px/1.7 inherit;color:var(--faint);padding:2px 6px}
 .side-links{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:2px}
 .side-links .sl{display:flex;align-items:center;gap:9px;font:400 12.5px/1 inherit;color:var(--sub);cursor:pointer;
@@ -230,7 +241,7 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .statusbar{flex:none;height:28px;display:flex;align-items:center;gap:12px;padding:0 18px;border-top:1px solid var(--line);
   font:400 11px/1 inherit;color:var(--faint);background:var(--panel)}
 .ovl{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:40;display:none}
-.sheet{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:580px;max-height:84%;overflow-y:auto;background:var(--card);
+.sheet{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:580px;max-width:calc(100vw - 24px);max-height:84%;overflow-y:auto;background:var(--card);
   border-radius:var(--r-l);z-index:41;box-shadow:var(--sh-lg);padding:30px 34px;display:none;flex-direction:column;gap:20px}
 .drawer{position:fixed;top:0;right:0;bottom:0;width:470px;background:var(--card);z-index:41;box-shadow:var(--sh-lg);
   padding:32px 34px;display:none;flex-direction:column;gap:20px;overflow-y:auto}
@@ -286,6 +297,21 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 .segbar{display:inline-flex;border:1px solid var(--line-d);border-radius:999px;overflow:hidden;background:var(--bg,#fff)}
 .segbar .seg{padding:6px 13px;font:500 12px/1.4 inherit;color:var(--sub);cursor:pointer;user-select:none;white-space:nowrap}
 .segbar .seg.on{background:var(--blue);color:#fff}
+@media (max-width:900px){
+  body{height:100dvh}
+  #app{grid-template-columns:minmax(0,1fr)!important;grid-auto-rows:auto;align-content:start;overflow-y:auto}
+  aside{width:100%;min-height:220px;max-height:48dvh;border-right:0;border-bottom:1px solid var(--line);padding:12px}
+  main{width:100%;height:72dvh;min-height:560px}
+  .rail{width:100%;min-height:70dvh;padding:12px;overflow:visible}
+  .head{padding:12px 12px 0}
+  .head .hwrap{flex-wrap:wrap;gap:8px}
+  .head .ht{flex:1 0 100%}
+  #chat{padding:16px 12px}
+  .compose{padding:8px 12px 12px}
+  #hero{padding:20px 12px}
+  .sheet{padding:22px 18px}
+  .drawer{left:0;right:0;width:100%!important;max-width:100vw;padding:24px 18px}
+}
 </style>
 </head>
 <body>
@@ -617,14 +643,21 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
-const API_CANDIDATES = [localStorage.getItem('bid_api'), IS_WEB ? location.origin : null,
-                        'http://127.0.0.1:8849', 'http://127.0.0.1:8848', 'http://127.0.0.1:8080'].filter(Boolean);
+const BUNDLED_ENGINE_VERSION = '0.18.2';
+/* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后，旧 PyInstaller 进程可能仍驻留；
+   若继续探测历史端口，就会把旧引擎误认成新版，甚至在可执行文件被替换后返回 500。 */
+const DESKTOP_ENGINE = 'http://127.0.0.1:18802';
+const API_CANDIDATES = IS_WEB ? [location.origin] : [DESKTOP_ENGINE];
+/* 旧版曾把探测成功的端口写进 bid_api；新版不再读取，并在桌面启动时主动废弃它。 */
+if(!IS_WEB){ try{ localStorage.removeItem('bid_api'); }catch(_){} }
 let API = API_CANDIDATES[0];
 const NEED_FEATURES = ['probe_models', 'agent_binding', 'attachments', 'artifact_open', 'job_folder_open'];
 const isWin = navigator.platform.startsWith('Win');
 const ASK_SELF = '我来输入';     // 界面自己的自救入口,渲染与点击两处都用它,别写死字面量
 let S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}, atts:{}, health:{}, chips:{}, worklog:{}, stageAvgs:null, es:null,
           typing:{}, steps:{}, names:{}, paused:{}, answering:{}, openGrp:{0:true, 1:true, 2:false, 3:false},
+          taskGrpOpen:{staged:true, running:true, paused:false, stopped:false, unknown:false, done:false},
+          taskBulkMode:false, taskBulkDeleting:false, taskSelected:new Set(),
           artsLoaded:{}, eventTimes:{}, esOffsets:{}, wordNotified:{}, updateInfo:null, engineVersion:'' };
 document.getElementById('sbL').textContent = isWin ? '任务栏显示进度 · 完成后系统通知' : 'Dock 显示进度 · 完成后系统通知 · 托盘常驻';
 
@@ -757,7 +790,8 @@ async function findEngine(){
       if(!r.ok) continue;
       const h = await r.json();
       const feats = h.features || [];
-      if(NEED_FEATURES.every(f => feats.indexOf(f) >= 0)){ API = base; S.stale = null; return h; }
+      const rightVersion = IS_WEB || h.version === BUNDLED_ENGINE_VERSION;
+      if(rightVersion && NEED_FEATURES.every(f => feats.indexOf(f) >= 0)){ API = base; S.stale = null; return h; }
       stale = stale || {base, h};
     }catch(e){}
   }
@@ -859,8 +893,12 @@ function taskRow(j, compact){
   const delivery = completionGate(jobState(j), p, wordPresence(S.arts[j.job_id], S.artsLoaded[j.job_id], j.has_word));
   const dot = delivery.missingWord ? 'var(--red)' : (p>=100
     ? (S.health[j.job_id] ? verdict(j.job_id).color : '#3a3a38') : 'var(--blue)');
-  const delBtn = '<span class="del" title="删除任务" data-del="'+escA(j.job_id)+'"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:12px;height:12px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>';
-  const head = '<div class="nm"><span class="dot" style="background:'+dot+'"></span><span class="tn" title="'+escA(j.name||j.job_id)+'">'+esc(j.name||j.job_id)+'</span>'+delBtn+'</div>';
+  const checked = !!(S.taskSelected && S.taskSelected.has(j.job_id));
+  const checkbox = S.taskBulkMode
+    ? '<input class="task-check" type="checkbox" data-task-check="'+escA(j.job_id)+'" aria-label="选择任务 '+escA(j.name||j.job_id)+'"'+(checked?' checked':'')+'>'
+    : '';
+  const delBtn = S.taskBulkMode ? '' : '<span class="del" title="删除任务" data-del="'+escA(j.job_id)+'"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:12px;height:12px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>';
+  const head = '<div class="nm">'+checkbox+'<span class="dot" style="background:'+dot+'"></span><span class="tn" title="'+escA(j.name||j.job_id)+'">'+esc(j.name||j.job_id)+'</span>'+delBtn+'</div>';
   if(compact)   /* 已完成:单行,结论色圆点自己会说话 */
     return '<div class="task dn'+(on?' on':'')+'" data-id="'+escA(j.job_id)+'">'+head+'</div>';
   return '<div class="task'+(on?' on':'')+'" data-id="'+escA(j.job_id)+'">'+head
@@ -879,45 +917,153 @@ function jobState(j){
   if(/^已停止/.test(st)) return 'stopped';
   return 'running';
 }
+function setTaskBulkMode(enabled){
+  if(S.taskBulkDeleting) return;
+  S.taskBulkMode = !!enabled;
+  if(!(S.taskSelected instanceof Set)) S.taskSelected = new Set();
+  if(!S.taskBulkMode) S.taskSelected.clear();
+  else{
+    const current = new Set(S.jobs.map(j=>j.job_id));
+    S.taskSelected.forEach(id=>{ if(!current.has(id)) S.taskSelected.delete(id); });
+  }
+  renderTasks();
+}
+function toggleTaskSelection(id, checked){
+  if(S.taskBulkDeleting) return;
+  if(!(S.taskSelected instanceof Set)) S.taskSelected = new Set();
+  if(checked) S.taskSelected.add(id); else S.taskSelected.delete(id);
+  renderTasks();
+}
+function toggleAllTaskSelection(){
+  if(S.taskBulkDeleting) return;
+  if(!(S.taskSelected instanceof Set)) S.taskSelected = new Set();
+  const ids = S.jobs.map(j=>j.job_id);
+  const all = ids.length > 0 && ids.every(id=>S.taskSelected.has(id));
+  if(all) ids.forEach(id=>S.taskSelected.delete(id));
+  else ids.forEach(id=>S.taskSelected.add(id));
+  renderTasks();
+}
 function renderTasks(){
   const g = {staged:[], running:[], paused:[], stopped:[], unknown:[], done:[]};
   S.jobs.forEach(j=>{ (g[jobState(j)] || g.running).push(j); });
-  const open = S.doneOpen !== undefined ? S.doneOpen : g.done.length <= 4;
   let h = '';
+  if(S.jobs.length){
+    if(S.taskBulkMode){
+      const selected = S.jobs.filter(j=>S.taskSelected.has(j.job_id)).length;
+      const all = selected === S.jobs.length;
+      const busy = !!S.taskBulkDeleting;
+      h += '<div class="taskbulk"><div class="tbrow"><span class="tbsp">'+(busy?'正在处理 '+selected+' 项…':'已选 '+selected+' 项')+'</span>'
+        + '<button type="button" data-task-bulk-mode="0"'+(busy?' disabled':'')+'>退出批量</button></div>'
+        + '<div class="tbrow tbacts"><button type="button" data-task-bulk-all="1"'+(busy?' disabled':'')+'>'+(all?'取消全选':'全选')+'</button>'
+        + '<button type="button" class="danger" data-task-bulk-delete="1"'+((selected&&!busy)?'':' disabled')+'>'+(busy?'处理中…':'删除所选')+'</button></div></div>';
+    }else{
+      h += '<div class="taskbulk"><div class="tbrow"><span class="tbsp"></span><button type="button" data-task-bulk-mode="1">批量管理</button></div></div>';
+    }
+  }
   const grp = (key, label, compact)=>{
     const list = g[key]; if(!list.length) return '';
-    return '<div class="tgrp">'+label+' · '+list.length+'</div>' + list.map(j=>taskRow(j,compact)).join('');
+    const open = S.taskBulkMode || S.taskGrpOpen[key] === true;
+    return '<button type="button" class="tgrp" data-task-group="'+key+'" aria-expanded="'+open+'">'
+      + '<span>'+label+' · '+list.length+'</span><span class="tgx">'+(open?'收起':'展开')+'</span></button>'
+      + (open ? list.map(j=>taskRow(j,compact)).join('') : '');
   };
   h += grp('staged', '等你开始', false);
   h += grp('running', '进行中', false);
   h += grp('paused', '已暂停,等你继续', false);
   h += grp('stopped', '已停止', false);
   h += grp('unknown', '状态不明', false);      // 引擎被杀/断电:如实说不知道,不装作在跑
-  if(g.done.length){
-    h += '<div class="tgrp">已完成 · '+g.done.length
-       + '<span class="tgx" data-tgl="'+(open?'0':'1')+'">'+(open?'收起':'展开')+'</span></div>';
-    const show = open ? g.done : g.done.filter(j=>j.job_id===S.active);   // 收起时仍显示当前选中的那条
-    h += show.map(j=>taskRow(j,true)).join('');
-  }
+  h += grp('done', '已完成', true);
   el('tasks').innerHTML = h || '<div class="empty-side">还没有任务</div>';
 }
 el('tasks').addEventListener('click', e=>{
-  const tg = e.target.closest('[data-tgl]');
-  if(tg){ S.doneOpen = tg.dataset.tgl==='1'; renderTasks(); return; }
+  const bulkMode = e.target.closest('[data-task-bulk-mode]');
+  if(bulkMode){ setTaskBulkMode(bulkMode.dataset.taskBulkMode==='1'); return; }
+  const bulkAll = e.target.closest('[data-task-bulk-all]');
+  if(bulkAll){ toggleAllTaskSelection(); return; }
+  const bulkDelete = e.target.closest('[data-task-bulk-delete]');
+  if(bulkDelete){ deleteSelectedJobs(); return; }
+  const check = e.target.closest('[data-task-check]');
+  if(check){ e.stopPropagation(); toggleTaskSelection(check.dataset.taskCheck, check.checked); return; }
+  const tg = e.target.closest('[data-task-group]');
+  if(tg){ if(!S.taskBulkMode){ const key=tg.dataset.taskGroup; S.taskGrpOpen[key]=!S.taskGrpOpen[key]; renderTasks(); } return; }
   const del = e.target.closest('[data-del]');
   if(del){ e.stopPropagation(); delJob(del.dataset.del); return; }
   const t = e.target.closest('[data-id]');
-  if(t) select(t.dataset.id);
+  if(t){
+    if(S.taskBulkMode) toggleTaskSelection(t.dataset.id, !S.taskSelected.has(t.dataset.id));
+    else select(t.dataset.id);
+  }
 });
 async function delJob(id){
   const j = S.jobs.find(x=>x.job_id===id);
   if(!await askConfirm('删除任务「'+((j&&j.name)||id)+'」?', '该任务的招标文件与生成的产出会一并删除,不可恢复;正在生成的会先停止。', true)) return;
   try{
-    await api('/v1/jobs/'+id, {method:'DELETE'});
+    await api('/v1/jobs/'+encodeURIComponent(id), {method:'DELETE'});
     if(S.active===id){ S.active=null; if(S.es){ S.es.close(); S.es=null; } renderMain(); }
     S.jobs = await api('/v1/jobs'); renderTasks(); if(S.active) renderRail();
     toast('已删除');
   }catch(e){ toast('删除失败,请重试'); }
+}
+async function deleteSelectedJobs(){
+  if(S.taskBulkDeleting) return;
+  if(!(S.taskSelected instanceof Set)) S.taskSelected = new Set();
+  const ids = [...new Set(S.jobs.map(j=>j.job_id).filter(id=>id!=null && S.taskSelected.has(id)))];
+  if(!ids.length){ toast('请先选择要删除的任务'); return; }
+  S.taskBulkDeleting = true;
+  renderTasks();
+  let confirmed = false;
+  try{ confirmed = await askConfirm('确认批量删除 '+ids.length+' 个任务?', '所选任务的招标文件与生成产出会一并删除,不可恢复;正在生成的会先停止。', true); }
+  catch(_){}
+  if(!confirmed){ S.taskBulkDeleting = false; renderTasks(); return; }
+
+  const localOnly = FORCE_DEMO || !S.online;
+  let succeeded = [], failed = 0, refreshFailed = false;
+  try{
+    if(localOnly){
+      succeeded = ids.slice();
+    }else{
+      for(const id of ids){
+        try{
+          const result = await api('/v1/jobs/'+encodeURIComponent(id), {method:'DELETE'});
+          if(result && result.ok===false) throw new Error('delete rejected');
+          succeeded.push(id);
+        }catch(_){ failed += 1; }
+      }
+    }
+
+    if(succeeded.length){
+      const removed = new Set(succeeded);
+      S.jobs = S.jobs.filter(j=>!removed.has(j.job_id));
+    }
+    if(!localOnly){
+      try{
+        const fresh = await api('/v1/jobs');
+        const stillThere = new Set(fresh.map(j=>j.job_id));
+        const stuck = succeeded.filter(id=>stillThere.has(id));
+        if(stuck.length){
+          const stuckSet = new Set(stuck);
+          succeeded = succeeded.filter(id=>!stuckSet.has(id));
+          failed += stuck.length;
+        }
+        S.jobs = fresh;
+      }catch(_){ refreshFailed = true; }
+    }
+
+    if(succeeded.includes(S.active)){
+      S.active = null;
+      if(S.es){ S.es.close(); S.es = null; }
+      renderMain();
+    }
+    S.taskSelected.clear();
+    if(failed===0) S.taskBulkMode = false;
+  }finally{
+    S.taskBulkDeleting = false;
+  }
+  renderTasks();
+  if(S.active) renderRail();
+  const note = refreshFailed ? '；列表刷新失败，已按删除结果更新本地列表'
+    : (localOnly ? '；演示/断线模式仅更新当前列表' : '');
+  toast('批量删除完成：成功 '+succeeded.length+'，失败 '+failed+note);
 }
 
 /* ================= 选择任务 + SSE(断线自动重连) ================= */
@@ -1238,10 +1384,13 @@ async function openLog(){
   try{
     const r = await api('/v1/jobs/'+S.active+'/log');
     el('logBody').textContent = r.log || '(空)';
-    el('logSkill').innerHTML = r.skill_used
-      ? '<span style="color:var(--green)">✓ 检测到技能包被使用:'+esc((r.hits||[]).join('、'))+'</span>'
-      : '<span style="color:var(--red)">✗ 没有检测到技能包被使用</span> — '+esc(r.why||'')
-        +'<br>把生成引擎换成内置的 SoWork / Claude Code / Codex(自动带技能包路径),或在自定义命令里加入 {skill} 占位符。';
+    el('logSkill').innerHTML = (r.skill_state==='verified' || (!r.skill_state && r.skill_used))
+      ? '<span style="color:var(--green)">✓ 已核验技能包运行证据：'+esc((r.hits||[]).join('、'))+'</span>'
+      : r.skill_state==='unverifiable'
+        ? '<span style="color:var(--amber)">△ 技能指令已随任务加载，但本轮无法核验实际读取</span> — '+esc(r.why||'')
+          +'<br>这不等于未使用；OpenCode 有时不输出完整运行日志。交付前请结合响应矩阵、格式门禁和 Word 质检结果复核。'
+        : '<span style="color:var(--red)">✗ 技能包未成功加载</span> — '+esc(r.why||'')
+          +'<br>请在「设置 · 生成引擎」检查技能包路径和注入状态；自定义命令需保留 {skill} 占位符。';
   }catch(e){ el('logBody').textContent = '读取失败'; }
 }
 async function rerunJob(skipAsk){

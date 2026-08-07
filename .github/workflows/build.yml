@@ -196,6 +196,72 @@ jobs:
           kill "$engine_pid" >/dev/null 2>&1 || true
           wait "$engine_pid" >/dev/null 2>&1 || true
           engine_pid=""
+      - name: verify Windows installer payload and bundled executables
+        if: runner.os == 'Windows'
+        working-directory: app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "expected exactly one NSIS installer, found $($installers.Count)"
+          }
+
+          # 验证最终上传的 NSIS，而不是只测打包前的 binaries/。Tauri NSIS 官方支持 /S；
+          # /D 固定到 runner 临时目录，避免依赖产品名或系统语言推算安装位置。
+          $installRoot = Join-Path $env:RUNNER_TEMP "bid-dog-installed"
+          New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+          $installer = Start-Process -FilePath $installers[0].FullName `
+            -ArgumentList @("/S", "/D=$installRoot") -Wait -PassThru
+          if ($installer.ExitCode -ne 0) {
+            throw "NSIS silent install failed with exit code $($installer.ExitCode)"
+          }
+
+          $engines = @(Get-ChildItem $installRoot -Recurse -Filter "bid-engine.exe" -File)
+          $opencodes = @(Get-ChildItem $installRoot -Recurse -Filter "opencode-cli.exe" -File)
+          if ($engines.Count -ne 1 -or $opencodes.Count -ne 1) {
+            throw "installed payload is incomplete: bid-engine=$($engines.Count), opencode=$($opencodes.Count)"
+          }
+          $ocVersion = (& $opencodes[0].FullName --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $ocVersion -notmatch "1\.18\.13") {
+            throw "installed baseline OpenCode did not run as 1.18.13: $ocVersion"
+          }
+
+          $engineData = Join-Path $env:RUNNER_TEMP "bid-engine-windows-smoke"
+          $engineOut = Join-Path $env:RUNNER_TEMP "bid-engine-windows-smoke.out.log"
+          $engineErr = Join-Path $env:RUNNER_TEMP "bid-engine-windows-smoke.err.log"
+          New-Item -ItemType Directory -Force -Path $engineData | Out-Null
+          $env:PORT = "18789"
+          $env:BID_HOME = $engineData
+          $env:BID_NO_UPDATE_CHECK = "1"
+          $engine = $null
+          try {
+            $engine = Start-Process -FilePath $engines[0].FullName -PassThru `
+              -RedirectStandardOutput $engineOut -RedirectStandardError $engineErr
+            $health = $null
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:18789/v1/health" -TimeoutSec 1
+                if ($health.ok) { break }
+              } catch {
+                if ($engine.HasExited) { break }
+                Start-Sleep -Seconds 1
+              }
+            }
+            if (-not $health -or -not $health.ok) {
+              Get-Content $engineOut, $engineErr -ErrorAction SilentlyContinue
+              throw "installed bid-engine.exe did not become healthy"
+            }
+            if ($health.version -ne "0.18.2") {
+              throw "installed engine version mismatch: $($health.version)"
+            }
+          } finally {
+            if ($engine -and -not $engine.HasExited) {
+              Stop-Process -Id $engine.Id -Force -ErrorAction SilentlyContinue
+              $engine.WaitForExit(5000) | Out-Null
+            }
+            Remove-Item Env:PORT, Env:BID_HOME, Env:BID_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -237,7 +303,7 @@ jobs:
 
             - macOS Apple Silicon(M 系列): `bid-dog_0.18.2_aarch64.dmg`
             - Windows: `bid-dog_0.18.2_x64-setup.exe`
-            -(需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可)
+            - 需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可。
 
             **macOS 提示「已损坏,无法打开」?** 不是文件坏了,是系统对未签名应用的拦截。把应用拖入「应用程序」后,终端执行:
             `xattr -cr /Applications/中标狗.app` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。详见仓库 docs/Mac安装说明.md。
@@ -247,7 +313,10 @@ jobs:
             - 完成态改由磁盘上的正文 Word 证据决定；只有解析件或分析件会明确停止，不再出现假 12/12。
             - 标准/极速流中断不再静默或把半截正文当成功；半截工具参数绝不执行，极速异常会明确停止，可手动切回标准。
             - CLI 15 分钟无进展自动停止；用时只统计活跃时间；新增一键脱敏诊断包与版本升级提示。
-            - 离线回归测试先通过才允许构建 dmg/exe。
+            - 覆盖安装使用独立 WebView 会话和 18802 专属引擎，不再命中 v0.16.0 的旧页面或旧进程。
+            - 「状态不明」「已完成」默认可收起；任务支持全选与批量删除，并汇总成功/失败数量。
+            - 运行日志把技能证据分为已验证、暂无法验证、未装载三态，不再把日志不可见误报成未使用。
+            - 161 项离线/浏览器回归先通过；最终 dmg/NSIS 内的引擎与 OpenCode 实际启动成功后才发布。
 
             v0.18.0:
             - **默认引擎换成 OpenCode**。同一份真实招标文件、同素材、同模型、同提示词跑出来的结论:

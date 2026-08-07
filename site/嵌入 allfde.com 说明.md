@@ -42,6 +42,8 @@ bid-dog/
 
 `?demo=1` 是关键:强制在线体验模式——**不会去探测访客本机端口、不上传文件、不调用任何模型、不产生费用**。
 
+当前桌面版为 v0.18.2：安装后的 WebView 使用独立会话和版本入口，只连接本版本的 `127.0.0.1:18802` 引擎；旧版「标书助手」数据会迁移到「中标狗」目录。任务列表支持状态分组折叠和批量删除，运行日志将技能包证据区分为「已验证使用」「暂无法验证」「未检测到」三种状态。在线体验页只演示这些交互，不会删除访客本机文件。
+
 ## 三、"让大家一起使用"的三种形态(按投入排序)
 
 | 形态 | 访客能做什么 | 你要准备什么 | 费用/风险 |
@@ -71,6 +73,7 @@ BID_PASSWORD='给客户的口令' docker compose up -d      # 口令必设,别�
 - [ ] `/bid-dog/` 能打开产品页,首屏动画自动播放
 - [ ] `/bid-dog/app/index.html?demo=1` 能完整走完 12 阶段并出体检结论
 - [ ] 产品页里的下载按钮指向 https://github.com/shandianT/bid-dog/releases/latest 且有安装包
+- [ ] 下载页和作品卡片标注的当前桌面版本为 v0.18.2
 - [ ] demos.html 卡片文案与站点风格一致
 - [ ] 手机上打开不横向滚动(已做响应式)
 
@@ -82,7 +85,7 @@ v0.13.0 引擎已带 `X-Accel-Buffering: no` 响应头自动关缓冲;若你的 
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:8848;
+    proxy_pass http://127.0.0.1:8080;
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_buffering off;            # SSE 必须关缓冲

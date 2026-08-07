@@ -22,3 +22,16 @@ def test_release_version_is_consistent(engine):
     for text in (readme, site):
         assert "desktop-v%s/bid-dog_%s_aarch64.dmg" % (version, version) in text
         assert "desktop-v%s/bid-dog_%s_x64-setup.exe" % (version, version) in text
+
+
+def test_windows_installer_has_a_real_packaged_sidecar_smoke_gate(engine):
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text()
+
+    assert "verify Windows installer payload and bundled executables" in workflow
+    assert "if: runner.os == 'Windows'" in workflow
+    assert '"/S"' in workflow
+    assert '"/D=' in workflow
+    assert "opencode-cli.exe" in workflow
+    assert "bid-engine.exe" in workflow
+    assert "/v1/health" in workflow
+    assert 'version -ne "0.18.2"' in workflow
