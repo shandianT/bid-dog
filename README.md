@@ -14,16 +14,6 @@
 
 ---
 
-## v0.18.0 更新亮点
-
-- **默认执行外壳切换为 OpenCode**：使用发放的 Key 时自动走内置 OpenCode，无需另装 Node.js，也不用登录 OpenCode 账号。
-- **Codex 仍可随时切回**：在设置中显式选择 Codex CLI 即可使用自己的订阅，遇到兼容问题有稳定回退路径。
-- **安装包已内置并自检执行外壳**：CI 构建时会实际运行 `opencode --version`；Windows x64 使用兼容老 CPU 的 baseline 版本。
-
-完整对比数据和变更原因见 [更新日志](CHANGELOG.md#0180---2026-08-06)。
-
----
-
 ## 出来的 Word 长这样
 
 四张都是成品 docx 直接渲染的页面。
