@@ -11,7 +11,7 @@ import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, base64, con
 import xml.etree.ElementTree as ET
 from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -160,25 +160,93 @@ def write_json(p, obj):
     os.replace(tmp, p)
 
 _SECRET_RE = re.compile(r'(?i)(?:' + 's' + 'k' + r')-[a-z0-9_-]{16,}')
+_NAMED_SECRET_RE = re.compile(
+    r'(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b(\s*[:=]\s*)["\']?([^\s,"\']+)'
+)
+_BEARER_RE = re.compile(r'(?i)\b(Bearer)(\s+)[A-Za-z0-9._~+/=-]{12,}')
 
 def redact(value):
     """事件、诊断包和用户可见错误的统一脱敏入口。配置原件和 run.log 不在这里改写。"""
     if isinstance(value, dict): return {k: redact(v) for k, v in value.items()}
     if isinstance(value, list): return [redact(v) for v in value]
     if isinstance(value, tuple): return tuple(redact(v) for v in value)
-    if isinstance(value, str): return _SECRET_RE.sub('[API Key 已隐藏]', value)
+    if isinstance(value, str):
+        value = _SECRET_RE.sub('[API Key 已隐藏]', value)
+        value = _NAMED_SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + '[凭据已隐藏]', value)
+        return _BEARER_RE.sub(lambda m: m.group(1) + m.group(2) + '[凭据已隐藏]', value)
     return value
+
+def _safe_secret_text(value, secrets_to_hide=()):
+    """用户可见文本先按本次请求的真实凭据精确替换，再走通用 Key 模式脱敏。"""
+    text = str(value or '')
+    for secret in secrets_to_hide or ():
+        secret = str(secret or '')
+        if secret: text = text.replace(secret, '[API Key 已隐藏]')
+    return redact(text)
+
+def _http_error_detail(error, secrets_to_hide=(), limit=400):
+    """上游错误正文不回显；网关可能把 Authorization 原样塞进 message。"""
+    try: size = len(error.read())
+    except Exception: size = 0
+    return '上游错误正文已隐藏%s' % (('(%d bytes)' % size) if size else '')
+
+def _sensitive_config_key(key):
+    norm = re.sub(r'[^a-z0-9]', '', str(key or '').lower())
+    return (norm in ('key', 'apikey', 'token', 'accesstoken', 'refreshtoken', 'password', 'secret',
+                     'credential', 'credentials', 's2key', 'relaytoken')
+            or norm.endswith(('apikey', 'accesstoken', 'refreshtoken', 'password', 'secret')))
+
+def _configured_secrets(conf=None):
+    """收集本地已知凭据，供日志/诊断/状态响应做精确值替换。"""
+    conf = conf if conf is not None else read_json(conf_path(), {})
+    found = set()
+    def collect_scalars(value):
+        if isinstance(value, dict):
+            for child in value.values(): collect_scalars(child)
+        elif isinstance(value, list):
+            for child in value: collect_scalars(child)
+        elif isinstance(value, (str, int, float)):
+            text = str(value).strip()
+            if text: found.add(text)
+    def walk(value, key=''):
+        if _sensitive_config_key(key):
+            collect_scalars(value)
+            return
+        if isinstance(value, dict):
+            for child_key, child in value.items(): walk(child, child_key)
+        elif isinstance(value, list):
+            for child in value: walk(child, key)
+    walk(conf)
+    eng = conf.get('engine') or {}
+    for field in ('cmd', 'env'):
+        text = str(eng.get(field) or '').strip()
+        if text:
+            found.add(text)
+            for line in text.splitlines():
+                if '=' in line:
+                    name, value = line.split('=', 1)
+                    if _sensitive_config_key(name): collect_scalars(value.strip().strip('"\''))
+    return tuple(sorted(found, key=len, reverse=True))
+
+def _redact_runtime(value, conf=None):
+    secrets_to_hide = _configured_secrets(conf)
+    def clean(item):
+        if isinstance(item, dict): return {k: clean(v) for k, v in item.items()}
+        if isinstance(item, list): return [clean(v) for v in item]
+        if isinstance(item, tuple): return tuple(clean(v) for v in item)
+        if isinstance(item, str): return _safe_secret_text(item, secrets_to_hide)
+        return item
+    return clean(value)
 
 def emit(job, ev):
     """事件即真相:UI 只消费引擎验证后的 events.jsonl。"""
     if not os.path.isdir(job): return
-    ev = redact(dict(ev))
+    ev = _redact_runtime(dict(ev))
     if ev.get('type') == 'error' and not ev.get('actions'):
         ev['actions'] = [{'act': 'open_log', 'label': '查看运行日志'},
                          {'act': 'rerun', 'label': '重跑本任务'}]
-    # agent 声明走 ingest_agent_event；这里额外拦住任何遗漏路径伪造最终 12/12。
-    if (ev.get('type') == 'progress' and not ev.get('verified')
-            and int(ev.get('step') or 0) >= 12 and int(ev.get('pct') or 0) >= 100):
+    # 所有进度都重新按磁盘证据验算；字典里的 verified 只是数据，绝不是信任凭证。
+    if ev.get('type') == 'progress':
         try: ev = sanitize_event(job, ev)
         except Exception: pass
     ev['ts'] = now()
@@ -634,7 +702,7 @@ def harvest(job, depth=3):
 
 # 正文稿识别:这些关键词一出现就不是正文,是报告/分析/中间件
 _NOT_BODY = ('自检', '清洗', '报告', '质检', '门禁', '矩阵', '偏离表', '解析版',
-             '配图清单', '补料', '废标', '组成', '索引', '格式要求', '大纲', '.bak')
+             '配图清单', '补料', '废标', '组成', '索引', '格式要求', '大纲', '定向重做说明', '.bak')
 
 def _body_mds(job, known=None):
     """挑出「可以拿去导出 Word 的正文稿」。
@@ -753,16 +821,30 @@ def verified_step(job, claimed=12):
     return done
 
 def sanitize_event(job, ev):
-    """净化历史/第三方写入的进度；最终 12/12 只允许 settle() 的 verified 事件。"""
+    """净化历史/第三方写入的进度；verified 字段本身永远不构成信任。"""
     safe = redact(dict(ev or {}))
-    if safe.get('type') != 'progress' or safe.get('verified'): return safe
+    if safe.get('type') != 'progress': return safe
+    safe.pop('verified', None)
     try: claimed = max(0, min(12, int(safe.get('step') or 0)))
     except Exception: claimed = 0
-    step = verified_step(job, claimed)
     try: pct = int(safe.get('pct') or 0)
     except Exception: pct = 0
+    # settle() 会先持久化 done outcome，再发最终事件。回放时也只凭 outcome + 有效正文 Word
+    # 恢复 12/12；任何 agent 手写的 verified:true 都会走下面的证据钳制。
+    outcome = read_json(os.path.join(job, 'outcome.json'), {})
+    delivery_words = _body_docxs(job)
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    redo = meta.get('redo_baseline') if isinstance(meta.get('redo_baseline'), dict) else None
+    if redo:
+        old = (redo.get('docx') or {})
+        delivery_words = [fn for fn in delivery_words
+                          if old.get(fn) != _file_digest(os.path.join(job, fn))]
+    if claimed >= 12 and pct >= 100 and outcome.get('state') == 'done' and delivery_words:
+        safe.update({'step': 12, 'total': 12, 'pct': 100, 'verified': True})
+        return safe
+    step = verified_step(job, claimed)
     max_pct = min(99, int(step * 100 / 12))
-    safe.update({'step': step, 'total': 12, 'pct': max(0, min(pct, max_pct))})
+    safe.update({'step': step, 'total': 12, 'pct': max(0, min(pct, max_pct)), 'verified': True})
     if claimed > step:
         safe['stage'] = STAGES[step - 1] if step else '准备中'
     return safe
@@ -1095,7 +1177,7 @@ def _tail_lines(path, count=8):
         lines = open(path, encoding='utf-8', errors='ignore').read().splitlines()
     except Exception:
         return []
-    return [redact(x) for x in lines[-count:]]
+    return [_redact_runtime(x) for x in lines[-count:]]
 
 def settle(job, known=None, stop_reason=None):
     """统一出件闸门。CLI、OpenCode server、mock 都只能从这里进入终态。"""
@@ -1251,7 +1333,7 @@ def oc_api(path, data=None, timeout=60, method=None):
             if isinstance(out, dict) and 'data' in out and len(out) <= 2: out = out['data']
             return r.status, out
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode('utf-8', 'ignore')[:400]
+        return e.code, _http_error_detail(e)
     except Exception as e:
         return -1, str(e)[:200]
 
@@ -2043,10 +2125,12 @@ def agent_status():
     if not os.path.isfile(os.path.join(sd, 'SKILL.md')): sd = ensure_skill()
     cl, cx, sw, oc = resolve_cli('claude', eng), resolve_cli('codex', eng), resolve_cli('sowork', eng), resolve_cli('opencode', eng)
     return {'kind': 'env' if os.environ.get('AGENT_CMD') else eng.get('kind', 's2'), 'mode': eng.get('mode', 'agents'),
-            'cmd': eng.get('cmd', ''), 'skill_dir': sd, 'skill_ok': os.path.isfile(os.path.join(sd, 'SKILL.md')),
+            # 自定义命令和环境变量也可能内嵌 Key：与 s2_key 一样只写不读。
+            'cmd': '', 'cmd_set': bool((eng.get('cmd') or '').strip()),
+            'skill_dir': sd, 'skill_ok': os.path.isfile(os.path.join(sd, 'SKILL.md')),
             'available': {'claude': bool(cl), 'codex': bool(cx), 'sowork': bool(sw), 'opencode': bool(oc)},
             'paths': {'claude': cl or '', 'codex': cx or '', 'sowork': sw or '', 'opencode': oc or ''},
-            'cli_path': eng.get('cli_path', ''), 'env': eng.get('env', ''),
+            'cli_path': eng.get('cli_path', ''), 'env': '', 'env_set': bool((eng.get('env') or '').strip()),
             'login_shell': eng.get('login_shell', True), 'sowork_agent': eng.get('sowork_agent', 'main'),
             'thinking': eng.get('thinking', 'off'), 'timeout': eng.get('timeout', 1800),
             's2_base_url': eng.get('s2_base_url', ''), 's2_model': eng.get('s2_model', ''),
@@ -2080,9 +2164,12 @@ async def set_agent(req: Request):
     conf = read_json(conf_path(), {'providers': [], 'routing': {}})
     old = conf.get('engine') or {}
     old_fingerprint = oc_config_fingerprint(conf)
-    new_engine = {'kind': body.get('kind', 'mock'), 'cmd': body.get('cmd', ''),
+    new_engine = {'kind': body.get('kind', 'mock'),
+                      # 留空表示沿用已保存值，避免 GET 不回显后模式切换把秘密配置误清空。
+                      'cmd': (body.get('cmd') or '').strip() or old.get('cmd', ''),
                       'skill_dir': body.get('skill_dir', ''), 'mode': body.get('mode', 'agents'),
-                      'cli_path': body.get('cli_path', ''), 'env': body.get('env', ''),
+                      'cli_path': body.get('cli_path', ''),
+                      'env': (body.get('env') or '').strip() or old.get('env', ''),
                       'login_shell': body.get('login_shell', True),
                       'sowork_agent': body.get('sowork_agent', 'main'),
                       'thinking': body.get('thinking', 'off'),
@@ -2091,6 +2178,8 @@ async def set_agent(req: Request):
                       # Key 留空 = 沿用已存的(页面不回显 Key,不能因为"没传"就把它清掉)
                       's2_key': (body.get('s2_key') or '').strip() or old.get('s2_key', ''),
                       's2_wire': body.get('s2_wire', 'auto'), 's2_verify_ssl': body.get('s2_verify_ssl', True)}
+    if body.get('cmd_clear'): new_engine['cmd'] = ''
+    if body.get('env_clear'): new_engine['env'] = ''
     if body.get('s2_key_clear'): new_engine['s2_key'] = ''
     candidate = dict(conf); candidate['engine'] = new_engine
     new_fingerprint = oc_config_fingerprint(candidate)
@@ -2147,7 +2236,7 @@ def agent_test():
             msg = {401: 'Key 不对或已停用', 403: 'Key 没有这个网关的权限', 429: 'Key 的额度/频率超限'}.get(code, 'HTTP %s' % code)
             return {'ok': False, 'error': '连不上 S2 网关:%s。地址:%s' % (msg, up['base_url'])}
         except Exception as e:
-            return {'ok': False, 'error': '连不上 S2 网关:%s' % net_hint(e)}
+            return {'ok': False, 'error': '连不上 S2 网关:%s' % net_hint(e, (up['api_key'],))}
         cli = resolve_cli('opencode', eng)
         if not cli:
             return {'ok': False, 'need_provision': True,
@@ -2471,6 +2560,8 @@ def list_jobs():
         if not os.path.isdir(job): continue
         meta = read_json(os.path.join(job, '任务.json'), {})
         prog = read_json(os.path.join(job, 'progress.json'), {})
+        if isinstance(prog, dict) and prog.get('type') == 'progress':
+            prog = sanitize_event(job, prog)
         st = job_state(job, meta, prog)
         out.append({'job_id': jid, 'name': meta.get('name', jid), 'created_at': meta.get('created_at', ''),
                     'stage': prog.get('stage', '启动中'), 'pct': prog.get('pct', 0),
@@ -2578,7 +2669,7 @@ def chat_reply(job, jid, question):
                                timeout=60, verify=p.get('verify_ssl', True))
             txt = ((resp.get('choices') or [{}])[0].get('message') or {}).get('content', '') or '(模型无回复)'
         except Exception as e:
-            txt = '回答失败:%s' % net_hint(e)
+            txt = '回答失败:%s' % net_hint(e, (p.get('api_key'),))
         emit(job, {'type': 'message', 'role': 'agent', 'text': txt})
     finally:
         emit(job, {'type': 'status', 'state': 'idle'})
@@ -2756,39 +2847,40 @@ def job_log(jid: str, n: int = 20000):
     job = jpath(jid)
     txt = read_tail(os.path.join(job, 'run.log'), max(1000, min(int(n or 20000), 200000)))
     ev = skill_evidence(job)
-    return {'ok': True, 'log': redact(txt) or '(没有运行日志:该任务用的是内置演示流程,或 agent 没有任何输出)',
+    return {'ok': True, 'log': _redact_runtime(txt) or '(没有运行日志:该任务用的是内置演示流程,或 agent 没有任何输出)',
             'skill_used': ev['ok'], 'hits': ev['hits'], 'why': ev['why']}
 
 def _redact_config(value, key=''):
+    if _sensitive_config_key(key) or str(key).lower() in ('cmd', 'env'):
+        return ('s' + 'k' + '-***') if value else ''
     if isinstance(value, dict): return {k: _redact_config(v, k) for k, v in value.items()}
     if isinstance(value, list): return [_redact_config(v, key) for v in value]
-    if any(k in key.lower() for k in ('api_key', 'token', 'password', 'secret', 's2_key')):
-        return ('s' + 'k' + '-***') if value else ''
     return redact(value)
 
 def diagnostic_bundle(job):
     """构建可直接交给支持人员的全脱敏诊断包；返回 zip bytes。"""
     buf = io.BytesIO()
     meta_files = ('任务.json', 'progress.json')
+    conf = read_json(conf_path(), {})
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
         for fn in meta_files:
             data = read_json(os.path.join(job, fn), {})
-            z.writestr(fn, json.dumps(redact(data), ensure_ascii=False, indent=2))
+            z.writestr(fn, json.dumps(_redact_runtime(data, conf), ensure_ascii=False, indent=2))
         safe_events = []
         try: raw_lines = open(os.path.join(job, 'events.jsonl'), encoding='utf-8', errors='ignore').read().splitlines()
         except Exception: raw_lines = []
         for ln in raw_lines:
-            try: safe_events.append(json.dumps(redact(json.loads(ln)), ensure_ascii=False))
-            except Exception: safe_events.append(str(redact(ln)))
+            try: safe_events.append(json.dumps(_redact_runtime(json.loads(ln), conf), ensure_ascii=False))
+            except Exception: safe_events.append(str(_redact_runtime(ln, conf)))
         z.writestr('events.jsonl', '\n'.join(safe_events) + ('\n' if safe_events else ''))
         z.writestr('run.log', '\n'.join(_tail_lines(os.path.join(job, 'run.log'), 500)))
-        z.writestr('config.redacted.json', json.dumps(_redact_config(read_json(conf_path(), {})),
+        z.writestr('config.redacted.json', json.dumps(_redact_config(conf),
                                                      ensure_ascii=False, indent=2))
         system = {'engine_version': ENGINE_VERSION, 'platform': platform.platform(),
                   'python': platform.python_version(), 'created_at': now(),
                   'job_state': job_state(job)}
         z.writestr('system.json', json.dumps(system, ensure_ascii=False, indent=2))
-        z.writestr('relay_status.json', json.dumps(redact(RELAY_LAST), ensure_ascii=False, indent=2))
+        z.writestr('relay_status.json', json.dumps(_redact_runtime(RELAY_LAST, conf), ensure_ascii=False, indent=2))
         oc_log = os.path.join(DATA, 'opencode-server.log')
         z.writestr('opencode-server.log', '\n'.join(_tail_lines(oc_log, 500)))
     return buf.getvalue()
@@ -2867,11 +2959,17 @@ async def redo_job(jid: str, req: Request):
     try: os.unlink(os.path.join(job, 'outcome.json'))
     except FileNotFoundError: pass
     meta0 = read_json(os.path.join(job, '任务.json'), {})
+    harvest(job)
     conf0 = read_json(conf_path(), {})
     up0 = s2_conf(conf0); eng0 = conf0.get('engine') or {}
     meta0['engine_snapshot'] = {'kind': eng0.get('kind', 's2'), 'model': up0['model'],
                                 'base_url': up0['base_url'], 'wire': up0['wire'],
                                 'verify_ssl': bool(up0['verify_ssl']), 'started_at': now()}
+    # 所有执行分支（包括 mock）都必须在派发前冻结旧产物；否则旧 Word 会替失败重做开门。
+    meta0['redo_baseline'] = {
+        'docx': {fn: _file_digest(os.path.join(job, fn)) for fn in _body_docxs(job)},
+        'md': {fn: _file_digest(os.path.join(job, fn)) for fn in _body_mds(job)},
+    }
     write_json(os.path.join(job, '任务.json'), meta0)
     agent_cmd = config_agent_cmd()
     if not agent_cmd:
@@ -2879,11 +2977,6 @@ async def redo_job(jid: str, req: Request):
         return {'ok': True, 'mode': 'mock'}
     conf = read_json(conf_path(), {})
     meta = read_json(os.path.join(job, '任务.json'), {})
-    meta['redo_baseline'] = {
-        'docx': {fn: _file_digest(os.path.join(job, fn)) for fn in _body_docxs(job)},
-        'md': {fn: _file_digest(os.path.join(job, fn)) for fn in _body_mds(job)},
-    }
-    write_json(os.path.join(job, '任务.json'), meta)
     tpath = os.path.join(job, meta.get('tender', ''))
     sd = skill_dir_conf(conf)
     if not os.path.isfile(os.path.join(sd, 'SKILL.md')): sd = ensure_skill()
@@ -3090,10 +3183,10 @@ def open_job_folder(jid: str):
 @app.get('/v1/providers')
 def providers():
     stored = read_json(conf_path(), {'providers': [], 'routing': {}}).get('providers', [])
+    allowed = ('id', 'name', 'base_url', 'model', 'vision_model', 'kind', 'verify_ssl')
     public = []
     for item in stored:
-        safe = {k: v for k, v in dict(item).items()
-                if str(k).lower() not in ('api_key', 'key', 'token', 'secret', 'password')}
+        safe = {key: item.get(key) for key in allowed if key in item}
         safe['key_set'] = bool(item.get('api_key'))
         public.append(safe)
     return public
@@ -3162,9 +3255,9 @@ def _retry(call, tries=len(RETRY_WAITS) + 1, on_wait=None):
             time.sleep(RETRY_WAITS[i])
     raise last
 
-def net_hint(e):
+def net_hint(e, secrets_to_hide=()):
     """把底层网络异常翻译成可操作的中文提示"""
-    s = str(e)
+    s = _safe_secret_text(e, secrets_to_hide)
     if 'Connection reset by peer' in s or 'unexpected_eof' in s.lower() \
             or 'EOF occurred in violation' in s or 'RemoteDisconnected' in s:
         return ('连接被对端掐断(已自动重试 %d 次仍未成功)。多半是网关侧短时限流,或公司网络/VPN、'
@@ -3230,9 +3323,9 @@ async def probe_models(req: Request):
         _models_store(base, key, verify, ids)
         return {'ok': True, 'models': ids}
     except urllib.error.HTTPError as e:
-        return {'ok': False, 'error': 'HTTP %s %s' % (e.code, e.read()[:200].decode('utf-8', 'ignore')), 'models': []}
+        return {'ok': False, 'error': 'HTTP %s %s' % (e.code, _http_error_detail(e, (key,), 200)), 'models': []}
     except Exception as e:
-        return {'ok': False, 'error': net_hint(e), 'models': []}
+        return {'ok': False, 'error': net_hint(e, (key,)), 'models': []}
 
 @app.post('/v1/providers/{pid}/test')
 def test_provider(pid: str):
@@ -3251,9 +3344,9 @@ def test_provider(pid: str):
         _openai_req(p.get('base_url'), p.get('api_key'), '/models', timeout=15, verify=vs)
         return {'ok': True, 'latency_ms': int((time.time() - t0) * 1000), 'note': '通道连通;未配模型,建议选择模型后重测'}
     except urllib.error.HTTPError as e:
-        return {'ok': False, 'error': 'HTTP %s %s' % (e.code, e.read()[:300].decode('utf-8', 'ignore'))}
+        return {'ok': False, 'error': 'HTTP %s %s' % (e.code, _http_error_detail(e, (p.get('api_key'),), 300))}
     except Exception as e:
-        return {'ok': False, 'error': net_hint(e)}
+        return {'ok': False, 'error': net_hint(e, (p.get('api_key'),))}
 
 # ================= Responses ↔ Chat 中转:让 Codex CLI 直接用我们自己的 S2 网关 =================
 # 背景(实测,codex-cli 0.146.0):Codex 支持自定义模型供应商(CODEX_HOME/config.toml 里的
@@ -3391,7 +3484,8 @@ def _upstream(base, key, path, payload, timeout, verify):
         try:
             # 生成一册标书要打几十上百次上游,握手被掐一次就整条任务失败太脆:瞬时故障自动重开连接
             note = lambda i, n, e: RELAY_LAST.update(
-                {'ts': now(), 'retry': '第 %d/%d 次重试上游:%s' % (i, n, str(getattr(e, 'reason', e))[:120])})
+                {'ts': now(), 'retry': '第 %d/%d 次重试上游:%s' %
+                 (i, n, _safe_secret_text(getattr(e, 'reason', e), (key,))[:120])})
             return _retry(lambda: urllib.request.urlopen(req, timeout=timeout, context=ctx), on_wait=note)
         except urllib.error.URLError as e:
             if not isinstance(getattr(e, 'reason', None), ssl.SSLCertVerificationError): raise
@@ -3417,7 +3511,7 @@ def _relay_stream(body, up):
         try:
             r = _upstream(up['base_url'], up['api_key'], '/chat/completions', payload, 900, up['verify_ssl'])
         except urllib.error.HTTPError as e:
-            det = e.read()[:400].decode('utf-8', 'ignore')
+            det = _http_error_detail(e, (up['api_key'],), 400)
             # 有的网关不支持工具或不支持流式:退一步再试一次,总比整条任务断掉强
             if e.code in (400, 404, 422) and payload.get('stream'):
                 payload['stream'] = False
@@ -3468,7 +3562,7 @@ def _relay_stream(body, up):
     except Exception as e:
         # 已经向下游吐过任何字节后绝不能整轮重放（会重复正文，半截 tool arguments 更危险）。
         # 明确 response.failed，让执行外壳走“继续做/重跑”，禁止把半截正文伪装 completed。
-        err = '上游流在回复完成前断开：' + net_hint(e)
+        err = '上游流在回复完成前断开：' + net_hint(e, (up['api_key'],))
     if err:
         RELAY_LAST['error'] = err
         yield sse('response.failed', {'type': 'response.failed', 'response': {'id': rid, 'status': 'failed',
@@ -3504,9 +3598,9 @@ def _relay_passthrough(body, up):
     try:
         r = _upstream(up['base_url'], up['api_key'], '/responses', body, 900, up['verify_ssl'])
     except Exception as e:
-        RELAY_LAST.update({'ts': now(), 'error': net_hint(e), 'mode': 'passthrough'})
+        RELAY_LAST.update({'ts': now(), 'error': net_hint(e, (up['api_key'],)), 'mode': 'passthrough'})
         yield sse('response.failed', {'type': 'response.failed', 'response': {'id': 'resp_err', 'status': 'failed',
-                  'error': {'code': 'upstream_error', 'message': '中标狗中转层(直通模式):' + net_hint(e)}}})
+                  'error': {'code': 'upstream_error', 'message': '中标狗中转层(直通模式):' + net_hint(e, (up['api_key'],))}}})
         return
     tail = b''
     try:
@@ -3516,7 +3610,7 @@ def _relay_passthrough(body, up):
             tail = (tail + chunk)[-65536:]
             yield chunk
     except Exception as e:
-        reason = '上游 Responses 流在完整收尾前断开：' + net_hint(e)
+        reason = '上游 Responses 流在完整收尾前断开：' + net_hint(e, (up['api_key'],))
         RELAY_LAST.update({'ts': now(), 'error': reason, 'mode': 'passthrough'})
         yield sse('response.failed', {'type': 'response.failed', 'response': {'id': 'resp_err', 'status': 'failed',
                   'error': {'code': 'upstream_error', 'message': '中标狗中转层(直通模式):' + reason}}})
@@ -3525,7 +3619,7 @@ def _relay_passthrough(body, up):
                 or b'"type": "response.completed"' in tail)
     failed = (b'event: response.failed' in tail or b'"type":"response.failed"' in tail
               or b'"type": "response.failed"' in tail)
-    if body.get('stream', True) and not complete and not failed:
+    if body.get('stream') is True and not complete and not failed:
         reason = '上游 Responses 流提前结束，没有收到完整结束信号'
         RELAY_LAST.update({'ts': now(), 'error': reason, 'mode': 'passthrough'})
         yield sse('response.failed', {'type': 'response.failed', 'response': {'id': 'resp_err', 'status': 'failed',
@@ -3540,6 +3634,23 @@ async def relay_responses(req: Request):
     if not up['api_key']:
         return JSONResponse({'error': '还没填 S2 API Key(设置 · 生成引擎)'}, 400)
     up['model'] = up['model'] or body.get('model') or S2_DEFAULT_MODEL
+    # Responses API 缺省是非流式。原生直通时必须保留 JSON 响应类型，不能硬套 SSE。
+    if up['wire'] == 'responses' and body.get('stream') is not True:
+        try:
+            r = await asyncio.to_thread(_upstream, up['base_url'], up['api_key'], '/responses',
+                                        body, 900, up['verify_ssl'])
+            raw = await asyncio.to_thread(r.read)
+            status = int(getattr(r, 'status', 200) or 200)
+            content_type = (r.headers.get('Content-Type') or 'application/json').split(';', 1)[0]
+            return Response(content=raw, status_code=status, media_type=content_type,
+                            headers={'Cache-Control': 'no-store'})
+        except urllib.error.HTTPError as e:
+            detail = _http_error_detail(e, (up['api_key'],), 400)
+            return JSONResponse({'error': {'message': 'HTTP %s %s' % (e.code, detail),
+                                           'type': 'upstream_error'}}, e.code)
+        except Exception as e:
+            return JSONResponse({'error': {'message': '中转层:' + net_hint(e, (up['api_key'],)),
+                                           'type': 'upstream_error'}}, 502)
     gen = _relay_passthrough(body, up) if up['wire'] == 'responses' else _relay_stream(body, up)
     return StreamingResponse(gen, media_type='text/event-stream',
                              headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
@@ -3582,7 +3693,7 @@ async def relay_chat(req: Request):
                         continue
                     except Exception as open_err:
                         e = open_err
-                msg = '上游流在回复完成前断开：' + net_hint(e)
+                msg = '上游流在回复完成前断开：' + net_hint(e, (up['api_key'],))
                 RELAY_LAST['error'] = msg
                 if body.get('stream'):
                     yield ('data: %s\n\n' % json.dumps({'error': {
@@ -3592,14 +3703,14 @@ async def relay_chat(req: Request):
     try:
         r = await asyncio.to_thread(_upstream, up['base_url'], up['api_key'], '/chat/completions', body, 900, up['verify_ssl'])
     except urllib.error.HTTPError as e:
-        det = e.read()[:400].decode('utf-8', 'ignore')
+        det = _http_error_detail(e, (up['api_key'],), 400)
         RELAY_LAST['error'] = 'HTTP %s %s' % (e.code, det)
         try: return JSONResponse(json.loads(det), e.code)
         except Exception:
             return JSONResponse({'error': {'message': 'HTTP %s %s' % (e.code, det), 'type': 'upstream_error'}}, e.code)
     except Exception as e:
-        RELAY_LAST['error'] = net_hint(e)
-        return JSONResponse({'error': {'message': '中转层:' + net_hint(e), 'type': 'upstream_error'}}, 502)
+        RELAY_LAST['error'] = net_hint(e, (up['api_key'],))
+        return JSONResponse({'error': {'message': '中转层:' + net_hint(e, (up['api_key'],)), 'type': 'upstream_error'}}, 502)
     ct = r.headers.get('Content-Type') or 'application/json'
     return StreamingResponse(gen(r), media_type=ct,
                              headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
@@ -3615,7 +3726,7 @@ def relay_models():
         _models_store(up['base_url'], up['api_key'], up['verify_ssl'], ids)
         return {'ok': True, 'models': ids}
     except Exception as e:
-        return JSONResponse({'error': net_hint(e)}, 502)
+        return JSONResponse({'error': net_hint(e, (up['api_key'],))}, 502)
 
 # ---------- 一键安装执行外壳(Codex CLI):没内置、没装 Node 的机器,点一下按钮就好 ----------
 # 版本钉死在我们测过兼容的那个:S2 中转是按它的 Responses 行为实测的,随手升级可能翻车
@@ -3785,7 +3896,7 @@ def agent_provision_status():
 def relay_status():
     up = s2_conf()
     return {'base_url': up['base_url'], 'model': up['model'], 'has_key': bool(up['api_key']),
-            'wire': up['wire'], 'relay_url': relay_base(), 'last': RELAY_LAST}
+            'wire': up['wire'], 'relay_url': relay_base(), 'last': _redact_runtime(RELAY_LAST)}
 
 def relay_base():
     return 'http://127.0.0.1:%d/v1/relay' % SELF_PORT

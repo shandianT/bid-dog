@@ -176,3 +176,67 @@ def test_responses_passthrough_preserves_a_real_terminal_event(engine, monkeypat
 
     assert wire.count("response.completed") >= 1
     assert "response.failed" not in wire
+
+
+@pytest.mark.parametrize("request_body", [{"model": "senseaudio-s2"}, {"model": "senseaudio-s2", "stream": False}])
+def test_responses_passthrough_nonstream_is_json_not_sse(engine, monkeypatch, request_body):
+    payload = b'{"id":"resp_ok","object":"response","status":"completed","output":[]}'
+    monkeypatch.setattr(
+        engine,
+        "_upstream",
+        lambda *_args, **_kwargs: ScriptedResponse(chunks=[payload], content_type="application/json"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "s2_conf",
+        lambda *_args, **_kwargs: {
+            "base_url": "http://127.0.0.1:9/v1",
+            "api_key": _runtime_key(),
+            "model": "senseaudio-s2",
+            "verify_ssl": False,
+            "wire": "responses",
+        },
+    )
+    token = engine.relay_token()
+
+    with TestClient(engine.app) as client:
+        result = client.post(
+            "/v1/relay/responses",
+            headers={"Authorization": "Bearer " + token},
+            json=request_body,
+        )
+
+    assert result.status_code == 200
+    assert result.headers["content-type"].startswith("application/json")
+    assert result.json()["status"] == "completed"
+    assert "response.failed" not in result.text
+
+
+def test_responses_passthrough_nonstream_network_error_is_json_502(engine, monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "_upstream",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionResetError("synthetic reset")),
+    )
+    monkeypatch.setattr(
+        engine,
+        "s2_conf",
+        lambda *_args, **_kwargs: {
+            "base_url": "http://127.0.0.1:9/v1",
+            "api_key": _runtime_key(),
+            "model": "senseaudio-s2",
+            "verify_ssl": False,
+            "wire": "responses",
+        },
+    )
+    token = engine.relay_token()
+
+    with TestClient(engine.app) as client:
+        result = client.post(
+            "/v1/relay/responses",
+            headers={"Authorization": "Bearer " + token},
+            json={"model": "senseaudio-s2"},
+        )
+
+    assert result.status_code == 502
+    assert result.headers["content-type"].startswith("application/json")

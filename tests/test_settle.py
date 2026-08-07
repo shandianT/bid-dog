@@ -3,6 +3,7 @@ import hashlib
 
 import pytest
 from docx import Document
+from fastapi.testclient import TestClient
 
 from conftest import events
 
@@ -60,6 +61,39 @@ def test_failed_redo_cannot_reuse_the_previous_word_as_new_success(engine, job):
 
     assert result["state"] == "stopped"
     assert engine.job_state(str(job)) == "stopped"
+
+
+@pytest.mark.parametrize("instruction", ["只改项目进度安排", "重写" * 1000])
+def test_mock_redo_captures_baseline_before_dispatch(engine, job, monkeypatch, instruction):
+    word = job / "投标文件_技术标.docx"
+    _write_body_docx(word)
+    engine.write_json(
+        str(job / "outcome.json"),
+        {"state": "done", "word": word.name, "ts": engine.now()},
+    )
+    monkeypatch.setattr(engine, "config_agent_cmd", lambda: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+
+    class ImmediateThread:
+        def __init__(self, target, args=(), **_kwargs):
+            self.target = target
+            self.args = args
+
+        def start(self):
+            self.target(*self.args)
+
+    class ImmediateThreading:
+        Thread = ImmediateThread
+
+    monkeypatch.setattr(engine, "threading", ImmediateThreading)
+    with TestClient(engine.app) as client:
+        response = client.post("/v1/jobs/job-1/redo", json={"instruction": instruction})
+
+    assert response.status_code == 200
+    assert _sha256(word) == engine.read_json(str(job / "任务.json"), {})["redo_baseline"]["docx"][word.name]
+    assert engine.job_state(str(job)) == "stopped"
+    assert engine.read_json(str(job / "outcome.json"), {})["state"] == "stopped"
+    assert not any(e.get("pct") == 100 and e.get("step") == 12 for e in events(job))
 
 
 def test_body_markdown_must_export_word_before_success(engine, job, monkeypatch):

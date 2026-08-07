@@ -36,6 +36,26 @@ def test_agent_cannot_self_mark_an_unproven_claim_as_verified(engine, job):
     assert accepted["pct"] < 100
 
 
+def test_verified_flag_cannot_bypass_direct_event_sanitizing(engine, job):
+    claim = {
+        "type": "progress",
+        "stage": "完成",
+        "pct": 100,
+        "step": 12,
+        "total": 12,
+        "verified": True,
+    }
+
+    safe = engine.sanitize_event(str(job), claim)
+    engine.emit(str(job), claim)
+    persisted = engine.read_json(str(job / "progress.json"), {})
+
+    assert safe["step"] < 12
+    assert safe["pct"] < 100
+    assert persisted["step"] < 12
+    assert persisted["pct"] < 100
+
+
 def test_raw_legacy_progress_is_sanitized_before_sse(engine, job):
     raw = {"type": "progress", "stage": "完成", "pct": 100, "step": 12, "total": 12}
 

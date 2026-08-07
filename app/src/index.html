@@ -2001,7 +2001,10 @@ async function loadAgent(){
     el('agCliHint').textContent = a.cli_path
       ? '已手动指定路径' : (found ? '✓ 已自动检测到:' + found : '');
     el('agCliHint').style.color = found || a.cli_path ? 'var(--green)' : 'var(--dim)';
-    el('agEnv').value = a.env || '';
+    el('agEnv').value = '';
+    el('agEnv').placeholder = a.env_set
+      ? '已保存附加环境变量(留空沿用,输入新值覆盖)'
+      : '附加环境变量(选填,每行 KEY=VALUE)';
     el('agLogin').checked = a.login_shell !== false;
     el('agAgent').value = a.sowork_agent || '';
     el('agThink').value = a.thinking || 'off';
@@ -2047,7 +2050,10 @@ async function loadAgent(){
                               + '粘 Key 点「一键接入并测试」即可切到「自动」。';
       el('qkNow').style.color = 'var(--warn, #c77b00)';
     }
-    if(a.cmd) el('agCmd').value = a.cmd;
+    el('agCmd').value = '';
+    el('agCmd').placeholder = a.cmd_set
+      ? '已保存命令模板(留空沿用,输入新值覆盖)'
+      : '命令模板,占位符 {tender} {out} {materials} {jobid} {skill}';
     const pth = a.paths||{};
     const kk = el('agKind').value;
     el('agMsg').textContent = '标书技能包:'+(a.skill_ok?'✓ 已内置':'✗ 未找到(解压 bidmultiagenttao_v5.3.zip 到 '+a.skill_dir+')')

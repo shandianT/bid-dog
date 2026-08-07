@@ -13,15 +13,29 @@ def _runtime_key():
 
 def test_diagnostic_bundle_contains_evidence_and_redacts_every_key(engine, job):
     secret = _runtime_key()
+    plain_secret = "plain-provider-credential-123456789"
+    custom_secret = "plain-custom-command-secret-123456789"
     engine.write_json(
         engine.conf_path(),
         {
-            "engine": {"kind": "s2", "s2_key": secret},
-            "providers": [{"id": "p1", "api_key": secret, "base_url": "https://example.invalid/v1"}],
+            "engine": {
+                "kind": "s2",
+                "s2_key": secret,
+                "cmd": "runner --credential " + custom_secret,
+                "env": "API_KEY=" + custom_secret,
+            },
+            "providers": [
+                {"id": "p1", "api_key": plain_secret, "base_url": "https://example.invalid/v1"}
+            ],
             "relay_token": "local-token-that-must-also-be-redacted",
         },
     )
-    (job / "run.log").write_text("\n".join("LOG-%03d" % i for i in range(600)), encoding="utf-8")
+    (job / "run.log").write_text(
+        "\n".join(["API_KEY=" + custom_secret, "provider=" + plain_secret]
+                  + ["LOG-%03d" % i for i in range(600)]),
+        encoding="utf-8",
+    )
+    engine.RELAY_LAST.update({"error": "echoed " + plain_secret})
 
     with TestClient(engine.app) as client:
         response = client.get("/v1/jobs/job-1/bundle")
@@ -40,6 +54,8 @@ def test_diagnostic_bundle_contains_evidence_and_redacts_every_key(engine, job):
 
     combined = b"\n".join(archive.read(name) for name in archive.namelist() if not name.endswith("/"))
     assert secret.encode("utf-8") not in combined
+    assert plain_secret.encode("utf-8") not in combined
+    assert custom_secret.encode("utf-8") not in combined
     assert b"local-token-that-must-also-be-redacted" not in combined
     assert re.search(rb"sk-[A-Za-z0-9]{20,}", combined) is None
 
