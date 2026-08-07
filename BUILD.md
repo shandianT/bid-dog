@@ -44,7 +44,7 @@ APPLE_SIGNING_IDENTITY=- npm run build -- --bundles dmg
 npm run build -- --bundles nsis
 ```
 
-正式出包前的 CI 闸门会先跑离线 Python 139 项、前端 Node 稳定性 20 项和 Chromium 真实点击 2 项，合计 161 项；任一项失败都不进入 dmg/exe 构建。这些回归只验证发布链路与既定行为，不等同于三份独立真实招标文件的严格出件验收。
+正式出包前的 CI 闸门会先跑离线 Python 140 项、前端 Node 稳定性 20 项和 Chromium 真实点击 2 项，合计 162 项；任一项失败都不进入 dmg/exe 构建。这些回归只验证发布链路与既定行为，不等同于三份独立真实招标文件的严格出件验收。
 
 产物位置(app/src-tauri/target/release/bundle/):
 - macOS:dmg/中标狗_0.18.2_aarch64.dmg(在 Mac 上构建)

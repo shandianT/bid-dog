@@ -15,6 +15,18 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTM
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
+def _configure_stdio_utf8():
+    """Windows GUI/重定向日志常落到 cp1252；启动横幅含中文时不能因此让整个 sidecar 崩溃。"""
+    for name in ('stdout', 'stderr'):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, 'reconfigure', None)
+        if not reconfigure: continue
+        try: reconfigure(encoding='utf-8', errors='backslashreplace')
+        except (AttributeError, OSError, ValueError): pass
+
+if os.name == 'nt':
+    _configure_stdio_utf8()
+
 ENGINE_VERSION = '0.18.2'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',

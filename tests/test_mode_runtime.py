@@ -1,3 +1,5 @@
+import io
+
 from fastapi.testclient import TestClient
 
 
@@ -11,6 +13,17 @@ def _config(model):
             "s2_verify_ssl": True,
         }
     }
+
+
+def test_windows_redirected_stdio_is_reconfigured_to_utf8(engine, monkeypatch):
+    raw = io.BytesIO()
+    redirected = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
+    monkeypatch.setattr(engine.sys, "stdout", redirected)
+
+    engine._configure_stdio_utf8()
+    print("[中标狗] 引擎启动", file=engine.sys.stdout, flush=True)
+
+    assert raw.getvalue().decode("utf-8") == "[中标狗] 引擎启动\n"
 
 
 def test_probe_cache_is_scoped_to_effective_mode(engine, monkeypatch):
