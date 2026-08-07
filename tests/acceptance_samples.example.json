@@ -1,0 +1,16 @@
+{
+  "samples": [
+    {
+      "name": "脱敏样本一",
+      "path": "/absolute/path/to/redacted-tender-1.docx"
+    },
+    {
+      "name": "脱敏样本二",
+      "path": "/absolute/path/to/redacted-tender-2.docx"
+    },
+    {
+      "name": "脱敏样本三",
+      "path": "/absolute/path/to/redacted-tender-3.docx"
+    }
+  ]
+}

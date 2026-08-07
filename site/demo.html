@@ -147,6 +147,11 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 /* ---- 输入区:大圆角浮起 ---- */
 .compose{flex:none;padding:10px 28px 14px;position:relative;display:none}
 .cbox{max-width:780px;margin:0 auto;display:flex;flex-direction:column;gap:9px}
+.ansbar{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:14px;
+  background:#fff8e6;border:1px solid #f0dcaa;font-size:12.5px;color:#7a5b12}
+.ansbar .adot{width:7px;height:7px;border-radius:50%;background:#e0a415;flex:none}
+.ansbar .aq{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ansbar .ax{cursor:pointer;color:#9a7a2a;text-decoration:underline;flex:none}
 .inbar{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line-d);border-radius:26px;
   padding:7px 8px 7px 10px;box-shadow:var(--sh-xs);transition:border-color var(--tr),box-shadow var(--tr)}
 .inbar:focus-within{border-color:#c6c6c4;box-shadow:var(--sh-sm)}
@@ -297,6 +302,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
     <div class="side-links">
       <span class="sl" onclick="openSheet('assets')"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>素材库</span>
       <span class="sl" onclick="openSheet('providers')"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>设置 · 模型接入</span>
+      <span class="sl" id="updateLink" style="display:none;color:var(--blue)" onclick="openUpdate()">有修复版可用 → 去下载</span>
       <span id="conn">连接引擎中…</span>
     </div>
   </aside>
@@ -328,6 +334,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       <span class="iconbtn" id="pauseBtn" style="display:none" title="暂停/继续"></span>
       <span class="pill" id="stopBtn" style="display:none" onclick="stopJob()">停止</span>
       <span class="pill" id="redoBtn" style="display:none" onclick="openRedo()">定向重做</span>
+      <span class="pill on" id="resumeBtn" style="display:none" onclick="resumeJob()">继续做</span>
       <span class="pill" id="logBtn" onclick="openLog()">运行日志</span>
       <span class="pill on" id="startBtn" style="display:none" onclick="startStaged()">▶ 开始生成</span>
       <span class="pill" id="hAct" onclick="openCheck()">出件前检查</span>
@@ -340,10 +347,16 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
           <div onclick="pickRef()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span><b>加参考资料到当前任务</b><i>过往标书/模板,AI 写作时参考它的写法</i></span></div>
           <div onclick="pickFile()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg><span><b>新建任务</b><i>把这份招标文件作为新任务开始</i></span></div>
         </div>
+        <!-- AI 在等你回答时才出现:让人一眼看出这一句发出去是「回答它」,而不是「再提个要求」 -->
+        <div class="ansbar" id="ansBar" style="display:none">
+          <span class="adot"></span><span id="ansQ" class="aq"></span>
+          <span class="ax" onclick="answerMode(false)">取消</span>
+        </div>
         <div class="inbar">
           <span class="plus" onclick="togglePlus(event)" title="添加文件"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
           <input id="draft" placeholder="问问进度、提要求,或把文件拖进来" onkeydown="if(event.key==='Enter'&&!event.isComposing)send()">
-          <span class="rbtn mic" title="语音(接本机转写)"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg></span>
+          <!-- 语音按钮已撤下:前端从未绑事件,后端 /v1/transcribe 也是硬编码 501「本机未装转写模型」。
+               摆一颗永远点不动的按钮,只会让人以为是自己操作不对。等真接上转写再放回来。 -->
           <span class="rbtn send" onclick="send()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><line x1="12" y1="19" x2="12" y2="5"/><path d="M6 11l6-6 6 6"/></svg></span>
         </div>
         <div class="quick" id="quick"></div>
@@ -514,6 +527,8 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       <option value="s2">自动(默认)</option>
       <option value="mock">内置演示流程</option>
       <option value="sowork">SoWork(商汤)</option>
+      <option value="claude">Claude Code</option>
+      <option value="codex">Codex CLI</option>
       <option value="custom">自定义命令</option>
     </select>
     <button class="btn gy" onclick="testAgent()">测试连接</button>
@@ -607,11 +622,86 @@ const API_CANDIDATES = [localStorage.getItem('bid_api'), IS_WEB ? location.origi
 let API = API_CANDIDATES[0];
 const NEED_FEATURES = ['probe_models', 'agent_binding', 'attachments', 'artifact_open', 'job_folder_open'];
 const isWin = navigator.platform.startsWith('Win');
+const ASK_SELF = '我来输入';     // 界面自己的自救入口,渲染与点击两处都用它,别写死字面量
 let S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}, atts:{}, health:{}, chips:{}, worklog:{}, stageAvgs:null, es:null,
-          typing:{}, steps:{}, names:{}, paused:{}, openGrp:{0:true, 1:true, 2:false, 3:false} };
+          typing:{}, steps:{}, names:{}, paused:{}, answering:{}, openGrp:{0:true, 1:true, 2:false, 3:false},
+          artsLoaded:{}, eventTimes:{}, esOffsets:{}, wordNotified:{}, updateInfo:null, engineVersion:'' };
 document.getElementById('sbL').textContent = isWin ? '任务栏显示进度 · 完成后系统通知' : 'Dock 显示进度 · 完成后系统通知 · 托盘常驻';
 
-async function api(p, opt){ const r = await fetch(API + p, opt); if(!r.ok) throw new Error(p+' '+r.status); return r.json(); }
+/* FRONTEND_STABILITY_PURE_START */
+const ACTIVE_GAP_MS = 10 * 60 * 1000;
+function isBodyWordArtifact(a){
+  const name = String((a&&a.name)||'');
+  if(!/\.docx$/i.test(name)) return false;
+  if(/自检|清洗|报告|质检|门禁|矩阵|偏离表|解析版|配图清单|补料|废标|组成|索引|格式要求|大纲|\.bak/i.test(name)) return false;
+  if(!/投标|技术标|商务标|标书|方案|响应文件/i.test(name)) return false;
+  return a == null || a.size_kb == null || Number(a.size_kb) > 0;
+}
+function wordPresence(arts, loaded, hasWord){
+  if((arts||[]).some(isBodyWordArtifact)) return 'ready';
+  if(hasWord === true) return 'ready';
+  return loaded === true || hasWord === false ? 'missing' : 'unknown';
+}
+function completionGate(state, pct, word){
+  // pct 是 agent 的进度信号，不是交付事实；老引擎的兼容判断已在 jobState() 内完成。
+  const rawDone = state === 'done';
+  return {rawDone, complete:rawDone && word === 'ready',
+          missingWord:rawDone && word === 'missing', checkingWord:rawDone && word === 'unknown'};
+}
+function activeClock(timestamps, nowMs, terminal, gapMs){
+  const cap = Number(gapMs) > 0 ? Number(gapMs) : ACTIVE_GAP_MS;
+  const ts = [...new Set((timestamps||[]).map(Number).filter(Number.isFinite))].sort((a,b)=>a-b);
+  if(!ts.length) return {active:0, idle:0, span:0};
+  if(!terminal && Number.isFinite(Number(nowMs)) && Number(nowMs) > ts[ts.length-1]) ts.push(Number(nowMs));
+  let active = 0, idle = 0;
+  for(let i=1;i<ts.length;i++){
+    const d = Math.max(0, ts[i]-ts[i-1]);
+    active += Math.min(d, cap); idle += Math.max(0, d-cap);
+  }
+  return {active, idle, span:active+idle};
+}
+function eventStreamUrl(apiBase, id, offset){
+  return String(apiBase||'').replace(/\/$/,'') + '/v1/jobs/' + encodeURIComponent(id)
+    + '/events?offset=' + Math.max(0, Number(offset)||0);
+}
+function withDiagnosticAction(actions){
+  const out = (actions||[]).filter(a=>a && a.act !== 'bundle').map(a=>Object.assign({},a));
+  out.push({act:'bundle', label:'导出诊断包'}); return out;
+}
+function healthUpdateInfo(health){
+  const h = health || {}, u = h.update || h.upgrade || h.release_update || {};
+  const available = u.available === true || u.status === 'available' || u.status === 'update_available'
+    || h.update_available === true;
+  if(!available) return null;
+  const version = String(u.latest || u.version || h.latest_version || '').replace(/^v/,'');
+  let url = String(u.url || u.release_url || h.release_url || '');
+  const safe = /^https:\/\/github\.com\/shandianT\/bid-dog\/releases(?:\/|$)/i;
+  if(!safe.test(url)) url = 'https://github.com/shandianT/bid-dog/releases/latest';
+  return {version:version || '新版', url};
+}
+function modeFromModel(model){
+  const m = String(model||'');
+  if(/flash|lite|turbo|mini|nano/i.test(m)) return 'fast';
+  if(/s2|pro|max|plus/i.test(m) && !/flash|lite|turbo|mini|nano/i.test(m)) return 'quality';
+  return null;
+}
+function modeSwitchBlocked(jobs){
+  return (jobs||[]).some(j=>j && (j.state === 'running' || j.state === 'paused'));
+}
+/* FRONTEND_STABILITY_PURE_END */
+
+/* 非 2xx 时把后端的说明一起带上来。以前只抛一个「/v1/... 400」,
+   引擎那句「原来的会话已经不在了,只能重跑本任务」就被丢在这儿了 ——
+   用户看到的是一串没用的状态码,而真正该看的话被我们自己吞掉。 */
+async function api(p, opt){
+  const r = await fetch(API + p, opt);
+  if(!r.ok){
+    let body = null; try{ body = await r.json(); }catch(_){}
+    const e = new Error((body && (body.error || body.detail)) || (p+' '+r.status));
+    e.status = r.status; e.body = body; throw e;
+  }
+  return r.json();
+}
 function el(id){ return document.getElementById(id); }
 function esc(s){ const d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; }
 function escA(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }  /* 属性里也安全 */
@@ -674,8 +764,41 @@ async function findEngine(){
   if(stale) S.stale = stale.h.version || '旧版';
   return null;
 }
+function applyHealthUpdate(h){
+  const info = healthUpdateInfo(h), link = el('updateLink');
+  S.updateInfo = info;
+  if(info){
+    link.textContent = '有修复版 v' + info.version + ' → 去下载';
+    link.style.display = 'flex';
+  }else link.style.display = 'none';
+  return info;
+}
+async function pollHealthUpdate(attempt){
+  if(!S.online || FORCE_DEMO) return;
+  try{
+    const h = await api('/v1/health');
+    if(applyHealthUpdate(h)) return;
+    const u = h.update || h.upgrade || h.release_update || {};
+    if(['latest','done','error','failed'].indexOf(u.status) >= 0 || h.update_available === false) return;
+  }catch(_){ return; }                         // 查更新失败必须静默,不能影响本地任务
+  if((attempt||0) < 5) setTimeout(()=>pollHealthUpdate((attempt||0)+1), 1800);
+}
+async function openUpdate(){
+  const info = S.updateInfo; if(!info) return;
+  // 默认 Tauri WebView 没有 new-window handler；桌面端交给本地引擎用系统浏览器打开。
+  if(!IS_WEB){
+    try{ await api('/v1/open_release', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:info.url})}); }
+    catch(e){ toast('更新页面打开失败，请到 GitHub Releases 下载'); }
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = info.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+  document.body.appendChild(a); a.click(); a.remove();
+}
 async function goOnline(h){
-  S.online = true; el('conn').textContent = '本地引擎 v' + (h.version||'?') + ' · 已连接'; el('demoTag').style.display='none';
+  S.online = true; S.engineVersion = h.version||'?';
+  el('conn').textContent = '本地引擎 v' + S.engineVersion + ' · 已连接'; el('demoTag').style.display='none';
   el('brandDot').style.background = 'var(--green)';
   if(S.stale){
     el('conn').textContent = '引擎版本过旧(' + S.stale + ')';
@@ -684,9 +807,10 @@ async function goOnline(h){
     el('demoTag').textContent = '检测到旧版引擎占用端口 · 请退出旧版应用/旧引擎进程后重开本应用';
   }
   el('sbR').textContent = h.data_dir + (isWin?'\\jobs':'/jobs');
+  applyHealthUpdate(h); setTimeout(()=>pollHealthUpdate(0), 1200);
   S.jobs = await api('/v1/jobs');
   if(S.jobs.length){ select(S.jobs[0].job_id); }
-  setInterval(async()=>{ try{ S.jobs = await api('/v1/jobs'); renderTasks(); }catch(e){} }, 4000);
+  setInterval(async()=>{ try{ S.jobs = await api('/v1/jobs'); renderTasks(); if(S.active){ renderHead(); renderRail(); } }catch(e){} }, 4000);
   try{ const st = await api('/v1/stats/stages'); S.stageAvgs = st.stages || null; }catch(e){}
   renderTasks(); renderMain();
 }
@@ -732,7 +856,9 @@ function renderMain(){
 function taskRow(j, compact){
   const on = j.job_id===S.active, p = (S.prog[j.job_id]&&S.prog[j.job_id].pct)!=null ? S.prog[j.job_id].pct : j.pct||0;
   const stage = (S.prog[j.job_id]&&S.prog[j.job_id].stage) || j.stage || '';
-  const dot = p>=100 ? (S.health[j.job_id] ? verdict(j.job_id).color : '#3a3a38') : 'var(--blue)';
+  const delivery = completionGate(jobState(j), p, wordPresence(S.arts[j.job_id], S.artsLoaded[j.job_id], j.has_word));
+  const dot = delivery.missingWord ? 'var(--red)' : (p>=100
+    ? (S.health[j.job_id] ? verdict(j.job_id).color : '#3a3a38') : 'var(--blue)');
   const delBtn = '<span class="del" title="删除任务" data-del="'+escA(j.job_id)+'"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:12px;height:12px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>';
   const head = '<div class="nm"><span class="dot" style="background:'+dot+'"></span><span class="tn" title="'+escA(j.name||j.job_id)+'">'+esc(j.name||j.job_id)+'</span>'+delBtn+'</div>';
   if(compact)   /* 已完成:单行,结论色圆点自己会说话 */
@@ -740,19 +866,37 @@ function taskRow(j, compact){
   return '<div class="task'+(on?' on':'')+'" data-id="'+escA(j.job_id)+'">'+head
     + '<div class="st">'+esc(stage)+' · '+p+'%</div><div class="bar"><b style="width:'+p+'%"></b></div></div>';
 }
+/* 状态由引擎给结论(list_jobs 的 state 字段),前端不再从进度百分比反推。
+   以前只有 `pct>=100 ? 已完成 : 进行中` 两档,于是四种「已停止」终态(它们的 pct 都是 0)
+   全部被归进「进行中」并一直转圈——跑挂了跟正在跑长得一模一样,用户会一直等下去。 */
+function jobState(j){
+  if(j.state) return j.state;                       // 新引擎:直接用它的结论
+  const p = (S.prog[j.job_id]&&S.prog[j.job_id].pct)!=null ? S.prog[j.job_id].pct : j.pct||0;
+  const st = (S.prog[j.job_id]&&S.prog[j.job_id].stage) || j.stage || '';
+  if(j.staged) return 'staged';                     // 旧引擎:尽量还原,别退回两档
+  if(p>=100) return 'done';
+  if(/^已暂停/.test(st)) return 'paused';
+  if(/^已停止/.test(st)) return 'stopped';
+  return 'running';
+}
 function renderTasks(){
-  const act = [], done = [];
-  S.jobs.forEach(j=>{
-    const p = (S.prog[j.job_id]&&S.prog[j.job_id].pct)!=null ? S.prog[j.job_id].pct : j.pct||0;
-    (p>=100 ? done : act).push(j);
-  });
-  const open = S.doneOpen !== undefined ? S.doneOpen : done.length <= 4;   // 少量默认展开,多了默认收
+  const g = {staged:[], running:[], paused:[], stopped:[], unknown:[], done:[]};
+  S.jobs.forEach(j=>{ (g[jobState(j)] || g.running).push(j); });
+  const open = S.doneOpen !== undefined ? S.doneOpen : g.done.length <= 4;
   let h = '';
-  if(act.length) h += '<div class="tgrp">进行中 · '+act.length+'</div>' + act.map(j=>taskRow(j,false)).join('');
-  if(done.length){
-    h += '<div class="tgrp">已完成 · '+done.length
+  const grp = (key, label, compact)=>{
+    const list = g[key]; if(!list.length) return '';
+    return '<div class="tgrp">'+label+' · '+list.length+'</div>' + list.map(j=>taskRow(j,compact)).join('');
+  };
+  h += grp('staged', '等你开始', false);
+  h += grp('running', '进行中', false);
+  h += grp('paused', '已暂停,等你继续', false);
+  h += grp('stopped', '已停止', false);
+  h += grp('unknown', '状态不明', false);      // 引擎被杀/断电:如实说不知道,不装作在跑
+  if(g.done.length){
+    h += '<div class="tgrp">已完成 · '+g.done.length
        + '<span class="tgx" data-tgl="'+(open?'0':'1')+'">'+(open?'收起':'展开')+'</span></div>';
-    const show = open ? done : done.filter(j=>j.job_id===S.active);   // 收起时仍显示当前选中的那条
+    const show = open ? g.done : g.done.filter(j=>j.job_id===S.active);   // 收起时仍显示当前选中的那条
     h += show.map(j=>taskRow(j,true)).join('');
   }
   el('tasks').innerHTML = h || '<div class="empty-side">还没有任务</div>';
@@ -778,25 +922,50 @@ async function delJob(id){
 
 /* ================= 选择任务 + SSE(断线自动重连) ================= */
 function select(id){
+  if(S.esOffsets[id] == null){
+    S.esOffsets[id] = 0; S.msgs[id] = []; S.chips[id] = null;
+    S.worklog[id] = []; S.eventTimes[id] = []; S.steps[id] = {}; S.names[id] = {};
+  }
   S.active = id; renderMain(); renderTasks(); renderChat(); renderHead(); renderRail(); loadAtts(id);
-  if(S.online){ attachES(id); refreshArts(id).then(()=>{ if(S.active===id) renderRail(); }); }
+  if(S.online){
+    attachES(id, false);
+    refreshArts(id).then(()=>{ if(S.active===id){ renderHead(); renderRail(); renderTasks(); } });
+  }
 }
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState !== 'visible' || !S.online) return;
   api('/v1/jobs').then(j=>{ S.jobs=j; renderTasks(); renderHead(); }).catch(()=>{});
-  if(S.active && (!S.es || S.es.readyState === 2)) attachES(S.active);   // 流被浏览器挂起就重挂
+  if(S.active && (!S.es || S.es.readyState === 2)) attachES(S.active, true);   // 流被浏览器挂起就续传
 });
-function attachES(id){
+function attachES(id, reconnecting){
   if(S.es) S.es.close();
-  S.msgs[id]=[]; S.chips[id]=null;
-  const es = new EventSource(API+'/v1/jobs/'+id+'/events'); S.es = es;
-  es.onmessage = ev => { try{ handle(id, JSON.parse(ev.data)); }catch(e){} };
+  const offset = Math.max(0, Number(S.esOffsets[id])||0);
+  const es = new EventSource(eventStreamUrl(API, id, offset)); S.es = es;
+  es.onopen = () => {
+    if(S.es === es && S.active === id)
+      el('conn').textContent = '本地引擎 v' + (S.engineVersion||'?') + ' · 已连接';
+  };
+  es.onmessage = ev => {
+    if(S.es !== es) return;
+    S.esOffsets[id] = (Number(S.esOffsets[id])||0) + 1;   // 先记行号:坏 JSON 也不能在重连后无限重放
+    try{ handle(id, JSON.parse(ev.data)); }catch(e){ console.warn('[events] 忽略坏事件', e); }
+  };
   es.onerror = () => {           // 引擎重启/网络抖动:3 秒后自动重连,不再停在假死页面
     es.close();
-    if(S.es === es){ S.es = null; setTimeout(()=>{ if(S.active===id && S.online && !S.es) attachES(id); }, 3000); }
+    if(S.es === es){
+      S.es = null; S.typing[id] = false;
+      if(S.active===id) el('conn').textContent = '实时连接中断 · 正在从第 '+(S.esOffsets[id]||0)+' 条继续';
+      setTimeout(()=>{ if(S.active===id && S.online && !S.es) attachES(id, true); }, reconnecting ? 4000 : 3000);
+    }
   };
 }
+function eventIsRecent(e){ const t=ts2ms(e&&e.ts); return !!t && Math.abs(Date.now()-t) < 30000; }
 function handle(id, e){
+  const etm = ts2ms(e&&e.ts);
+  if(etm){
+    const times = (S.eventTimes[id]=S.eventTimes[id]||[]);
+    if(times.indexOf(etm)<0){ times.push(etm); times.sort((a,b)=>a-b); }
+  }
   if(e.type==='message'){
     const list = (S.msgs[id]=S.msgs[id]||[]);
     if(e.role==='user'){
@@ -804,7 +973,7 @@ function handle(id, e){
       if(i>=0) list[i] = {role:'user', text:e.text}; else list.push(e);
     } else {
       list.push(e); S.typing[id] = false;
-      if(e.role==='agent') notify(e.text);
+      if(e.role==='agent' && eventIsRecent(e)) notify(e.text);
     }
   }
   if(e.type==='worklog'){
@@ -814,7 +983,8 @@ function handle(id, e){
     if(S.active===id) renderWorklog();
   }
   if(e.type==='status'){ S.typing[id] = e.state==='thinking' && (Date.now()-ts2ms(e.ts) < 120000); }
-  if(e.type==='question_closed'){ const q = S.chips[id]; if(q && (!e.id || q.qid===e.id)) S.chips[id] = null; }
+  if(e.type==='question_closed'){ const q = S.chips[id];
+    if(q && (!e.id || q.qid===e.id)){ S.chips[id] = null; if(S.active===id) answerMode(false); } }
   if(e.type==='progress'){
     S.prog[id]=e;
     const k = e.step||0;
@@ -829,19 +999,37 @@ function handle(id, e){
       const dv = '── 第 '+k+' 步 · '+(e.stage||'')+' ──';
       if(wl[wl.length-1] !== dv) wl.push(dv);
     }
-    if(e.pct>=100) notify('已出 Word · 待你确认');
   }
-  if(e.type==='question'){ S.chips[id]={qid:e.id, options:e.options}; (S.msgs[id]=S.msgs[id]||[]).push({role:'agent',text:e.text}); }
+  if(e.type==='question'){
+    S.chips[id]={qid:e.id, options:e.options||[], text:e.text};
+    (S.msgs[id]=S.msgs[id]||[]).push({role:'agent',text:e.text});
+    // 开放式提问(agent 没给选项):直接把输入框切到回答通道 ——
+    // 不然界面上一个可点的东西都没有,而 agent 就在那边等着,谁也不知道该干什么
+    if(S.active===id && !(e.options||[]).length) answerMode(true);
+  }
   if(e.type==='artifact'){
     const list = (S.arts[id]=S.arts[id]||[]);
     if(!list.some(a=>a.name===e.name)) list.push(e);
-    refreshArts(id).then(()=>{ if(id===S.active) renderRail(); });  // SSE 事件不带 url,拉到带 url 的清单后重画
+    const recentBodyWord = isBodyWordArtifact(e) && eventIsRecent(e);
+    refreshArts(id).then(()=>{
+      if(recentBodyWord && wordPresence(S.arts[id], S.artsLoaded[id]) === 'ready' && !S.wordNotified[id]){
+        S.wordNotified[id] = true; notify('已出 Word · 待你确认');
+      }
+      if(id===S.active){ renderHead(); renderRail(); renderTasks(); }
+    });
   }
   if(e.type==='health'){ S.health[id]=e; }
-  if(e.type==='error'){ (S.msgs[id]=S.msgs[id]||[]).push({role:'agent', text:'⚠ '+e.text, actions:e.actions||null}); S.typing[id]=false; }
+  if(e.type==='error'){
+    (S.msgs[id]=S.msgs[id]||[]).push({role:'agent', text:'⚠ '+e.text, actions:withDiagnosticAction(e.actions)});
+    S.typing[id]=false;
+  }
   if(id===S.active){ renderChat(); renderHead(); renderRail(); renderTasks(); }
 }
-async function refreshArts(id){ if(S.online){ try{ S.arts[id] = await api('/v1/jobs/'+id+'/artifacts'); }catch(e){} } }
+async function refreshArts(id){
+  if(!S.online) return;
+  try{ S.arts[id] = await api('/v1/jobs/'+id+'/artifacts'); S.artsLoaded[id] = true; }
+  catch(e){ if(S.artsLoaded[id] !== true) S.artsLoaded[id] = false; }
+}
 async function loadAtts(id){ if(S.online&&id){ try{ S.atts[id] = await api('/v1/jobs/'+id+'/attachments'); }catch(e){ S.atts[id]=[]; } renderAtts(); } }
 
 /* ================= 步骤计时 ================= */
@@ -859,9 +1047,13 @@ function fmtDur(ms){
 function timing(id){
   const st = S.steps[id]||{}; const keys = Object.keys(st).map(Number).sort((a,b)=>a-b);
   const p = S.prog[id]||{}; const total = p.total||12, cur = p.step||0;
-  if(!keys.length) return {elapsed:0, eta:0, total, cur, rough:false};
-  const t0 = st[keys[0]], now = Date.now();
-  const elapsed = now - t0;
+  const j = (S.jobs||[]).find(x=>x.job_id===id);
+  const state = j ? jobState(j) : (p.pct>=100 ? 'done' : 'running');
+  const terminal = !!p.terminal || p.pct>=100 || ['done','stopped','unknown','paused'].indexOf(state)>=0;
+  const times = (S.eventTimes[id]||[]).length ? S.eventTimes[id] : keys.map(k=>st[k]);
+  const now = Date.now(), clock = activeClock(times, now, terminal);
+  const elapsed = clock.active, idle = clock.idle;
+  if(!times.length) return {elapsed:0, idle:0, eta:0, total, cur, rough:false};
   let eta = 0, rough = false;
   if(cur >= 1 && p.pct < 100 && S.stageAvgs){
     // 每步均值(本机历史优先,缺的用参考值):第一步就能给预计,且不被单个超长步带偏
@@ -869,16 +1061,20 @@ function timing(id){
     for(let i = cur; i <= total; i++){
       const a = S.stageAvgs[i - 1] || {}; let sec = a.avg_s || 120;
       if(!a.from_history) rough = true;
-      if(i === cur) sec = Math.max(sec - (now - (st[cur] || now)) / 1000, sec * 0.1);
+      if(i === cur){
+        const begin = st[cur] || times[0];
+        const currentTimes = times.filter(t=>t>=begin); if(currentTimes[0]!==begin) currentTimes.unshift(begin);
+        sec = Math.max(sec - activeClock(currentTimes, now, terminal).active / 1000, sec * 0.1);
+      }
       rem += sec;
     }
     eta = rem * 1000;
   } else if(cur > 1 && p.pct < 100){
-    const per = (st[keys[keys.length-1]] - t0) / Math.max(1, cur - 1);
+    const per = elapsed / Math.max(1, cur - 1);
     eta = per > 0 ? per * (total - cur + 1) : 0;
   }
   if(eta && eta < 5000) eta = 0;
-  return {elapsed, eta, total, cur, rough};
+  return {elapsed, idle, eta, total, cur, rough};
 }
 
 /* ================= 头部 / 对话 / 快捷 ================= */
@@ -894,26 +1090,59 @@ function verdict(id){
 function renderHead(){
   if(!S.active) return;
   const p = S.prog[S.active]||{};
-  const t = timing(S.active), done = p.pct>=100;
-  const v = verdict(S.active);
   const j = S.jobs.find(x=>x.job_id===S.active);
+  const st = j ? jobState(j) : (p.pct>=100 ? 'done' : 'running');
+  /* done 只表示「跑到头了」;stopped/unknown 是另一类终态——它们也不该再显示成运行中,
+     但结论卡、质检徽章那一套只对真正跑完的稿子有意义,所以分开判。 */
+  const t = timing(S.active), stateDone = (st === 'done');
+  // 「暂停」跟「停止」要分开说:停止是这一单结束了,暂停是它还在半路、等着被接着做
+  const paused = (st === 'paused');
+  const halted = (st === 'stopped' || st === 'unknown');
+  const word = wordPresence(S.arts[S.active], S.artsLoaded[S.active], j&&j.has_word);
+  const delivery = completionGate(st, p.pct, word);
+  const done = delivery.complete;
+  const missingWord = delivery.missingWord || (halted && word === 'missing');
+  if(paused) S.paused[S.active] = true;
+  const v = verdict(S.active);
   el('hTitle').textContent = (j&&j.name) || S.active;
   const badge = el('hBadge');
-  if(done){
+  if(missingWord){
+    badge.style.display = 'inline-flex'; badge.className = 'badge bad';
+    badge.innerHTML = '<span class="bdot"></span>没出 Word，未完成';
+  } else if(done){
     const label = {ok:'内容检查通过', warn:'待确认项待处理', bad:(v.fix?'内容异常,需修复':'有必办项,暂不可投'), none:'已完成,待体检'}[v.key];
     badge.style.display = 'inline-flex'; badge.className = 'badge ' + v.key;
     badge.innerHTML = '<span class="bdot"></span>' + label;
+  } else if(delivery.checkingWord){
+    badge.style.display = 'inline-flex'; badge.className = 'badge warn';
+    badge.innerHTML = '<span class="bdot"></span>正在核对 Word 交付物';
+  } else if(paused){
+    badge.style.display = 'inline-flex'; badge.className = 'badge warn';
+    badge.innerHTML = '<span class="bdot"></span>已暂停,点「继续做」接着写';
+  } else if(halted){
+    // 跑挂了不能装作没事:徽章直接把话说明白,再配合下面的「重跑 / 补出 Word」
+    badge.style.display = 'inline-flex'; badge.className = 'badge bad';
+    badge.innerHTML = '<span class="bdot"></span>' + (st==='unknown' ? '状态不明,可能被中断' : '已停止,未跑完');
   } else badge.style.display = 'none';
   const act = el('hAct');
-  act.className = 'pill' + (done ? ' primary' : '');
-  act.textContent = done ? (v.key==='bad' ? (v.fix?'去修复内容异常':'看必办清单') : '出件前检查') : '出件前检查';
-  el('stopBtn').style.display = (!done && S.online && p.step) ? 'inline-block' : 'none';
-  el('redoBtn').style.display = (done && S.online) ? 'inline-block' : 'none';
+  act.className = 'pill' + ((done||missingWord) ? ' primary' : '');
+  act.textContent = missingWord ? '查看中断原因' : (done ? (v.key==='bad' ? (v.fix?'去修复内容异常':'看必办清单') : '出件前检查') : '出件前检查');
+  /* 不再依赖 p.step:那等于「agent 自己汇报了第一条进度才给停止按钮」,
+     而真实 agent 读招标文件那几分钟到几十分钟是不吭声的——选错了文件想停,
+     用户只能删掉整个任务或干等三小时超时。任务只要不是终态就该能停。 */
+  el('stopBtn').style.display = (st==='running' && S.online) ? 'inline-block' : 'none';
+  // 跑挂了也该能定向重做/重跑:已经写出来的章节不该跟着一起作废
+  el('redoBtn').style.display = ((stateDone || halted || paused) && S.online) ? 'inline-block' : 'none';
+  /* 「继续做」只在引擎说这一单能续时才出现(它留下了可用的会话)。
+     没有会话还画这颗按钮,点下去必然失败——那种按钮不如不要。 */
+  const rb = el('resumeBtn');
+  rb.onclick = resumeJob;
+  rb.style.display = (S.online && j && (j.can||[]).indexOf('resume') >= 0) ? 'inline-block' : 'none';
   const jj = (S.jobs||[]).find(j=>j.job_id===S.active);
   el('startBtn').style.display = (jj && jj.staged) ? '' : 'none';
   const pb = el('pauseBtn');
   pb.onclick = togglePause;
-  if(!done && S.online && p.step){
+  if((st==='running' || paused) && S.online && p.step){
     pb.style.display='flex';
     pb.title = S.paused[S.active] ? '继续' : '暂停';
     pb.innerHTML = S.paused[S.active]
@@ -921,18 +1150,31 @@ function renderHead(){
       : '<svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px"><rect x="5" y="4" width="4.5" height="16" rx="1"/><rect x="14.5" y="4" width="4.5" height="16" rx="1"/></svg>';
   } else pb.style.display='none';
   const parts = [];
-  if(done){ parts.push('全部 '+t.total+' 步完成'); if(t.elapsed) parts.push('用时 '+fmtDur(t.elapsed)); }
+  if(done){ parts.push('全部 '+t.total+' 步完成'); if(t.elapsed) parts.push('实际用时 '+fmtDur(t.elapsed)); }
+  else if(missingWord){
+    parts.push('生成已结束'); parts.push('没有可交付的 Word');
+    if(p.step && p.step<t.total) parts.push('停在第 '+p.step+'/'+t.total+' 步');
+    if(t.elapsed) parts.push('实际用时 '+fmtDur(t.elapsed));
+  }
+  else if(delivery.checkingWord){ parts.push('生成已结束'); parts.push('正在核对交付文件'); }
+  else if(halted){
+    // 停在第几步、已经写了多久,是用户决定「重跑还是接着改」的依据,不能只说一句"已停止"
+    parts.push(p.stage || '已停止');
+    if(p.step) parts.push('停在第 '+p.step+'/'+t.total+' 步');
+    if(t.elapsed) parts.push('实际已跑 '+fmtDur(t.elapsed));
+    parts.push('已生成的产物都保留着');
+  }
   else{
     parts.push(p.stage ? '正在:'+p.stage : '任务启动中');
     parts.push('第 '+(p.step||1)+'/'+t.total+' 步');
-    if(t.elapsed) parts.push('已用 '+fmtDur(t.elapsed));
+    if(t.elapsed) parts.push('实际已用 '+fmtDur(t.elapsed));
     if(t.eta) parts.push((t.rough?'预计还剩约 ':'预计还剩 ')+fmtDur(t.eta));
-    if(t.eta) parts.push('约剩 '+fmtDur(t.eta));
     if(S.paused[S.active]) parts.push('已暂停');
   }
+  if(t.idle) parts.push('中途停顿 '+fmtDur(t.idle)+' 未计入');
   el('hSub').textContent = parts.join(' · ');
-  el('hBar').style.width = (p.pct||0)+'%';
-  renderQuick(done);
+  el('hBar').style.width = (missingWord||delivery.checkingWord ? Math.min(Number(p.pct)||0,99) : (p.pct||0))+'%';
+  renderQuick(stateDone || halted || paused);
 }
 function renderQuick(done){
   const q = el('quick');
@@ -949,13 +1191,27 @@ el('quick').addEventListener('click', e=>{
   else if(k==='cmd:pause') togglePause();
   else if(k==='cmd:rerun') rerunJob();
 });
+/* 「继续做」= 回到原来那个会话往下接(它还记得读过什么、写到哪),
+   跟「重跑本任务」不是一回事 —— 重跑是另起一单从头来。
+   接不上时后端会明说,这里如实转达,不能吞掉当成功。 */
+async function resumeJob(){
+  if(!S.active || !S.online){ toast('本地引擎未连接'); return; }
+  try{
+    const r = await api('/v1/jobs/'+S.active+'/resume',{method:'POST'});
+    if(r && r.ok===false){ toast(r.error || '接不上原来的会话'); return; }
+    S.paused[S.active] = false; toast('接着上次的地方继续'); renderHead();
+  }catch(e){ toast((e && e.message) || '续做失败,请看运行日志'); }
+}
 async function togglePause(){
   if(!S.active || !S.online) return;
-  const to = !S.paused[S.active];
+  if(S.paused[S.active]) return resumeJob();
   try{
-    await api('/v1/jobs/'+S.active+'/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action: to?'pause':'resume'})});
-    S.paused[S.active] = to; renderHead();
-  }catch(e){ toast('操作失败'); }
+    const r = await api('/v1/jobs/'+S.active+'/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'pause'})});
+    /* 暂停不一定成得了(兼容模式没有可中断的会话)。后端说没成就别把界面画成已暂停,
+       否则又是一次「界面说停了、它还在写」。 */
+    if(r && r.ok===false){ toast(r.error || '当前这轮停不下来'); return; }
+    S.paused[S.active] = true; renderHead();
+  }catch(e){ toast((e && e.message) || '操作失败'); }
 }
 async function stopJob(){
   if(!S.active || !await askConfirm('停止这个任务?', '会终止正在跑的生成进程;已生成的产物全部保留,之后可以重跑或定向重做。', true)) return;
@@ -999,8 +1255,27 @@ async function rerunJob(skipAsk){
 function renderWorklog(){
   const host = el('wlHost'); if(!host) return;
   const id = S.active, wl = (id && S.worklog[id]) || [];
-  if(!wl.length){ host.innerHTML=''; return; }
-  const p = S.prog[id]||{}; const live = (p.pct||0) < 100;
+  const p0 = S.prog[id]||{};
+  const j0 = (S.jobs||[]).find(x=>x.job_id===id);
+  const running = j0 ? jobState(j0)==='running' : (p0.pct||0)<100 && p0.step;
+  /* 台词是从 agent 的 stdout 增量读出来的,而三个引擎里只有 codex 真往 stdout 写:
+     claude 的 -p 模式跑完才吐(全程 0 字节)、opencode 的子 agent 输出走它自己的 SQLite
+     会话库 —— 实测下来「它正在做什么」对三分之二的用户是全程空白的,
+     任务跑一个多小时界面上一个字都没有,谁都会以为卡住了。
+     没有台词时降级成「进度 + 已等多久」,至少让人知道它还活着、活在哪一步。 */
+  if(!wl.length){
+    if(!running){ host.innerHTML=''; return; }
+    const t = timing(id);
+    const bits = [p0.stage ? '正在:'+esc(p0.stage) : '正在启动'];
+    if(p0.step) bits.push('第 '+p0.step+'/'+(p0.total||12)+' 步');
+    if(t && t.elapsed) bits.push('已用 '+fmtDur(t.elapsed));
+    host.innerHTML = '<details class="wl" open><summary>⚙ 它正在做什么</summary>'
+      + '<pre id="wlBody">' + bits.join(' · ')
+      + '\n\n这个引擎不往控制台输出实时台词(不同引擎行为不同),所以这里只显示阶段进度。'
+      + '\n产物会在右侧「已产出」里逐个出现——那是它真的在干活的证据。</pre></details>';
+    return;
+  }
+  const p = p0; const live = (p.pct||0) < 100;
   const had = el('wlBody');
   const stick = had ? (had.scrollTop + had.clientHeight >= had.scrollHeight - 30) : true;
   host.innerHTML = '<details class="wl"'+(live?' open':'')+'><summary>'+(live?'⚙ 它正在做什么':'⚙ 工作过程回放 · '+wl.length+' 行')+'</summary>'
@@ -1022,7 +1297,10 @@ function renderChat(){
       + (u ? esc(m.text) : mdHtml(m.text)) + acts + '</div><div class="m">'+meta+'</div></div>';
   }).join('');
   const q = S.chips[S.active];
-  if(q) h += '<div class="chips">'+q.options.map((o,i)=>'<span class="chip'+(i?' gy':'')+'" data-opt="'+escA(o)+'">'+esc(o)+'</span>').join('')+'</div>';
+  // 有选项时,末尾永远补一颗「我来输入」——它是界面自己的自救入口,不依赖后端记得拼。
+  // 没有选项的开放题不补:那种情况已经自动切进回答模式了,再来一颗按钮是多余的。
+  if(q){ const os = (q.options||[]).slice(); if(os.length) os.push(ASK_SELF);
+    h += '<div class="chips">'+os.map((o,i)=>'<span class="chip'+(i?' gy':'')+'" data-opt="'+escA(o)+'">'+esc(o)+'</span>').join('')+'</div>'; }
   if(S.typing[S.active]) h += '<div class="typing"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span><span>中标狗 正在回复…</span></div>';
   wrap.innerHTML = h;
   if(nearBottom) box.scrollTop = box.scrollHeight;
@@ -1035,8 +1313,36 @@ el('chat').addEventListener('click', e=>{
   if(ea){ errAction(ea.dataset.eact, ea.dataset.file, ea.dataset.eparam); return; }
   const c = e.target.closest('[data-opt]'); if(c) answer(c.dataset.opt);
 });
+async function downloadDiagnosticBundle(){
+  if(!S.active || !S.online){ toast('本地引擎未连接,暂时不能导出诊断包'); return; }
+  toast('正在整理诊断包…');
+  if(!IS_WEB){
+    try{
+      const saved = await api('/v1/jobs/'+encodeURIComponent(S.active)+'/bundle/save', {method:'POST'});
+      toast('诊断包已保存并定位:'+(saved.name||'诊断包.zip'));
+    }catch(e){ toast('诊断包导出失败:'+(e&&e.message||'请更新应用后重试')); }
+    return;
+  }
+  try{
+    const url = API.replace(/\/$/,'') + '/v1/jobs/' + encodeURIComponent(S.active) + '/bundle';
+    const r = await fetch(url, {cache:'no-store'});
+    if(!r.ok){
+      let why = ''; try{ const b=await r.json(); why=b.error||b.detail||''; }catch(_){}
+      throw new Error(why || ('HTTP '+r.status));
+    }
+    const blob = await r.blob(), cd = r.headers.get('content-disposition') || '';
+    let name = '中标狗_诊断包_' + String(S.active).replace(/[^\w\u4e00-\u9fff.-]+/g,'_') + '.zip';
+    const utf = cd.match(/filename\*=UTF-8''([^;]+)/i), plain = cd.match(/filename="?([^";]+)"?/i);
+    try{ if(utf) name = decodeURIComponent(utf[1]); else if(plain) name = plain[1]; }catch(_){}
+    const a = document.createElement('a'), objectUrl = URL.createObjectURL(blob);
+    a.href = objectUrl; a.download = name; a.style.display = 'none';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(objectUrl), 1500);
+    toast('诊断包已导出');
+  }catch(e){ toast('诊断包导出失败:'+(e&&e.message||'请更新应用后重试')); }
+}
 async function errAction(act, file, param){
   /* 消息里的操作按钮:报错自救 + 对话指挥任务(重启/定向重做),点了才执行 */
+  if(act==='bundle'){ downloadDiagnosticBundle(); return; }
   if(act==='open_engine'){ openSheet('providers'); return; }
   if(act==='open_log'){ openLog(); return; }
   if(act==='rerun'){ rerunJob(true); return; }
@@ -1048,8 +1354,25 @@ async function errAction(act, file, param){
     }catch(e){ toast('定向重做启动失败:任务可能正在运行'); }
     return;
   }
+  if(act==='resume'){ resumeJob(); return; }
+  if(act==='open_redo'){ openRedo(); return; }
+  if(act==='repair'){ openCheck(); repairJob(); return; }
   if(act==='open_artifact'){ openArtifact(file); return; }
   if(act==='open_job_folder'){ openJobFolder(); return; }
+  if(act==='export_docx'){
+    /* 跑完没出 Word 时的自救:引擎拿正文稿跑确定性导出脚本,不重跑、不花额度 */
+    if(!S.active || !S.online){ toast('本地引擎未连接'); return; }
+    toast('正在导出 Word…');
+    try{
+      const r = await api('/v1/jobs/'+S.active+'/export_docx',{method:'POST'});
+      if(r.ok && r.made && r.made.length){
+        toast('已补出:'+r.made.join('、'));
+        await refreshArts(S.active); renderHead(); renderRail(); openArtifact(r.made[0]);
+      }
+      else toast(r.error || '没有可导出的正文稿');
+    }catch(e){ toast('导出失败:'+(e && e.message ? e.message : '请查看运行日志')); }
+    return;
+  }
   if(act==='mock_rerun'){
     if(!S.active || !S.online) return;
     try{
@@ -1057,7 +1380,13 @@ async function errAction(act, file, param){
       toast('已切到内置演示,开始重跑');
       rerunJob(true);
     }catch(e){ toast('切换失败,请到「设置 · 模型接入」手动选择'); }
+    return;
   }
+  /* 兜底:引擎发来一个前端不认识的动作。以前这里直接走到函数末尾静默 return——
+     「定向重做不达标章节」(open_redo)就这么死了很久:按钮画得好好的,点了毫无反应。
+     宁可当面说"这版应用不认识这个动作",也不让用户对着一颗死按钮猜。 */
+  toast('这版应用还不认识「'+act+'」这个操作,可能是引擎比应用新。请更新应用后重试。');
+  console.warn('[errAction] 未处理的动作:', act, {file, param});
 }
 
 /* ================= 右栏卡片 ================= */
@@ -1087,20 +1416,29 @@ function renderRail(){
   if(!S.active) return;
   const id = S.active, p = S.prog[id]||{}, t = timing(id);
   const names = S.names[id]||{}, st = S.steps[id]||{};
-  const total = t.total, cur = p.step||0, done100 = p.pct>=100;
+  const job = (S.jobs||[]).find(x=>x.job_id===id);
+  const state = job ? jobState(job) : (p.pct>=100 ? 'done' : 'running');
+  const delivery = completionGate(state, p.pct, wordPresence(S.arts[id], S.artsLoaded[id], job&&job.has_word));
+  const total = t.total, cur = Math.min(Number(p.step)||0, t.total), done100 = delivery.complete;
+  const missingWord = delivery.missingWord || (['stopped','unknown'].indexOf(state)>=0
+    && wordPresence(S.arts[id], S.artsLoaded[id], job&&job.has_word) === 'missing');
+  const terminalDelivery = done100 || missingWord || delivery.checkingWord;
   let ticks = '';
-  for(let i=1;i<=total;i++) ticks += '<i class="'+(done100||i<cur?'d':i===cur?'a':'')+'"></i>';
+  for(let i=1;i<=total;i++) ticks += '<i class="'+(done100||i<cur?'d':(!terminalDelivery&&i===cur)?'a':'')+'"></i>';
   const v = verdict(id);
-  const curName = done100 ? (v.key==='ok'?'全部完成 · 内容检查通过':v.key==='warn'?'已完成 · 有待确认项':v.key==='bad'?(v.fix?'已完成 · 内容异常需修复':'已完成 · 有必办项'):'全部完成 · 待体检') : (names[cur] || DEFAULT_STAGES[cur-1] || '启动中');
+  const curName = missingWord ? '没出 Word，未完成' : (delivery.checkingWord ? '正在核对 Word 交付物'
+    : (done100 ? (v.key==='ok'?'全部完成 · 内容检查通过':v.key==='warn'?'已完成 · 有待确认项':v.key==='bad'?(v.fix?'已完成 · 内容异常需修复':'已完成 · 有必办项'):'全部完成 · 待体检')
+      : (names[cur] || DEFAULT_STAGES[cur-1] || '启动中')));
+  const railColor = missingWord ? 'var(--red)' : (done100 ? v.color : '');
   el('miniProg').innerHTML = '<div class="ticks">'+ticks+'</div>'
-    + '<div class="curstep" style="'+(done100?'color:'+v.color:'')+'">'+(done100?'✓':'<i class="spin b"></i>')+'<span>'+esc(curName)+'</span>'
+    + '<div class="curstep" style="'+(railColor?'color:'+railColor:'')+'">'+(done100?'✓':(terminalDelivery?'⚠':'<i class="spin b"></i>'))+'<span>'+esc(curName)+'</span>'
     + '<span class="cs-r">'+(cur?cur+'/'+total:'')+'</span></div>';
   el('stepsTgl').textContent = S.stepsOpen ? '收起' : '展开';
   if(S.stepsOpen){
     let rows = '';
     for(let i=1;i<=total;i++){
       const nm = names[i] || DEFAULT_STAGES[i-1] || ('第 '+i+' 步');
-      const isDone = done100 || i < cur, isAct = !done100 && i === cur;
+      const isDone = done100 || i < cur, isAct = !terminalDelivery && i === cur;
       const dur = (st[i] && st[i+1]) ? fmtDur(st[i+1]-st[i]) : (isAct && st[i] ? fmtDur(Date.now()-st[i]) : '');
       rows += '<div class="step'+(isDone?' d':isAct?' a':'')+'">'
         + '<span class="si">'+(isDone?'✓':isAct?'<i class="spin"></i>':i)+'</span>'
@@ -1108,7 +1446,9 @@ function renderRail(){
     }
     el('phases').innerHTML = rows;
   } else el('phases').innerHTML = '';
-  el('etaTop').textContent = done100 ? (t.elapsed?'共 '+fmtDur(t.elapsed):'') : (t.eta ? (t.rough?'约剩~':'约剩 ')+fmtDur(t.eta) : (t.elapsed?'已用 '+fmtDur(t.elapsed):''));
+  el('etaTop').textContent = terminalDelivery
+    ? (t.elapsed?'实际 '+fmtDur(t.elapsed)+(t.idle?' · 停顿 '+fmtDur(t.idle)+' 未计':''):'')
+    : (t.eta ? (t.rough?'约剩~':'约剩 ')+fmtDur(t.eta) : (t.elapsed?'实际已用 '+fmtDur(t.elapsed):''));
   const seen = new Set(), arts = (S.arts[id]||[]).filter(a=>!seen.has(a.name) && seen.add(a.name));
   const row = a => {
     const md = /\.md$/i.test(a.name);
@@ -1302,7 +1642,10 @@ async function njStart(startNow){
 async function startStaged(){
   if(!S.active) return;
   el('startBtn').style.display='none';
-  try{ await api('/v1/jobs/'+S.active+'/start', {method:'POST'}); S.jobs = await api('/v1/jobs'); renderJobs(); }
+  /* renderJobs 这个函数根本不存在(只有 renderTasks)——调用抛 ReferenceError 被下面 catch 住,
+     于是「已经启动成功」的任务 100% 弹出「启动失败,请重试」。用户会反复点,最后多半去删任务重建,
+     把正在跑的 agent 一起杀掉。真机上这是最容易撞见的一条。 */
+  try{ await api('/v1/jobs/'+S.active+'/start', {method:'POST'}); S.jobs = await api('/v1/jobs'); renderTasks(); renderHead(); }
   catch(e){ toast('启动失败,请重试'); el('startBtn').style.display=''; }
 }
 function createJob(file){ if(file) njAddFiles([file]); }   // 兼容旧入口:一律进向导
@@ -1367,7 +1710,12 @@ el('hero').addEventListener('click', e=>{
 });
 
 /* ================= 对话 ================= */
-function send(){ const v = el('draft').value.trim(); if(v){ el('draft').value=''; say(v); } }
+function send(){
+  const v = el('draft').value.trim(); if(!v) return;
+  el('draft').value='';
+  // AI 正等着你回答时,打的字走回答通道;否则才是「补要求」排进队列
+  if(S.active && S.answering[S.active]) answer(v); else say(v);
+}
 async function say(text){
   if(!S.active){ toast('先拖一份招标文件建任务,我们再聊'); return; }
   const id = S.active;
@@ -1382,10 +1730,24 @@ async function say(text){
   }
   else { addLocal('user',text); setTimeout(()=>addLocal('agent','(演示)收到:「'+text+'」。已纳入当前章节,继续推进。'),500); }
 }
+/* 点了「我来输入」不是把「我来输入」四个字当答案发出去 —— 那样 agent 收到的是一句废话。
+   它要做的是把输入框切到「回答」通道:接下来打的字走 /answers 回到 agent 的上下文,
+   而不是走 /messages 排进队列。开放式提问(agent 没给选项)也走同一条路,
+   否则那种问题在界面上根本无从回答,agent 会一直等到天荒地老。 */
+function answerMode(on){
+  const id = S.active; if(!id) return;
+  S.answering[id] = on ? (S.chips[id]||{}).qid : null;
+  const q = S.chips[id];
+  el('ansBar').style.display = (on && q) ? 'flex' : 'none';
+  if(on && q) el('ansQ').textContent = q.text || '回答 AI 的提问';
+  el('draft').placeholder = on ? '把答案打在这里,发出去就回到 AI 那边' : '问问进度、提要求,或把文件拖进来';
+  if(on) el('draft').focus();
+}
 async function answer(choice){
-  const q = S.chips[S.active]; S.chips[S.active]=null;
+  if(choice === ASK_SELF){ answerMode(true); return; }      // 切通道,不是交答案
+  const id = S.active, q = S.chips[id];
+  S.chips[id]=null; answerMode(false);
   if(S.online){
-    const id = S.active;
     (S.msgs[id]=S.msgs[id]||[]).push({role:'user', text:choice, _local:1}); renderChat();
     try{ await api('/v1/jobs/'+id+'/answers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question_id:q&&q.qid,choice})}); }
     catch(e){ toast('发送失败'); }
@@ -1425,10 +1787,24 @@ function renderCheck(){
   const h = S.health[S.active];
   if(!h){ el('ckTitle').textContent='还没到出件阶段'; el('ckList').innerHTML=''; el('ckFix').style.display='none'; return; }
   el('ckLv').textContent = h.level==='red' ? '不可交付' : '仅可作初稿'; el('ckTitle').textContent=h.summary;
-  el('ckFix').style.display = (h.gaps||[]).some(g=>/逐字|重复|异常/.test(g.title||'')) ? 'flex' : 'none';
+  const gaps = h.gaps||[];
+  el('ckFix').style.display = gaps.some(g=>(g.actions||[]).some(a=>a.act==='repair')) ? 'flex' : 'none';
   const dot = {red:'var(--red)',yellow:'var(--amber)',green:'var(--green)'};
-  el('ckList').innerHTML = (h.gaps||[]).map(g=>'<div class="lrow"><span class="dot" style="background:'+(dot[g.level]||'var(--amber)')+'"></span><div class="c"><span class="n">'+esc(g.title)+'</span><span class="s">'+esc(g.detail)+'</span></div><span class="gap-act">'+(g.level==='green'?'明细':'处理')+'</span></div>').join('');
+  /* 每条只在**后端给了可执行动作**时才画按钮。以前无脑画一颗「处理」,却没绑任何事件——
+     客户点了没反应,卡在那儿不知道该干嘛(真实报障)。假按钮比没有更糟:它让人以为有路可走。
+     按钮走 errAction 同一条分发路径,和聊天里的操作按钮共用已验证过的实现。 */
+  el('ckList').innerHTML = gaps.map(g=>{
+    const acts = (g.actions||[]).map(a=>'<span class="gap-act" data-eact="'+escA(a.act)+'" data-file="'+escA(a.file||'')+'" data-eparam="'+escA(a.param||'')+'">'+esc(a.label||'处理')+'</span>').join('');
+    return '<div class="lrow"><span class="dot" style="background:'+(dot[g.level]||'var(--amber)')+'"></span>'
+      + '<div class="c"><span class="n">'+esc(g.title)+'</span><span class="s">'+esc(g.detail)+'</span></div>'
+      + (acts ? '<span style="display:flex;gap:10px;align-items:flex-start">'+acts+'</span>' : '') + '</div>';
+  }).join('');
 }
+el('ckList').addEventListener('click', e=>{
+  const a = e.target.closest('[data-eact]'); if(!a) return;
+  closeAll();                                   // 抽屉挡着底下的对话与重做弹层,先关掉再执行
+  errAction(a.dataset.eact, a.dataset.file, a.dataset.eparam);
+});
 async function repairJob(){
   if(!S.active) return;
   el('fixMsg').textContent = '清洗中…';
@@ -1532,16 +1908,16 @@ function onKindChange(){
   // 换了引擎,上一个引擎的 CLI 路径与就绪状态不再适用:按新引擎重取(引擎侧也有同族校验兜底)
   const a = S.lastAgent;
   if(a){
-    const key0 = (k==='sowork') ? 'sowork' : (k==='s2' ? 'codex' : k);
+    const key0 = (k==='sowork') ? 'sowork' : (k==='s2' ? 'opencode' : k);
     const found = (a.paths||{})[key0] || '';
     el('agCli').value = '';
     el('agCliHint').textContent = found ? '✓ 已自动检测到:'+found : '';
     el('agCliHint').style.color = found ? 'var(--green)' : 'var(--dim)';
     if(k==='s2'){
-      const bundled = a.codex_bundled;
-      const okk = (a.available||{}).codex;
+      const bundled = a.opencode_bundled;
+      const okk = (a.available||{}).opencode;
       el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
-        : (okk ? '✓ 执行外壳已就绪:'+((a.paths||{}).codex||'')
+        : (okk ? '✓ 执行外壳已就绪:'+((a.paths||{}).opencode||'')
                : '✗ 缺执行外壳(点右侧一键安装,装完不用登录)');
       el('agS2ShellSt').style.color = (bundled||okk) ? 'var(--green)' : 'var(--warn, #c77b00)';
       el('agS2Install').style.display = (bundled||okk) ? 'none' : 'inline-block';
@@ -1575,13 +1951,15 @@ async function loadS2Models(force){
   return null;
 }
 async function provisionShell(){
-  const which = 'codex';
+  // 「自动(默认)」引擎已转正为 OpenCode,这里要装的就是它。
+  // 之前写死 'codex' 会出现:客户点完「一键安装执行外壳」,装回来一个用不上的壳,自检照样报缺外壳。
+  const which = 'opencode';
   const st = el('agS2ShellSt'), btn = el('agS2Install');
   btn.disabled = true; btn.textContent = '安装中…';
   try{
     let r = await api('/v1/agent/provision', {method:'POST', headers:{'Content-Type':'application/json'},
                        body: JSON.stringify({which})});
-    // 轮询进度:下载约 130MB,慢网络可能要几分钟,把百分比一直报给用户
+    // 轮询进度:OpenCode 压缩包最大约 60MB,解压约 170MB;慢网络可能要几分钟,把百分比一直报给用户
     while(r.state === 'running'){
       st.textContent = '⇣ ' + (r.note||'下载中…') + ' ' + (r.pct||0) + '%';
       st.style.color = 'var(--sub)';
@@ -1616,7 +1994,8 @@ async function loadAgent(){
     if(!el('agKind').value) el('agKind').value = (a.s2_key_set||a.s2_borrowed) ? 's2' : 'mock';
     el('agMode').value = a.mode || 'agents';
     const kind0 = (a.kind === 'env' ? 'mock' : a.kind) || 'mock';
-    const found = (a.paths || {})[kind0 === 'sowork' ? 'sowork' : kind0] || '';
+    const cliKind = kind0 === 'sowork' ? 'sowork' : (kind0 === 's2' ? 'opencode' : kind0);
+    const found = (a.paths || {})[cliKind] || '';
     // 自动找到就直接填进来:用户看得见,保存后即固定;路径失效时引擎仍会回落自动查找
     el('agCli').value = a.cli_path || found || '';
     el('agCliHint').textContent = a.cli_path
@@ -1638,14 +2017,14 @@ async function loadAgent(){
     el('agS2Model').placeholder = '生成用哪个模型(当前 '+(a.s2_model_effective||d.model||'')+',点这里换)';
     if((a.s2_key_set||a.s2_borrowed) && !S.s2Models) loadS2Models(0);
     // 执行外壳状态:内置(安装包自带)> 已装(路径)> 缺 → 给一键安装按钮
-    const bundled = a.codex_bundled;
-    const cxOk = a.available && a.available.codex;
+    const bundled = a.opencode_bundled;
+    const cxOk = a.available && a.available.opencode;
     el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
-      : (cxOk ? '✓ 执行外壳已就绪:'+((a.paths||{}).codex||'')
+      : (cxOk ? '✓ 执行外壳已就绪:'+((a.paths||{}).opencode||'')
               : '✗ 缺执行外壳(负责跑命令写文件,点右侧一键安装,装完不用登录)');
     el('agS2ShellSt').style.color = (bundled || cxOk) ? 'var(--green)' : 'var(--warn, #c77b00)';
     el('agS2Install').style.display = (bundled || cxOk) ? 'none' : 'inline-block';
-    el('agS2Install').textContent = '一键安装执行外壳(约 130MB)';
+    el('agS2Install').textContent = '一键安装执行外壳(下载约 60MB)';
     onKindChange();
     // 折叠摘要:平时只看这一行,展开才见全部选项
     const engName = ({mock:'内置演示流程',s2:'自动',sowork:'SoWork(商汤)',claude:'Claude Code',codex:'Codex CLI',custom:'自定义命令'})[a.kind==='env'?'custom':a.kind] || a.kind;
@@ -1656,9 +2035,10 @@ async function loadAgent(){
     // 快速接入卡片上直说「现在真正会跑的是谁」:不是「自动」就红字点破,
     // 否则用户在这里选了模式、实际却由别的引擎在跑(SoWork 未登录 → 任务开跑才报错)
     if(a.kind === 's2'){
-      el('qkNow').textContent = '当前生效:自动 · 生成模型 ' + (a.s2_model_effective || '(默认)');
-      el('qkNow').style.color = 'var(--sub)';
       const eff = a.s2_model_effective || '';
+      const actualMode = modeFromModel(eff); if(actualMode) setQkMode(actualMode);
+      el('qkNow').textContent = '当前生效:自动 · 生成模型 ' + (eff || '(默认)');
+      el('qkNow').style.color = 'var(--sub)';
       const want = QK_MODES[QK_MODE];
       if(eff && want && !(eff === want.prefer || want.pick.test(eff)))
         el('qkNow').textContent += ' —— 与所选「' + want.name + '」不一致,点一下模式按钮即可切过去';
@@ -1684,37 +2064,94 @@ const QK_MODES = {
             hint:'极速:用 deepseek-v4-flash,出稿快、更省额度,适合试跑与演示;正式投标建议用标准。'}
 };
 let QK_MODE = 'quality';
+let QK_SWITCH_SEQ = 0, QK_SWITCH_QUEUE = Promise.resolve();
+function setQkMode(mode){
+  if(!QK_MODES[mode]) return;
+  QK_MODE = mode;
+  [...el('qkMode').children].forEach(c => c.classList.toggle('on', c.dataset.mode === mode));
+  el('qkModeHint').textContent = QK_MODES[mode].hint;
+}
+function setQkBusy(on){
+  el('qkMode').style.pointerEvents = on ? 'none' : '';
+  el('qkMode').style.opacity = on ? '.62' : '';
+}
+function agentStatusPayload(a){
+  return {kind:a.kind==='env'?'custom':(a.kind||'s2'), mode:a.mode||'agents', cmd:a.cmd||'',
+          skill_dir:a.skill_dir||'',
+          cli_path:a.cli_path||'', env:a.env||'', login_shell:a.login_shell!==false,
+          sowork_agent:a.sowork_agent||'main', thinking:a.thinking||'off', timeout:a.timeout||1800,
+          s2_base_url:a.s2_base_url||'', s2_model:a.s2_model||'', s2_key:'',
+          s2_wire:a.s2_wire||'auto', s2_verify_ssl:a.s2_verify_ssl!==false};
+}
+function queueQkMode(mode){
+  const msg = el('qkMsg'); msg.style.display = 'block';
+  if(modeSwitchBlocked(S.jobs)){
+    msg.textContent = '当前有任务正在运行或暂停，为避免同一任务中途换模型，模式未切换。请先完成、停止或重跑后再切。';
+    return;
+  }
+  const seq = ++QK_SWITCH_SEQ;
+  QK_SWITCH_QUEUE = QK_SWITCH_QUEUE.then(async()=>{
+    if(seq !== QK_SWITCH_SEQ) return;             // 尚未开始的旧点击被新点击合并，只执行最后一次
+    const previousMode = modeFromModel(S.lastAgent&&S.lastAgent.s2_model_effective) || QK_MODE;
+    setQkMode(mode); setQkBusy(true);
+    const ok = await qkApplyMode(mode);
+    if(!ok){
+      setQkMode(previousMode);                     // 请求失败时先恢复一个可信的本地状态
+      await loadAgent();                           // 再以服务端回读为最终准绳，不能被旧缓存反向覆盖
+    }
+    setQkBusy(false);
+  }).catch(e=>{
+    setQkBusy(false); msg.textContent = '✗ 模式未切换:'+(e&&e.message||'未知错误');
+  });
+}
 el('qkMode').addEventListener('click', e => {
   const t = e.target.closest('[data-mode]'); if(!t) return;
-  QK_MODE = t.dataset.mode;
-  [...el('qkMode').children].forEach(c => c.classList.toggle('on', c === t));
-  el('qkModeHint').textContent = QK_MODES[QK_MODE].hint;
-  qkApplyMode();          // 点了就算数:已接入过的直接换模型并落盘,不用再点一次按钮
+  queueQkMode(t.dataset.mode);
 });
-async function qkApplyMode(){
+async function qkApplyMode(mode){
   /* 「标准/极速」是设置,不是待提交的表单选项。已经接过 Key 的,点一下立刻生效并写进配置;
      还没接 Key 的,只提示——绝不能让用户以为选了模式就已经切过去了(旧版就是这里造成
      「选了极速、实际还在跑上一个引擎」)。 */
   const m = el('qkMsg'); m.style.display = 'block';
-  let A = null;
-  try{ A = await api('/v1/agent'); }catch(e){ m.textContent = '✗ 没连上本地引擎,模式没能保存'; return; }
-  if(!(A.s2_key_set || A.s2_borrowed)){
-    m.textContent = '已选「' + QK_MODES[QK_MODE].name + '」。粘上 Key 后点「一键接入并测试」才会生效。';
-    return;
+  let A = null, liveJobs = null;
+  try{
+    [A, liveJobs] = await Promise.all([api('/v1/agent'), api('/v1/jobs')]);
+    S.jobs = liveJobs; renderTasks();
+  }catch(e){ m.textContent = '✗ 模式未切换:无法确认引擎与任务状态'; return false; }
+  if(modeSwitchBlocked(S.jobs)){
+    m.textContent = '当前已有任务开跑，为避免中途换模型，模式未切换。'; return false;
   }
-  m.textContent = '切换到「' + QK_MODES[QK_MODE].name + '」…';
+  if(!(A.s2_key_set || A.s2_borrowed)){
+    m.textContent = '已选「' + QK_MODES[mode].name + '」。粘上 Key 后点「一键接入并测试」才会生效。';
+    return true;
+  }
+  m.textContent = '切换到「' + QK_MODES[mode].name + '」并做真实连通测试…';
+  const oldPayload = agentStatusPayload(A); let changed = false;
   try{
     let models = S.s2Models || [];
     if(!models.length){ try{ models = (await api('/v1/relay/models')).models || []; }catch(e){} }
-    const gen = qkPick(models, QK_MODE);
+    const gen = qkPick(models, mode);
     await api('/v1/agent', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(
-      Object.assign(agentPayload(), {kind:'s2', s2_model: gen, cli_path:''}))});
+      Object.assign({}, oldPayload, {kind:'s2', s2_model: gen, cli_path:''}))});
+    changed = true;
     const v = await qkVerify(gen);
-    m.textContent = v.ok ? ('✓ 已切到「' + QK_MODES[QK_MODE].name + '」· 生成模型:' + gen + ' —— 新建任务即生效')
-                         : ('✗ 没切成功:' + v.why);
-    if(v.ok) S.s2Models = models.length ? models : S.s2Models;
-    loadAgent();
-  }catch(e){ m.textContent = '✗ 切换失败:' + (e && e.message || '没连上本地引擎'); }
+    if(!v.ok) throw new Error(v.why);
+    const probe = await api('/v1/agent/test', {method:'POST'});
+    if(!probe.ok) throw new Error(probe.error || '新模型连通测试未通过');
+    m.textContent = '✓ 已切到「' + QK_MODES[mode].name + '」· 生成模型:' + gen + ' —— 新建任务即生效';
+    S.s2Models = models.length ? models : S.s2Models;
+    await loadAgent(); return true;
+  }catch(e){
+    let restored = false;
+    if(changed){
+      try{
+        await api('/v1/agent', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(oldPayload)});
+        restored = true;
+      }catch(_){}
+    }
+    m.textContent = '✗ 模式未切换:' + (e && e.message || '没连上本地引擎') + (restored?' · 已恢复原模式':'');
+    return false;
+  }
 }
 async function qkVerify(gen){
   /* 回读校验:保存接口返回 ok 不等于真的生效(曾经出现过前端显示 ✓、配置里还是上一个引擎)。
@@ -1754,7 +2191,16 @@ async function quickS2(){
   // 一串 Key 三件事:生成引擎 + 对话 + 识图,模型按所选模式自动定,识图模型自动挑
   const key = el('qkKey').value.trim();
   const m = el('qkMsg'); m.style.display='block';
+  if(modeSwitchBlocked(S.jobs)){
+    m.textContent = '当前有任务正在运行或暂停，为避免中途换模型，接入设置未更改。'; return;
+  }
   const A = await api('/v1/agent').catch(()=>null);
+  const liveJobs = await api('/v1/jobs').catch(()=>null);
+  if(!liveJobs){ m.textContent = '✗ 无法确认任务状态，接入设置未更改。'; return; }
+  S.jobs = liveJobs; renderTasks();
+  if(modeSwitchBlocked(liveJobs)){
+    m.textContent = '当前有任务正在运行或暂停，为避免中途换模型，接入设置未更改。'; return;
+  }
   if(!key && !(A && (A.s2_key_set || A.s2_borrowed))){ m.textContent='✗ 先粘贴 Key(sk- 开头那串)'; return; }
   const btn = el('qkBtn'); btn.disabled = true;
   const lines = []; const flush = ()=>{ m.textContent = lines.join('\n'); };

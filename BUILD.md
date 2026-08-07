@@ -35,7 +35,9 @@ python3 server/engine_v1.py        # 127.0.0.1:8080,同时也直接托管了前�
 cd app
 npm ci
 npx tauri icon app-icon.png   # 由 app-icon.png 生成全套图标(icns/ico/png)
-# macOS：ad-hoc 签名保证 .app 与两个 sidecar 的本地签名完整（不等于商业签名/公证）
+# macOS：先按 CI 的 PyInstaller 步骤生成 bid-engine sidecar，再打包。
+# 当前公开包是 ad-hoc 签名；tauri.conf 因 PyInstaller onefile 关闭 hardenedRuntime，
+# CI 会从最终 DMG 内实际启动引擎验证（不等于商业签名/公证）。
 APPLE_SIGNING_IDENTITY=- npm run build -- --bundles dmg
 
 # Windows：在 Windows 机器上执行
@@ -43,7 +45,7 @@ npm run build -- --bundles nsis
 ```
 
 产物位置(app/src-tauri/target/release/bundle/):
-- macOS:dmg/中标狗_0.18.0_aarch64.dmg(在 Mac 上构建)
+- macOS:dmg/中标狗_0.18.2_aarch64.dmg(在 Mac 上构建)
 - Windows:nsis/*-setup.exe(在 Windows 上构建)
 
 注意:Tauri 不支持跨平台交叉编译——Mac 包在 Mac 上打,Windows 包在 Windows 上打(或用 GitHub Actions 双平台流水线,tauri-action 官方模板即可)。
@@ -54,7 +56,7 @@ npm run dev   # 带热重载起桌面窗口
 ```
 
 ## 签名(正式分发前)
-- macOS:当前 CI 使用 `APPLE_SIGNING_IDENTITY=-` 做 ad-hoc 签名，确保应用和 sidecar 的签名结构有效，但仍未获得系统信任。正式分发应换成 Apple Developer 证书 + 公证(`tauri.conf.json` 的 `bundle.macOS.signingIdentity` 或 CI 证书环境变量)
+- macOS:当前 CI 使用 `APPLE_SIGNING_IDENTITY=-` 做 ad-hoc 签名，确保应用和 sidecar 的签名结构有效，但仍未获得系统信任。正式分发换成 Apple Developer 证书 + 公证时，必须重新启用 `bundle.macOS.hardenedRuntime`，并让 PyInstaller 与 Tauri 使用同一个 Apple-issued identity；只重签 onefile 外层会导致内置 Python 动态库无法加载。
 - Windows:代码签名证书(bundle.windows.certificateThumbprint),否则 SmartScreen 会拦
 
 ## 把 mock 换成真实 agent(只动协作层,UI 零改动)

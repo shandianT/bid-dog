@@ -7,14 +7,15 @@
 真实 agent:环境变量 AGENT_CMD 命令模板(占位符 {tender}/{out}/{materials}),不配则跑内置 mock 流程。
 打包:pyinstaller -F engine_v1.py → 作为 Tauri sidecar 随安装包分发(见 BUILD.md)。
 """
-import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, base64, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error, urllib.parse
+import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, base64, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error, urllib.parse, io, platform
+import xml.etree.ElementTree as ET
 from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-ENGINE_VERSION = '0.18.1'
+ENGINE_VERSION = '0.18.2'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
@@ -82,7 +83,23 @@ def ensure_preset():
                 return
 
 app = FastAPI(title='bid-dog-engine')
-app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
+_DESKTOP_ORIGINS = {'tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'}
+_DESKTOP_ORIGINS.update(x.strip() for x in os.environ.get('BID_ALLOWED_ORIGINS', '').split(',') if x.strip())
+_LOOPBACK_ORIGIN = re.compile(r'^https?://(?:127\.0\.0\.1|localhost)(?::\d+)?$', re.I)
+
+def origin_allowed(origin):
+    """只让本机页面/Tauri 壳跨域访问桌面引擎，阻断恶意网页读取 Key 或发起本机命令。"""
+    value = str(origin or '').strip()
+    return not value or value in _DESKTOP_ORIGINS or bool(_LOOPBACK_ORIGIN.fullmatch(value))
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(_DESKTOP_ORIGINS),
+    allow_origin_regex=r'^https?://(?:127\.0\.0\.1|localhost)(?::\d+)?$',
+    allow_methods=['*'],
+    allow_headers=['*'],
+    allow_credentials=True,
+)
 
 # ---------- 云端网页模式:口令门 + 访客工作区隔离(桌面版不设 BID_PASSWORD 则完全不生效) ----------
 def _tok(pw): return hashlib.sha256(('bid-assistant|' + pw).encode()).hexdigest()[:32]
@@ -116,6 +133,9 @@ async def login(request: Request):
 async def gate(request: Request, call_next):
     uid = request.cookies.get('bid_uid') or (secrets.token_hex(8) if MULTIUSER else '')
     _ws.set(uid)
+    origin = request.headers.get('origin', '')
+    if origin and not origin_allowed(origin):
+        return JSONResponse({'error': 'forbidden origin'}, status_code=403)
     # /v1/relay/* 是给本机 Codex 用的,它没有浏览器 Cookie,自己带 relay_token 鉴权,不走口令门
     if (PASSWORD and request.url.path not in ('/login', '/v1/health')
             and not request.url.path.startswith('/v1/relay/')
@@ -139,9 +159,28 @@ def write_json(p, obj):
     with open(tmp, 'w', encoding='utf-8') as f: json.dump(obj, f, ensure_ascii=False, indent=1)
     os.replace(tmp, p)
 
+_SECRET_RE = re.compile(r'(?i)(?:' + 's' + 'k' + r')-[a-z0-9_-]{16,}')
+
+def redact(value):
+    """事件、诊断包和用户可见错误的统一脱敏入口。配置原件和 run.log 不在这里改写。"""
+    if isinstance(value, dict): return {k: redact(v) for k, v in value.items()}
+    if isinstance(value, list): return [redact(v) for v in value]
+    if isinstance(value, tuple): return tuple(redact(v) for v in value)
+    if isinstance(value, str): return _SECRET_RE.sub('[API Key 已隐藏]', value)
+    return value
+
 def emit(job, ev):
-    """事件即真相:UI 全部状态只依赖 events.jsonl 这一条流。任务目录已被删除(用户删任务)则静默丢弃"""
+    """事件即真相:UI 只消费引擎验证后的 events.jsonl。"""
     if not os.path.isdir(job): return
+    ev = redact(dict(ev))
+    if ev.get('type') == 'error' and not ev.get('actions'):
+        ev['actions'] = [{'act': 'open_log', 'label': '查看运行日志'},
+                         {'act': 'rerun', 'label': '重跑本任务'}]
+    # agent 声明走 ingest_agent_event；这里额外拦住任何遗漏路径伪造最终 12/12。
+    if (ev.get('type') == 'progress' and not ev.get('verified')
+            and int(ev.get('step') or 0) >= 12 and int(ev.get('pct') or 0) >= 100):
+        try: ev = sanitize_event(job, ev)
+        except Exception: pass
     ev['ts'] = now()
     try:
         with open(os.path.join(job, 'events.jsonl'), 'a', encoding='utf-8') as f:
@@ -153,6 +192,25 @@ def emit(job, ev):
 
 STAGES = ['体检素材', '图片入库', '读懂组成', '提取格式', '评分废标', '拆解分工',
           '分章撰写', '逐条应答', '汇总成册', '配图复核', '自查体检', '出Word质检']
+
+# agent 只允许写这个“声明流”；引擎核验后再转写 canonical events.jsonl。
+AGENT_EVENTS_FILE = 'agent_events.jsonl'
+
+# 这是产品阶段与最小磁盘证据的公开契约。实际判定在 evidence_for_step()，保持一一对应。
+STAGE_EVIDENCE = [
+    {'step': 1, 'stage': STAGES[0], 'evidence': '招标文件或解析收据'},
+    {'step': 2, 'stage': STAGES[1], 'evidence': '图片索引或无图片收据'},
+    {'step': 3, 'stage': STAGES[2], 'evidence': '投标文件组成分析'},
+    {'step': 4, 'stage': STAGES[3], 'evidence': '可解析格式规范与摘要'},
+    {'step': 5, 'stage': STAGES[4], 'evidence': '评分矩阵与废标风险清单'},
+    {'step': 6, 'stage': STAGES[5], 'evidence': '响应矩阵'},
+    {'step': 7, 'stage': STAGES[6], 'evidence': '大纲对应的章节稿'},
+    {'step': 8, 'stage': STAGES[7], 'evidence': '商务/技术偏离表'},
+    {'step': 9, 'stage': STAGES[8], 'evidence': '正文 Markdown'},
+    {'step': 10, 'stage': STAGES[9], 'evidence': '配图复核或无图收据'},
+    {'step': 11, 'stage': STAGES[10], 'evidence': '投标文件自检报告'},
+    {'step': 12, 'stage': STAGES[11], 'evidence': '非空正文 Word'},
+]
 
 def mock_agent(job):
     """内置模拟 agent:走完 12 阶段,发问一次,产出样例交付物 —— 演示与前端联调用"""
@@ -189,14 +247,7 @@ def _mock_agent(job):
                     ('投标文件自检报告.md', '# 自检报告\n\n结论:仅可作初稿\n\n## 需人工确认\n- 投标人名称\n- 报价\n- 安全生产许可证新件\n')]:
         open(os.path.join(job, fn), 'w', encoding='utf-8').write(txt)
         emit(job, {'type': 'artifact', 'name': fn})
-    emit(job, {'type': 'progress', 'stage': '完成', 'pct': 100, 'step': 12, 'total': 12})
-    summary, actions = artifact_summary(job)
-    emit(job, {'type': 'message', 'role': 'agent', 'text': summary + '\n\n演示流程只生成样例稿；真实 Word 需要绑定生成引擎。', 'actions': actions})
-    emit(job, {'type': 'health', 'level': 'yellow', 'summary': '3 项人工确认后即可投',
-               'gaps': [{'level': 'red', 'title': '投标人名称与报价未填', 'detail': '封面与投标函两处占位符'},
-                        {'level': 'yellow', 'title': '安全生产许可证 2026-06 到期', 'detail': '评分表要求有效期内'},
-                        {'level': 'yellow', 'title': '项目经理业绩缺一份中标通知书', 'detail': '要求近三年 2 个同类业绩'},
-                        {'level': 'green', 'title': '格式质检全部通过', 'detail': '字体/行距/页边距/页码合规'}]})
+    settle(job)
 
 DELIVER_EXT = ('.md', '.docx', '.xlsx', '.pdf')
 
@@ -257,7 +308,8 @@ def artifact_info(fn):
 def artifact_summary(job, names=None):
     names = sorted(names or list_deliverables(job),
                    key=lambda n: (artifact_info(n)['group'], artifact_info(n)['rank'], n))
-    primary = next((n for n in names if artifact_info(n)['group'] == 0 and n.lower().endswith('.docx')), None)
+    body_words = _body_docxs(job, names) if '_body_docxs' in globals() else []
+    primary = body_words[0] if body_words else None
     checks = [n for n in names if artifact_info(n)['group'] == 1]
     if not primary:
         # 客户报障:「跑完了,没有生成标书」。之前这里照样播报「任务完成,已整理好 N 个文件」——
@@ -603,14 +655,156 @@ def _body_mds(job, known=None):
         if os.path.getsize(os.path.join(job, big)) > 1200: hit = [big]
     return hit
 
-def ensure_docx(job, known):
+def _body_docxs(job, known=None):
+    """只认正文 Word；招标原件和分析/报告类 docx 都不能把任务推成完成。"""
+    names = list(known) if known is not None else list_deliverables(job)
+    out = []
+    for fn in sorted(names):
+        if not fn.lower().endswith('.docx') or any(k in fn for k in _NOT_BODY): continue
+        if not any(k in fn for k in ('投标', '技术标', '商务标', '标书', '方案', '响应文件')): continue
+        if _valid_docx(os.path.join(job, fn)): out.append(fn)
+    return out
+
+def _valid_docx(path, min_text=100):
+    """校验正文 Word 的 ZIP 结构和可见文字，拒绝空壳、截断包和仅改扩展名的伪文件。"""
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) < 1024 or not zipfile.is_zipfile(path):
+            return False
+        with zipfile.ZipFile(path) as archive:
+            names = set(archive.namelist())
+            if '[Content_Types].xml' not in names or 'word/document.xml' not in names:
+                return False
+            info = archive.getinfo('word/document.xml')
+            if info.file_size <= 0 or info.file_size > 20 * 1024 * 1024:
+                return False
+            root = ET.fromstring(archive.read(info))
+        tag = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'
+        visible = ''.join(node.text or '' for node in root.iter(tag))
+        return len(re.sub(r'\s+', '', visible)) >= int(min_text)
+    except (OSError, KeyError, zipfile.BadZipFile, ET.ParseError, RuntimeError, ValueError):
+        return False
+
+def _file_digest(path):
+    try:
+        h = hashlib.sha256()
+        with open(path, 'rb') as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b''): h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ''
+
+def _named_files(job, needles, suffix=None, min_size=1):
+    try: names = os.listdir(job)
+    except OSError: return []
+    hits = []
+    for fn in names:
+        if suffix and not fn.lower().endswith(suffix): continue
+        if not any(n in fn for n in needles): continue
+        try:
+            if os.path.isfile(os.path.join(job, fn)) and os.path.getsize(os.path.join(job, fn)) >= min_size:
+                hits.append(fn)
+        except OSError:
+            pass
+    return hits
+
+def evidence_for_step(job, step):
+    """返回某一步的磁盘证据是否成立；不采信模型文本或百分比。"""
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    names = list_deliverables(job)
+    if step == 1:
+        tender = meta.get('tender')
+        return bool((tender and os.path.isfile(os.path.join(job, tender))) or
+                    _named_files(job, ('解析版',), '.md', 20))
+    if step == 2:
+        return bool(_named_files(job, ('图片索引', '无图片', '图片检查'), min_size=10))
+    if step == 3:
+        return bool(_named_files(job, ('投标文件组成', '组成分析'), '.md', 500))
+    if step == 4:
+        spec = _job_find(job, 'word_format_spec.json')
+        valid = bool(spec and isinstance(read_json(spec, None), dict))
+        return valid and bool(_named_files(job, ('格式', '版式'), '.md', 20))
+    if step == 5:
+        return bool(_named_files(job, ('评分点响应矩阵', '评分矩阵'), min_size=20) and
+                    _named_files(job, ('废标风险',), min_size=20))
+    if step == 6:
+        return bool(_named_files(job, ('响应矩阵', '响应对照'), '.md', 20))
+    if step == 7:
+        outline = _named_files(job, ('大纲', '目录'), '.md', 20)
+        chapters = _named_files(job, ('第', '章节'), '.md', 100)
+        return bool(outline and chapters)
+    if step == 8:
+        return bool(_named_files(job, ('技术应答偏离表', '技术偏离表'), min_size=20) and
+                    _named_files(job, ('商务偏离表',), min_size=20))
+    if step == 9: return bool(_body_mds(job, names))
+    if step == 10:
+        return bool(_named_files(job, ('成品质检报告', '配图复核', '无图'), min_size=20))
+    if step == 11: return bool(_named_files(job, ('投标文件自检报告', '自检报告'), '.md', 20))
+    if step == 12: return bool(_body_docxs(job, names))
+    return False
+
+def verified_step(job, claimed=12):
+    """阶段必须连续成立；缺第 N 步时，后面的孤立文件不能把进度跳过去。"""
+    try: claimed = max(0, min(12, int(claimed or 0)))
+    except Exception: claimed = 0
+    done = 0
+    for step in range(1, claimed + 1):
+        if not evidence_for_step(job, step): break
+        done = step
+    return done
+
+def sanitize_event(job, ev):
+    """净化历史/第三方写入的进度；最终 12/12 只允许 settle() 的 verified 事件。"""
+    safe = redact(dict(ev or {}))
+    if safe.get('type') != 'progress' or safe.get('verified'): return safe
+    try: claimed = max(0, min(12, int(safe.get('step') or 0)))
+    except Exception: claimed = 0
+    step = verified_step(job, claimed)
+    try: pct = int(safe.get('pct') or 0)
+    except Exception: pct = 0
+    max_pct = min(99, int(step * 100 / 12))
+    safe.update({'step': step, 'total': 12, 'pct': max(0, min(pct, max_pct))})
+    if claimed > step:
+        safe['stage'] = STAGES[step - 1] if step else '准备中'
+    return safe
+
+def ingest_agent_event(job, ev):
+    """把 agent_events.jsonl 的声明验证后写入 canonical 事件流。"""
+    raw = redact(dict(ev or {}))
+    # verified 是引擎内部结论，不允许声明流自行携带；否则一句 JSON 就能绕过全部磁盘证据。
+    raw.pop('verified', None)
+    safe = sanitize_event(job, raw)
+    if safe.get('type') == 'progress': safe['verified'] = True
+    emit(job, safe)
+    try: claimed, accepted = int(raw.get('step') or 0), int(safe.get('step') or 0)
+    except Exception: claimed, accepted = 0, 0
+    if raw.get('type') == 'progress' and claimed > accepted:
+        emit(job, {'type': 'worklog', 'lines': [
+            '⚠ 它声称完成第 %d 步，但对应产物还没出现；进度已按磁盘证据停在第 %d 步。' %
+            (claimed, accepted)
+        ]})
+    return safe
+
+def drain_agent_events(job, offset=0):
+    """从声明流按行续读；尾部半行解析失败时不前移，下一轮写完整后再处理。"""
+    path = os.path.join(job, AGENT_EVENTS_FILE)
+    try: lines = open(path, encoding='utf-8').read().splitlines()
+    except Exception: return offset, []
+    accepted = []
+    while offset < len(lines):
+        try: raw = json.loads(lines[offset])
+        except Exception: break
+        offset += 1
+        accepted.append(ingest_agent_event(job, raw))
+    return offset, accepted
+
+def ensure_docx(job, known, force=False):
     """兜底导出 Word:有正文 md、却一个 docx 都没有时,引擎自己把 Word 出出来。
 
     客户报障的真实场景:任务跑到 100%「完成」,右侧一堆 .md,就是没有标书。
     根因是 agent 写完正文就收工,没跑 build_tender_docx.py;而引擎这边
     只有「质检修复动作真实发生」时才会重建 docx,green 直接放过去了。
     导出是确定性脚本、零 token,没有任何理由不兜。返回新出的文件名列表。"""
-    if any(fn.lower().endswith('.docx') for fn in known): return []
+    if not force and _body_docxs(job, known): return []
     body = _body_mds(job, known)
     if not body: return []
     bt = _skill_module('build_tender_docx')
@@ -670,6 +864,22 @@ def quality_audit(job, known):
     """完成后的确定性质检 + 自动修复 + 重出 Word(引擎兜底,不管模型有没有自觉跑过):
     图片按索引锚点搬正/补插/剔除、重复段折叠、按章字数、应答覆盖率 → 《成品质检报告》。
     修复动作真实发生时,用修复稿重建 docx(build_tender_docx,零 token)——给客户看的必须是修好的 Word。"""
+    # 最高优先级红灯：没有正文 Word 就不是“待优化”，而是没有交付。分析件绝不进入内容修复。
+    if not _body_docxs(job, known):
+        body = _body_mds(job, known)
+        if body:
+            detail = '正文 Markdown 已存在，但 Word 导出没有成功。'
+            actions = [{'act': 'export_docx', 'label': '立即补出 Word'},
+                       {'act': 'open_log', 'label': '查看运行日志'},
+                       {'act': 'rerun', 'label': '重跑本任务'}]
+        else:
+            detail = '当前只有解析/分析文件，没有可提交的正文 Word。'
+            actions = [{'act': 'open_log', 'label': '查看运行日志'},
+                       {'act': 'rerun', 'label': '重跑本任务'}]
+        emit(job, {'type': 'health', 'level': 'red', 'summary': '没有可交付的 Word，任务未完成',
+                   'gaps': [{'level': 'red', 'title': '没出 Word，未完成', 'detail': detail,
+                             'actions': actions}]})
+        return
     qg = _skill_module('quality_gate')
     if not qg: return content_gate(job, known)          # 老技能目录没有质检脚本:退回旧内容门禁
     mat = merged_materials(job)
@@ -760,8 +970,8 @@ def content_gate(job, names):
     except Exception:
         return
     gaps, bad = [], []
-    for fn in sorted(names):
-        if not fn.endswith(('.md', '.docx')): continue
+    bodies = set(_body_mds(job, names)) | set(_body_docxs(job, names))
+    for fn in sorted(bodies):
         try:
             r = dq.detect(dq.read_any(os.path.join(job, fn)))
         except Exception:
@@ -783,7 +993,9 @@ def repair_job(jid: str):
     """一键修复:清洗 md 交付物(逐字碎片合并、重复样板折叠),生成 *_已清洗.md"""
     import doc_quality as dq
     job = jpath(jid); fixed = []
-    for fn in sorted(list_deliverables(job)):
+    names = list_deliverables(job)
+    bodies = set(_body_mds(job, names)) | set(_body_docxs(job, names))
+    for fn in sorted(bodies):
         if not fn.endswith(('.md', '.docx')) or '已清洗' in fn: continue
         p = os.path.join(job, fn)
         try:
@@ -822,9 +1034,169 @@ def kill_tree(p):
             except Exception:
                 return
 
+CLI_STALL_SECONDS = float(os.environ.get('BIDDOG_CLI_STALL_SECONDS', os.environ.get('BID_CLI_STALL_SECONDS', 15 * 60)))
+CLI_STALL_POLL = float(os.environ.get('BIDDOG_CLI_STALL_POLL', os.environ.get('BID_CLI_STALL_POLL', 2)))
+CLI_TOTAL_SECONDS = float(os.environ.get('BIDDOG_CLI_TOTAL_SECONDS', os.environ.get('BID_CLI_TOTAL_SECONDS', 3 * 3600)))
+_ACTIVITY_CONTROL = {'events.jsonl', AGENT_EVENTS_FILE, 'progress.json', '任务.json',
+                     'outcome.json', '.line_ts.json', 'answers.jsonl', 'chat.jsonl'}
+
+def cli_activity_signature(job):
+    """CLI 活跃指纹：日志 + 产物文件本身。修改已有正文也算，轮询控制文件不算。"""
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    tender = os.path.basename(meta.get('tender') or '')
+    items = []
+    log_path = os.path.join(job, 'run.log')
+    try:
+        st = os.stat(log_path); log_sig = (st.st_size, st.st_mtime_ns)
+    except OSError: log_sig = (0, 0)
+    for root, dirs, files in os.walk(job):
+        dirs[:] = [d for d in dirs if d not in ('node_modules', '__pycache__', '.git')]
+        for fn in files:
+            if fn == tender or fn == 'run.log' or fn in _ACTIVITY_CONTROL or fn.endswith('.tmp'): continue
+            p = os.path.join(root, fn)
+            try:
+                st = os.stat(p)
+                items.append((os.path.relpath(p, job), st.st_size, st.st_mtime_ns))
+            except OSError:
+                pass
+    return (log_sig, tuple(sorted(items)))
+
+# 测试与诊断工具使用的稳定名字（此前派工单草案采用了下划线前缀）。
+_job_activity_signature = cli_activity_signature
+
+def wait_cli_process(proc, job, stall_seconds=None, total_seconds=None, poll_seconds=None):
+    """等待 CLI，同时执行 15 分钟无真实文件活动与 3 小时总闸。"""
+    stall_seconds = CLI_STALL_SECONDS if stall_seconds is None else float(stall_seconds)
+    total_seconds = CLI_TOTAL_SECONDS if total_seconds is None else float(total_seconds)
+    poll_seconds = CLI_STALL_POLL if poll_seconds is None else float(poll_seconds)
+    started = changed = time.monotonic()
+    sig = cli_activity_signature(job)
+    while True:
+        rc = proc.poll()
+        if rc is not None: return {'status': 'exited', 'rc': rc}
+        cur = cli_activity_signature(job)
+        now_m = time.monotonic()
+        if cur != sig:
+            sig, changed = cur, now_m
+        if now_m - changed >= stall_seconds:
+            kill_tree(proc)
+            return {'status': 'stalled', 'rc': proc.poll()}
+        if now_m - started >= total_seconds:
+            kill_tree(proc)
+            return {'status': 'timeout', 'rc': proc.poll()}
+        time.sleep(max(0.01, poll_seconds))
+
 def read_tail(path, n=800):
     try: return open(path, encoding='utf-8', errors='ignore').read()[-n:]
     except Exception: return ''
+
+def _tail_lines(path, count=8):
+    try:
+        lines = open(path, encoding='utf-8', errors='ignore').read().splitlines()
+    except Exception:
+        return []
+    return [redact(x) for x in lines[-count:]]
+
+def settle(job, known=None, stop_reason=None):
+    """统一出件闸门。CLI、OpenCode server、mock 都只能从这里进入终态。"""
+    if not os.path.isdir(job): return {'state': 'stopped', 'reason': '任务目录不存在'}
+    harvest(job)
+    known = set(list_deliverables(job)) if known is None else set(known) | set(list_deliverables(job))
+    for fn in sorted(known): emit(job, {'type': 'artifact', 'name': fn})
+
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    redo = meta.get('redo_baseline') if isinstance(meta.get('redo_baseline'), dict) else None
+    redo_docs = (redo or {}).get('docx') or {}
+    redo_mds = (redo or {}).get('md') or {}
+    body_now = _body_mds(job, known)
+    words_now = _body_docxs(job, known)
+    changed_words = [fn for fn in words_now
+                     if redo_docs.get(fn) != _file_digest(os.path.join(job, fn))] if redo else words_now
+    changed_mds = [fn for fn in body_now
+                   if redo_mds.get(fn) != _file_digest(os.path.join(job, fn))] if redo else body_now
+
+    if body_now and (not words_now or (redo and not changed_words and changed_mds)):
+        try: ensure_docx(job, known)
+        except Exception as e:
+            emit(job, {'type': 'message', 'role': 'agent',
+                       'text': '⚠ 自动导出 Word 没有成功：%s。正文稿已保留，可直接重试导出。' % redact(str(e)),
+                       'actions': [{'act': 'export_docx', 'label': '重试导出 Word'},
+                                   {'act': 'open_log', 'label': '查看运行日志'}]})
+        # 定向重做只有正文真的变化时才允许覆盖旧 Word；否则旧稿不能替本次失败兜底。
+        if redo and not changed_words and changed_mds:
+            try: ensure_docx(job, known, force=True)
+            except Exception: pass
+        known |= set(list_deliverables(job))
+
+    words = _body_docxs(job, known)
+    if redo:
+        words = [fn for fn in words if redo_docs.get(fn) != _file_digest(os.path.join(job, fn))]
+    if words:
+        outcome = read_json(os.path.join(job, 'outcome.json'), {})
+        if outcome.get('state') == 'done':
+            return {'state': 'done', 'word': words[0], 'artifacts': sorted(known)}
+        if redo:
+            meta.pop('redo_baseline', None)
+            write_json(os.path.join(job, '任务.json'), meta)
+        write_json(os.path.join(job, 'outcome.json'), {'state': 'done', 'word': words[0], 'ts': now()})
+        emit(job, {'type': 'progress', 'stage': '完成', 'pct': 100, 'step': 12,
+                   'total': 12, 'terminal': True, 'verified': True})
+        summary, actions = artifact_summary(job, known)
+        used = skill_evidence(job)
+        if not used['ok']:
+            summary += ('\n\n⚠ **没有检测到技能包被使用**（%s）。请先查看日志并人工复核内容、'
+                        '响应矩阵和格式门禁，再决定是否交付。' % used['why'])
+            actions = (actions or []) + [{'act': 'open_log', 'label': '查看运行日志'}]
+        emit(job, {'type': 'message', 'role': 'agent', 'text': summary, 'actions': actions})
+        emit(job, {'type': 'skill_used', 'ok': used['ok'], 'hits': used['hits'], 'why': used['why']})
+        try: quality_audit(job, known)
+        except Exception as e:
+            emit(job, {'type': 'message', 'role': 'agent',
+                       'text': '⚠ Word 已生成，但成品质检没有跑完：%s。请打开 Word 人工复核。' % redact(str(e)),
+                       'actions': [{'act': 'open_artifact', 'label': '打开 Word', 'file': words[0]},
+                                   {'act': 'open_log', 'label': '查看运行日志'}]})
+        return {'state': 'done', 'word': words[0], 'artifacts': sorted(known)}
+
+    # 没有 Word：最高优先级健康红灯，绝不把解析件或过程稿包装成完成。
+    if redo:
+        emit(job, {'type': 'health', 'level': 'red',
+                   'summary': '定向重做没有更新可交付的 Word，任务未完成',
+                   'gaps': [{'level': 'red', 'title': '旧 Word 不能替本次重做算成功',
+                             'detail': '旧稿仍完整保留；请查看日志后继续或重新定向重做。',
+                             'actions': [{'act': 'open_log', 'label': '查看运行日志'},
+                                         {'act': 'open_redo', 'label': '重新定向重做'}]}]})
+    else:
+        try: quality_audit(job, known)
+        except Exception: pass
+    body = _body_mds(job, known)
+    analysis = [fn for fn in known if fn.endswith(DELIVER_EXT)]
+    lines = _tail_lines(os.path.join(job, 'run.log'), 8)
+    if redo:
+        why = stop_reason or '已停止（定向重做未更新正文 Word）'
+        lead = '本次定向重做没有生成或更新正文 Word；旧 Word 已保留，但不能算作本次成功。'
+        actions = [{'act': 'open_log', 'label': '查看运行日志'},
+                   {'act': 'open_redo', 'label': '重新定向重做'}]
+    elif body:
+        why = '已停止（生成中断：Word 导出失败）'
+        lead = '正文稿已经生成，但最终 Word 导出失败，因此这单仍未完成。'
+        actions = [{'act': 'export_docx', 'label': '重试导出 Word'},
+                   {'act': 'open_log', 'label': '查看运行日志'},
+                   {'act': 'rerun', 'label': '重跑本任务'}]
+    elif analysis:
+        why = '已停止（生成中断：只有分析文件）'
+        lead = '生成中断：目前只有解析/分析文件，没有正文和最终 Word。'
+        actions = [{'act': 'open_log', 'label': '查看运行日志'},
+                   {'act': 'rerun', 'label': '重跑本任务'}]
+    else:
+        why = '已停止（没有产出）'
+        lead = '执行结束但没有产出任何交付文件。'
+        actions = [{'act': 'open_log', 'label': '查看运行日志'},
+                   {'act': 'rerun', 'label': '重跑本任务'}]
+    if stop_reason: why = stop_reason
+    detail = lead + (('\n\n运行日志最后 %d 行：\n%s' % (len(lines), '\n'.join(lines))) if lines else '')
+    emit(job, {'type': 'error', 'text': detail, 'actions': actions})
+    halt(job, why)
+    return {'state': 'stopped', 'reason': why, 'artifacts': sorted(known)}
 
 SKILL_MARKS = ['SKILL.md', 'bid-multiagent', 'build_tender_docx', 'check_docx_format',
                'fill_tender_template', '格式门禁', '响应矩阵']
@@ -849,7 +1221,7 @@ def skill_evidence(job):
 # server 模式把这三件事都解开了。以下端点名与请求体全部是从 1.18.13 的 /doc 实拉后跑通的,
 # 调研资料里的 `/session/{id}/prompt_async` 在这个版本根本不存在,照着写会全错;
 # `/session/{id}/abort` 倒是有(无 /api 前缀),但我们用 `/api/session/{id}/interrupt`。
-OC = {'proc': None, 'port': 0, 'base': '', 'pw': ''}     # 常驻 server 句柄
+OC = {'proc': None, 'port': 0, 'base': '', 'pw': '', 'fingerprint': ''}     # 常驻 server 句柄
 OC_LOCK = threading.Lock()
 
 def _free_port():
@@ -887,6 +1259,29 @@ def oc_model(conf=None):
     up = s2_conf(conf or read_json(conf_path(), {}))
     return {'providerID': 'biddog-s2', 'modelID': up['model']}
 
+def oc_config_fingerprint(conf=None):
+    """常驻外壳/探活缓存的配置身份；只存 Key 摘要，不存秘密。"""
+    conf = conf or read_json(conf_path(), {})
+    eng = conf.get('engine') or {}
+    up = s2_conf(conf)
+    raw = {'kind': eng.get('kind', 's2'), 'model': up['model'], 'base': up['base_url'],
+           'verify': bool(up['verify_ssl']), 'wire': up['wire'],
+           'cli': eng.get('cli_path') or '',
+           'credential': hashlib.sha256((up.get('api_key') or '').encode()).hexdigest()[:16]}
+    return hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()
+
+def invalidate_oc_runtime():
+    """设置变化后关掉旧 server 并清探活；下一单会按新配置干净重启。"""
+    with OC_LOCK:
+        p = OC.get('proc')
+        if p:
+            try:
+                if p.poll() is None: kill_tree(p)
+            except Exception: pass
+        OC.update({'proc': None, 'port': 0, 'base': '', 'pw': '', 'fingerprint': ''})
+        try: _OC_PROBED.update({'ok': False, 'why': '', 'ts': 0.0, 'fingerprint': ''})
+        except NameError: pass
+
 def oc_serve(eng=None):
     """确保常驻 opencode server 活着,返回 base url;起不来返回 ''(上层回落 CLI 模式)。
 
@@ -895,9 +1290,19 @@ def oc_serve(eng=None):
     `UnknownError / Unexpected server error`,完全看不出是 Key 没送到。
     所以起完必须真调一次模型探活。"""
     with OC_LOCK:
-        if OC['proc'] and OC['proc'].poll() is None and OC['base']:
+        conf = read_json(conf_path(), {})
+        if eng is not None:
+            conf = dict(conf); conf['engine'] = eng
+        fingerprint = oc_config_fingerprint(conf)
+        if (OC['proc'] and OC['proc'].poll() is None and OC['base']
+                and OC.get('fingerprint') == fingerprint):
             return OC['base']
-        eng = eng if eng is not None else (read_json(conf_path(), {}).get('engine') or {})
+        if OC.get('proc'):
+            try:
+                if OC['proc'].poll() is None: kill_tree(OC['proc'])
+            except Exception: pass
+            OC.update({'proc': None, 'port': 0, 'base': '', 'pw': '', 'fingerprint': ''})
+        eng = eng if eng is not None else (conf.get('engine') or {})
         cli = resolve_cli('opencode', eng)
         if not cli: return ''
         port = _free_port()
@@ -912,14 +1317,15 @@ def oc_serve(eng=None):
                                  env=env, cwd=DATA, **DETACH)
         except Exception:
             return ''
-        OC.update({'proc': p, 'port': port, 'base': 'http://127.0.0.1:%d' % port, 'pw': pw})
+        OC.update({'proc': p, 'port': port, 'base': 'http://127.0.0.1:%d' % port,
+                   'pw': pw, 'fingerprint': fingerprint})
         for _ in range(60):
-            if p.poll() is not None: OC.update({'proc': None, 'base': '', 'pw': ''}); return ''
+            if p.poll() is not None: OC.update({'proc': None, 'base': '', 'pw': '', 'fingerprint': ''}); return ''
             st, _b = oc_api('/global/health', timeout=3)
             if st == 200: break
             time.sleep(0.5)
         else:
-            kill_tree(p); OC.update({'proc': None, 'base': '', 'pw': ''}); return ''
+            kill_tree(p); OC.update({'proc': None, 'base': '', 'pw': '', 'fingerprint': ''}); return ''
         return OC['base']
 
 def oc_probe():
@@ -927,26 +1333,40 @@ def oc_probe():
     st, ses = oc_api('/api/session', {'title': '连通性探活'}, timeout=30)
     sid = (ses or {}).get('id') if isinstance(ses, dict) else None
     if not sid: return False, '建不出会话(HTTP %s)' % st
-    oc_api('/api/session/%s/prompt' % sid, {'model': oc_model(), 'prompt': {'text': '只回两个字:可用'}},
-           timeout=90)
+    pst, _reply = oc_api('/api/session/%s/prompt' % sid,
+                         {'model': oc_model(), 'prompt': {'text': '只回两个字:可用'}}, timeout=90)
+    if pst not in (200, 201, 202, 204):
+        return False, '执行外壳探活请求失败(HTTP %s)' % pst
     # 必须等它真的答完再看有没有报错。以前这里用 oc_busy 判,而 oc_busy 恒为 False,
     # 于是一秒就往下走、在回复还没到的时候读消息、没看见 error 就宣布「通了」——
     # Key 是错的也照样通过,这个探活等于白做。
+    done = False
     for _ in range(90):
         time.sleep(1)
-        if oc_turn(sid)[0]: break
+        done, turn_error = oc_turn(sid)
+        if turn_error: return False, turn_error
+        if done: break
+    if not done: return False, '执行外壳探活 90 秒没有完整回复'
     st, ms = oc_api('/api/session/%s/message' % sid, timeout=30)
+    if st != 200 or not isinstance(ms, list) or not ms:
+        return False, '执行外壳探活没有拿到有效回复(HTTP %s)' % st
     for m in (ms or []) if isinstance(ms, list) else []:
         err = (m.get('error') or {}).get('message') or ''
         if err:
             if '401' in err or 'incorrect API key' in err:
                 return False, 'Key 没送到执行外壳或 Key 无效(原文:%s)' % err[:120]
             return False, err[:160]
+    top = ms[0]
+    if top.get('type') != 'assistant' or top.get('finish') not in OC_CLEAN_FINISH:
+        return False, '执行外壳探活没有干净收尾'
     return True, ''
 
-# 一轮说完了的落定值。'tool-calls' 不在里面 —— 那是「这段话说完了,接着还要调工具」。
-OC_FINISH = {'stop', 'length', 'content-filter', 'content_filter',
-             'error', 'aborted', 'abort', 'canceled', 'cancelled'}
+# 一轮只有 stop 算干净收尾；长度截断、内容拦截、错误和取消都必须显式失败。
+# 'tool-calls' 不在里面 —— 那是「这段话说完了,接着还要调工具」。
+OC_CLEAN_FINISH = {'stop'}
+OC_FAILED_FINISH = {'length', 'content-filter', 'content_filter', 'error',
+                    'aborted', 'abort', 'canceled', 'cancelled'}
+OC_FINISH = OC_CLEAN_FINISH | OC_FAILED_FINISH
 OC_QUIET = 25      # 已 finish 且事件流再静这么多秒,才算整单收工
 OC_STALL = 900     # 事件流彻底没动静这么久又没 finish,当卡死处理,别干等三小时
 
@@ -971,7 +1391,13 @@ def oc_turn(sid):
     if top.get('type') != 'assistant': return False, ''
     err = ((top.get('error') or {}).get('message') or '') if isinstance(top.get('error'), dict) else ''
     if err: return True, str(err)[:300]
-    return (top.get('finish') in OC_FINISH), ''
+    finish = top.get('finish')
+    if finish in OC_CLEAN_FINISH: return True, ''
+    if finish == 'length': return True, '执行外壳输出达到长度上限，本轮没有完整收尾'
+    if finish in ('content-filter', 'content_filter'): return True, '执行外壳回复被内容策略拦截，本轮未完成'
+    if finish in ('aborted', 'abort', 'canceled', 'cancelled'): return True, '执行外壳本轮已取消，未算完成'
+    if finish == 'error': return True, '执行外壳本轮报错，未算完成'
+    return False, ''
 
 def oc_session(job, directory):
     """给任务建/取会话。会话 id 落进 任务.json —— 崩了、关窗了都能凭它续跑。"""
@@ -988,7 +1414,7 @@ def oc_session(job, directory):
         write_json(os.path.join(job, '任务.json'), meta)
     return sid
 
-def oc_send(sid, text, delivery='queue'):
+def oc_send(sid, text, delivery='queue', model=None):
     """给会话投一条消息。**这个接口是异步的:0 秒返回 200,不等跑完。**
 
     delivery 是 1.18.13 的原生字段:
@@ -996,7 +1422,7 @@ def oc_send(sid, text, delivery='queue'):
       steer = 立刻引导当前这轮
     产品负责人定的「想到什么先记下来、下个环节带上」就是 queue。"""
     st, b = oc_api('/api/session/%s/prompt' % sid,
-                   {'model': oc_model(), 'delivery': delivery, 'prompt': {'text': text}}, timeout=60)
+                   {'model': model or oc_model(), 'delivery': delivery, 'prompt': {'text': text}}, timeout=60)
     return st in (200, 201, 202, 204), b
 
 def oc_interrupt(sid):
@@ -1129,12 +1555,20 @@ def halt(job, why):
     跑挂了跟正在跑长得一模一样,用户会一直等下去,等到投标截止。
     停在第几步、跑了多久,是用户决定「重跑还是接着改」的依据,必须留着。"""
     prev = read_json(os.path.join(job, 'progress.json'), {})
-    emit(job, {'type': 'progress', 'stage': why, 'terminal': True,
-               'pct': min(int(prev.get('pct') or 0), 99),   # 保住进度,但绝不让它等于 100(那是"完成")
-               'step': int(prev.get('step') or 0), 'total': int(prev.get('total') or 12)})
+    write_json(os.path.join(job, 'outcome.json'), {'state': 'stopped', 'reason': why, 'ts': now()})
+    safe = sanitize_event(job, {'type': 'progress', 'stage': why,
+                                'pct': min(int(prev.get('pct') or 0), 99),
+                                'step': int(prev.get('step') or 0), 'total': 12})
+    safe.update({'stage': why, 'terminal': True, 'verified': True})
+    emit(job, safe)
+
+OC_RUN_FALLBACK = 'fallback'
+OC_RUN_COMPLETED = 'completed'
+OC_RUN_INTERRUPTED = 'interrupted'
+OC_RUN_CANCELLED = 'cancelled'
 
 def oc_run(job, prompt):
-    """用 OpenCode server 模式跑一单。跑不起来返回 False,上层回落到 CLI 模式。
+    """用 OpenCode server 模式跑一单，并区分“未派发”与“派发后中断”。
 
     跟 CLI 模式(`run --auto`)的区别:
       · 看得见 —— SSE 事件流转成真实台词(CLI 模式下 opencode 的子 agent 根本不写 stdout)
@@ -1142,58 +1576,72 @@ def oc_run(job, prompt):
       · 问得着 —— agent 的提问推给用户,答案经 /question/reply 真的回到它上下文
       · 崩了能续 —— 会话 id 落在 任务.json,重开应用凭它接着做
     """
-    if not oc_serve(): return False
+    if not oc_serve(): return OC_RUN_FALLBACK
     sid = oc_session(job, job)
-    if not sid: return False
+    if not sid: return OC_RUN_FALLBACK
     ok, why = oc_probe_once()
     if not ok:
         emit(job, {'type': 'message', 'role': 'agent',
                    'text': '⚠ 执行外壳起来了但链路没通(%s),这一单改用兼容模式跑。' % why})
-        return False
+        return OC_RUN_FALLBACK
     base = os.path.basename(job)
     stop = threading.Event()
     beat = {'ts': time.time()}          # oc_watch 每收到一条事件就刷新
     threading.Thread(target=oc_watch, args=(job, sid, stop, beat), daemon=True).start()
-    sent, _ = oc_send(sid, prompt, delivery='queue')
+    snap = read_json(os.path.join(job, '任务.json'), {}).get('engine_snapshot') or {}
+    pinned_model = {'providerID': 'biddog-s2', 'modelID': snap.get('model')} if snap.get('model') else oc_model()
+    sent, _ = oc_send(sid, prompt, delivery='queue', model=pinned_model)
     if not sent:
-        stop.set(); return False
+        # 请求已经尝试派发，无法证明服务端完全没收到；禁止从头自动重放。
+        stop.set(); return OC_RUN_INTERRUPTED
     emit(job, {'type': 'message', 'role': 'agent',
                'text': '已交给执行外壳开工。跑的过程中你随时可以在这里补要求——'
                        '**会排到当前这一步之后生效**,不会打断它。'})
+    result = OC_RUN_INTERRUPTED
     try:
         for _ in range(3 * 3600):
-            if base in CANCEL: break
+            if base in CANCEL:
+                result = OC_RUN_CANCELLED
+                break
             time.sleep(1)
             quiet = time.time() - beat['ts']
             done, err = oc_turn(sid)
             if err:
-                emit(job, {'type': 'message', 'role': 'agent',
-                           'text': '⚠ 执行外壳报错:%s' % err})
+                emit(job, {'type': 'error',
+                           'text': '执行外壳的本轮连接中断，未把半截结果算作完成：%s' % redact(err),
+                           'actions': [{'act': 'rerun', 'label': '从已保存内容继续'},
+                                       {'act': 'open_log', 'label': '查看运行日志'}]})
+                oc_interrupt(sid)
                 break
             # 收工要两条同时成立:最新一条 assistant 已经 finish,**并且**事件流也静了。
             # 只看 finish 会在排队的两轮之间踩空 —— 第一轮 stop 的那一瞬,
             # queue 里的第二条还没起来,会被当成整单跑完。
-            if done and quiet >= OC_QUIET: break
+            if done and quiet >= OC_QUIET:
+                result = OC_RUN_COMPLETED
+                break
             # 事件流彻底没动静又没 finish:多半卡住了,当面说,别干等三小时
             if quiet >= OC_STALL:
                 emit(job, {'type': 'message', 'role': 'agent',
                            'text': '⚠ 执行外壳已经 %d 分钟没有任何动静,先停下来。'
                                    '已经写出来的东西都在,可以点「继续做」接着跑。'
                                    % (OC_STALL // 60)})
+                oc_interrupt(sid)
                 break
     finally:
         stop.set()
-    return True
+    return result
 
-_OC_PROBED = {'ok': False, 'why': '', 'ts': 0.0}
+_OC_PROBED = {'ok': False, 'why': '', 'ts': 0.0, 'fingerprint': ''}
 
 def oc_probe_once(ttl=600):
     """探活带缓存:每单都真调一次模型太浪费,但也不能一次都不探 ——
     healthy 返回 True 而 Key 没送到时,opencode 只会甩一句 UnknownError(踩过)。"""
-    if _OC_PROBED['ok'] and time.time() - _OC_PROBED['ts'] < ttl:
+    fingerprint = oc_config_fingerprint()
+    if (_OC_PROBED['ok'] and _OC_PROBED.get('fingerprint') == fingerprint
+            and time.time() - _OC_PROBED['ts'] < ttl):
         return True, ''
     ok, why = oc_probe()
-    _OC_PROBED.update({'ok': ok, 'why': why, 'ts': time.time()})
+    _OC_PROBED.update({'ok': ok, 'why': why, 'ts': time.time(), 'fingerprint': fingerprint})
     return ok, why
 
 def real_agent(job, cmd):
@@ -1210,26 +1658,23 @@ def real_agent(job, cmd):
     RUNNING.add(os.path.basename(job))
     log = open(os.path.join(job, 'run.log'), 'a', encoding='utf-8')
     emit(job, {'type': 'message', 'role': 'agent', 'text': '真实 agent 已启动,进度见事件流。'})
-    stop = threading.Event(); known = set(list_deliverables(job))
+    stop = threading.Event(); known = set(list_deliverables(job)); agent_line = [0]
     def watcher():
         """运行中桥接:新交付物→artifact 事件;progress→progress.json;
         run.log 增量→流式「工作台词」事件(用户最缺的就是'它此刻在干嘛'的文字反馈);
         步进切换→上一步真实耗时入库(预计等待时间的数据来源)。"""
-        ev_path = os.path.join(job, 'events.jsonl')
         log_path = os.path.join(job, 'run.log')
         log_off = [0]; cur_step = [0]; step_t0 = [time.time()]
         while not stop.wait(4):
             try:
-                ensure_line_ts(job)      # agent 写的进度行实时打戳
-                for ln in reversed(open(ev_path, encoding='utf-8').read().splitlines()):
-                    e = json.loads(ln)
-                    if e.get('type') == 'progress':
-                        write_json(os.path.join(job, 'progress.json'), e)
-                        stp = int(e.get('step') or 0)
+                # agent 只能写声明流；逐行 JSON 成功解析后才前移 offset，半行不会因轮询被丢掉。
+                agent_line[0], accepted = drain_agent_events(job, agent_line[0])
+                for safe in accepted:
+                    if safe.get('type') == 'progress':
+                        stp = int(safe.get('step') or 0)
                         if stp != cur_step[0]:
-                            if cur_step[0]: record_stage(cur_step[0], time.time() - step_t0[0])
+                            if cur_step[0]: record_stage(cur_step[0], min(time.time() - step_t0[0], 600))
                             cur_step[0] = stp; step_t0[0] = time.time()
-                        break
                 # 工作台词:run.log 新增内容清洗后流出(每轮最多 8 行,防刷屏;单块事件,前端聚合显示)
                 try:
                     sz = os.path.getsize(log_path)
@@ -1245,8 +1690,9 @@ def real_agent(job, cmd):
                     if fn not in known:
                         known.add(fn); emit(job, {'type': 'artifact', 'name': fn})
             except Exception: pass
-    threading.Thread(target=watcher, daemon=True).start()
-    rc = -1; spawn_err = ''; spawn_actions = None
+    watcher_thread = threading.Thread(target=watcher, daemon=True)
+    watcher_thread.start()
+    rc = -1; spawn_err = ''; spawn_actions = None; stop_reason = None
     base = os.path.basename(job)
     proc = None
     try:
@@ -1254,16 +1700,25 @@ def real_agent(job, cmd):
         proc = subprocess.Popen(cmd, shell=isinstance(cmd, str), cwd=job, stdin=subprocess.DEVNULL,
                                 stdout=log, stderr=log, env=env, **DETACH)
         PROCS[base] = proc
-        rc = proc.wait(timeout=3 * 3600)
+        waited = wait_cli_process(proc, job)
+        rc = waited.get('rc') if waited.get('rc') is not None else -1
+        if waited['status'] == 'stalled':
+            spawn_err = ('生成进程连续 15 分钟没有日志或产物变化，已安全停止。'
+                         '已有文件都保留，可查看日志后继续或重跑。')
+            spawn_actions = [{'act': 'open_log', 'label': '查看运行日志'},
+                             {'act': 'rerun', 'label': '重跑本任务'}]
+            stop_reason = '已停止（长时间无进展）'
+        elif waited['status'] == 'timeout':
+            spawn_err = '生成总时长超过 3 小时，已安全停止；已有交付物保留。'
+            spawn_actions = [{'act': 'open_log', 'label': '查看运行日志'},
+                             {'act': 'rerun', 'label': '重跑本任务'}]
+            stop_reason = '已停止（超过 3 小时总时限）'
     except FileNotFoundError:
         miss = os.path.basename(cmd.split()[0] if isinstance(cmd, str) else cmd[0])
         spawn_err = ('没找到「%s」:已自动搜过常见安装位置(Homebrew/npm 等)仍未找到,应该是本机还没装。'
                      '两个解决办法,点下面按钮即可。' % miss)
         spawn_actions = [{'act': 'mock_rerun', 'label': '先用内置演示把流程跑通'},
                          {'act': 'open_engine', 'label': '去绑定已装的生成引擎'}]
-    except subprocess.TimeoutExpired:
-        kill_tree(proc)
-        spawn_err = 'agent 运行超过 3 小时被停止,已生成的交付物保留;可「重跑本任务」续做。'
     except Exception as e: spawn_err = '运行异常:%s' % e
     finally:
         PROCS.pop(base, None)
@@ -1273,8 +1728,10 @@ def real_agent(job, cmd):
         ev = {'type': 'error', 'text': spawn_err}
         if spawn_actions: ev['actions'] = spawn_actions
         emit(job, ev)
-        halt(job, '已停止(未能启动生成)')
-    stop.set(); log.close(); RUNNING.discard(base)
+    stop.set(); watcher_thread.join(timeout=5)
+    # 进程最后几毫秒写下的声明不能因 watcher 的 4 秒轮询周期丢掉。
+    agent_line[0], _accepted = drain_agent_events(job, agent_line[0])
+    log.close(); RUNNING.discard(base)
     harvest(job)
     for fn in list_deliverables(job):
         if fn not in known: known.add(fn); emit(job, {'type': 'artifact', 'name': fn})
@@ -1283,8 +1740,10 @@ def real_agent(job, cmd):
     try: ensure_docx(job, known)
     except Exception as e:
         emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 补出 Word 未能执行:%s' % e})
+    if spawn_err:
+        return settle(job, known, stop_reason=stop_reason)
     if rc == 0 and known:
-        emit(job, {'type': 'progress', 'stage': '完成', 'pct': 100, 'step': 12, 'total': 12})
+        return settle(job, known)
         summary, actions = artifact_summary(job, known)
         used = skill_evidence(job)
         if not used['ok']:      # 技能包没被读到:产出多半是"自由发挥",必须当面说清而不是假装完成
@@ -1300,6 +1759,7 @@ def real_agent(job, cmd):
         except Exception as e:
             emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 成品质检未能执行:%s' % e})
     elif rc == 0 and not known:
+        return settle(job, known)
         # 正常退出却一个交付物都没有:以前这里静默,任务永远卡在最后一步
         tail = read_tail(os.path.join(job, 'run.log'), 700)
         emit(job, {'type': 'error',
@@ -1336,8 +1796,7 @@ def real_agent(job, cmd):
                                '如果连着几次都这样:\n'
                                '① 换个网络试一次(手机热点最快)——能通就是本地网络设备/安全软件在拦长连接;\n'
                                '② 过几分钟再跑,多数是网关侧短时限流;\n'
-                               '③ 还不行就把「设置 · 模型接入」里的模式切成**极速**,'
-                               '单次请求短一些,更不容易被掐。' % len(RETRY_WAITS),
+                               '③ 急着稳定出件时先切回**标准模式**；极速模式更容易受长连接抖动影响。' % len(RETRY_WAITS),
                        'actions': [{'act': 'rerun', 'label': '重跑本任务'},
                                    {'act': 'open_engine', 'label': '去换模式'},
                                    {'act': 'open_log', 'label': '查看运行日志'}]})
@@ -1360,7 +1819,7 @@ def real_agent(job, cmd):
                                    {'act': 'open_log', 'label': '查看运行日志'}]})
         else:
             emit(job, {'type': 'error', 'text': 'agent 异常退出(退出码 %s)。可点「重跑本任务」再试;日志尾部:%s' % (rc, tail[-300:].strip() or '(空)')})
-        halt(job, '已停止(agent 异常退出)')
+        settle(job, known)
 
 # ---------- 生成引擎绑定(claude / codex / 自定义;打包版通过应用内设置,无需环境变量) ----------
 AGENT_PROMPT = ('你是标书生成 agent。先完整阅读 {skill}/SKILL.md,然后严格按其流程执行:'
@@ -1368,7 +1827,7 @@ AGENT_PROMPT = ('你是标书生成 agent。先完整阅读 {skill}/SKILL.md,然
     '1) 所有产物直接写入 outDir,不要另建下层输出目录;'
     '2) 招标文件若是 PDF/docx,先转成 招标文件_解析版.md 再分析;'
     '3) 全程同步执行,交付物全部落盘后才允许结束,禁止定时唤醒或把收尾留到以后;{mode}'
-    '4) 每完成一个阶段,向 {out}/events.jsonl 追加一行紧凑 JSON:'
+    '4) 每完成一个阶段,向 {out}/' + AGENT_EVENTS_FILE + ' 追加一行紧凑 JSON(这是声明流,引擎会按磁盘产物复核):'
     '{"type":"progress","stage":"<阶段名>","pct":<0-100>,"step":<序号>,"total":12};'
     '需要用户决策时追加 {"type":"question","id":"q<n>","text":"<问题>","options":["<选项1>","<选项2>"]} 并继续可并行工作;'
     '5) 最终交付物(投标文件_*.md、*.docx、投标文件自检报告.md)落在 outDir 根目录,出 Word 后必跑 check_docx_format.py 格式门禁;'
@@ -1598,6 +2057,20 @@ def agent_status():
             'codex_bundled': bool(bundled_codex()), 'opencode_bundled': bool(bundled_cli('opencode-cli')),
             's2_model_effective': s2_conf(conf)['model']}
 
+def config_locked_jobs():
+    """运行中或可恢复的暂停会话都锁住全局模型，避免同一任务跨模型续写。"""
+    locked = set(RUNNING)
+    try: ids = os.listdir(jobs_dir())
+    except Exception: ids = []
+    for jid in ids:
+        job = jpath(jid)
+        if not os.path.isdir(job): continue
+        meta = read_json(os.path.join(job, '任务.json'), {})
+        outcome = read_json(os.path.join(job, 'outcome.json'), {})
+        if meta.get('oc_session') and (meta.get('paused') or outcome.get('state') == 'stopped'):
+            locked.add(os.path.basename(jid))
+    return sorted(locked)
+
 @app.put('/v1/agent')
 async def set_agent(req: Request):
     # 云端网页模式默认禁止:网页端可改命令 = 给访客开服务器远程执行
@@ -1606,7 +2079,8 @@ async def set_agent(req: Request):
     body = await req.json()
     conf = read_json(conf_path(), {'providers': [], 'routing': {}})
     old = conf.get('engine') or {}
-    conf['engine'] = {'kind': body.get('kind', 'mock'), 'cmd': body.get('cmd', ''),
+    old_fingerprint = oc_config_fingerprint(conf)
+    new_engine = {'kind': body.get('kind', 'mock'), 'cmd': body.get('cmd', ''),
                       'skill_dir': body.get('skill_dir', ''), 'mode': body.get('mode', 'agents'),
                       'cli_path': body.get('cli_path', ''), 'env': body.get('env', ''),
                       'login_shell': body.get('login_shell', True),
@@ -1617,9 +2091,16 @@ async def set_agent(req: Request):
                       # Key 留空 = 沿用已存的(页面不回显 Key,不能因为"没传"就把它清掉)
                       's2_key': (body.get('s2_key') or '').strip() or old.get('s2_key', ''),
                       's2_wire': body.get('s2_wire', 'auto'), 's2_verify_ssl': body.get('s2_verify_ssl', True)}
-    if body.get('s2_key_clear'): conf['engine']['s2_key'] = ''
+    if body.get('s2_key_clear'): new_engine['s2_key'] = ''
+    candidate = dict(conf); candidate['engine'] = new_engine
+    new_fingerprint = oc_config_fingerprint(candidate)
+    if config_locked_jobs() and new_fingerprint != old_fingerprint:
+        return JSONResponse({'ok': False,
+                             'error': '还有任务正在生成。为避免同一任务中途换模型，请等任务结束或先停止任务再切换模式。'}, 409)
+    conf['engine'] = new_engine
     write_json(conf_path(), conf)
-    return {'ok': True}
+    if new_fingerprint != old_fingerprint: invalidate_oc_runtime()
+    return {'ok': True, 's2_model_effective': s2_conf(conf)['model']}
 
 @app.post('/v1/agent/test')
 def agent_test():
@@ -1804,6 +2285,16 @@ def _launch_job(jid, job, mock='auto'):
     if not os.path.isfile(tpath):
         emit(job, {'type': 'error', 'text': '找不到招标文件「%s」,请删除本任务重新创建。' % meta.get('tender')})
         return {'job_id': jid, 'mode': 'error'}
+    # 新开/重跑会重新结算；不能沿用上一次 stopped/done 终态。
+    try: os.unlink(os.path.join(job, 'outcome.json'))
+    except FileNotFoundError: pass
+    conf_now = read_json(conf_path(), {})
+    eng_now = conf_now.get('engine') or {}
+    up_now = s2_conf(conf_now)
+    meta['engine_snapshot'] = {'kind': eng_now.get('kind', 's2'), 'model': up_now['model'],
+                               'base_url': up_now['base_url'], 'wire': up_now['wire'],
+                               'verify_ssl': bool(up_now['verify_ssl']), 'started_at': now()}
+    write_json(os.path.join(job, '任务.json'), meta)
     # 先打一条 step=1 的进度再派发。前端的停止按钮要等 progress.step 有值才显示,
     # 而这一步以前完全取决于 agent 自己什么时候写第一条进度——真实 agent 读招标文件、
     # 建素材索引可能几分钟到几十分钟不吭声,这段时间界面上**根本没有停止按钮**:
@@ -1846,6 +2337,7 @@ def finish_job(job):
     base = os.path.basename(job)
     if base in CANCEL:
         CANCEL.discard(base); return
+    return settle(job)
     harvest(job)
     known = set(list_deliverables(job))
     for fn in known: emit(job, {'type': 'artifact', 'name': fn})
@@ -1860,7 +2352,7 @@ def finish_job(job):
                                {'act': 'rerun', 'label': '重跑本任务'}]})
         halt(job, '已停止(没有产出)')
         return
-    emit(job, {'type': 'progress', 'stage': '完成', 'pct': 100, 'step': 12, 'total': 12})
+    # 终态只能由 settle() 写入；以下旧收尾保留为迁移注释路径且不可达。
     summary, actions = artifact_summary(job, known)
     used = skill_evidence(job)
     if not used['ok']:
@@ -1878,18 +2370,30 @@ def agent_via_server_or_cli(job, prompt, cmd):
     否则会出现「换了条路跑,完成播报就不一样」这种说不清的差异。"""
     base = os.path.basename(job)
     RUNNING.add(base)
-    used_server = False
+    result = OC_RUN_INTERRUPTED
     try:
-        used_server = oc_run(job, prompt)
+        result = oc_run(job, prompt)
     except Exception as e:
-        emit(job, {'type': 'message', 'role': 'agent',
-                   'text': '⚠ server 模式异常(%s),改用兼容模式重跑这一单。' % str(e)[:120]})
+        emit(job, {'type': 'error',
+                   'text': '执行外壳异常中断（%s）。为避免覆盖或重复正文，本单没有自动从头重放。' %
+                           redact(str(e)[:120]),
+                   'actions': [{'act': 'rerun', 'label': '确认后重跑'},
+                               {'act': 'open_log', 'label': '查看运行日志'}]})
     finally:
         RUNNING.discard(base)
-    if not used_server:
+    if result == OC_RUN_FALLBACK:
+        if base in CANCEL:
+            CANCEL.discard(base)
+            return
         real_agent(job, cmd)      # 回落:它自己会管 RUNNING 与全部收尾
         return
-    finish_job(job)
+    if result == OC_RUN_CANCELLED:
+        CANCEL.discard(base)
+        return
+    if result == OC_RUN_COMPLETED:
+        finish_job(job)
+        return
+    settle(job, stop_reason='已停止（执行外壳中断，未自动重放）')
 
 @app.post('/v1/jobs/{jid}/start')
 def start_job(jid: str, mock: str = 'auto'):
@@ -1930,8 +2434,14 @@ def job_state(job, meta=None, prog=None):
     prog = read_json(os.path.join(job, 'progress.json'), {}) if prog is None else prog
     if meta.get('staged'): return 'staged'                       # 暂存,还没开跑
     if os.path.basename(job) in RUNNING: return 'running'
+    outcome = read_json(os.path.join(job, 'outcome.json'), {})
+    if outcome.get('state') == 'done':
+        return 'done' if _body_docxs(job) else 'stopped'
+    if outcome.get('state') == 'stopped': return 'stopped'
     stage = str(prog.get('stage') or '')
-    if int(prog.get('pct') or 0) >= 100: return 'done'
+    # 老版本遗留任务的迁移兜底：100% 仍必须有正文 Word；没有就按中断展示。
+    if int(prog.get('pct') or 0) >= 100:
+        return 'done' if _body_docxs(job) else 'stopped'
     # 暂停要跟「停止」分开:停止是这一单结束了,暂停是它还在半路、等着被接着做
     if meta.get('paused') and meta.get('oc_session'): return 'paused'
     if stage.startswith('已停止'): return 'stopped'
@@ -1965,6 +2475,7 @@ def list_jobs():
         out.append({'job_id': jid, 'name': meta.get('name', jid), 'created_at': meta.get('created_at', ''),
                     'stage': prog.get('stage', '启动中'), 'pct': prog.get('pct', 0),
                     'staged': bool(meta.get('staged')),
+                    'has_word': bool(_body_docxs(job)),
                     'state': st, 'can': job_can(job, st, meta)})
     return out
 
@@ -1979,7 +2490,8 @@ def events(jid: str, offset: int = 0):
     def stamp(idx, line, index):
         try: e = json.loads(line)
         except Exception: return line
-        if e.get('ts'): return line
+        e = sanitize_event(job, e)
+        if e.get('ts'): return json.dumps(e, ensure_ascii=False)
         key = str(idx)
         if key not in index:
             index[key] = now()
@@ -2173,20 +2685,20 @@ def resume_worker(job, cmd):
     """「继续做」的执行体。刻意跟正常跑同一套收尾,免得续做完的播报跟跑完的不一样。"""
     base = os.path.basename(job)
     RUNNING.add(base)
-    used = False
+    result = OC_RUN_INTERRUPTED
     try:
-        used = oc_run(job, RESUME_PROMPT)
+        result = oc_run(job, RESUME_PROMPT)
     except Exception as e:
         emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 续做异常:%s' % str(e)[:160]})
     finally:
         RUNNING.discard(base)
-    if not used:
+    if result != OC_RUN_COMPLETED:
         # 这里**不能**回落成从头重跑:用户点的是「继续做」,悄悄从头来会把已有产物覆盖掉
         emit(job, {'type': 'error', 'text': '没能接着做(执行外壳没起来或原会话已失效)。'
                                             '已经写出来的东西都还在,可以改用「重跑本任务」从头来。',
                    'actions': [{'act': 'open_log', 'label': '查看运行日志'},
                                {'act': 'rerun', 'label': '重跑本任务'}]})
-        halt(job, '已停止(没能续做)')
+        settle(job, stop_reason='已停止（没能续做）')
         return
     finish_job(job)
 
@@ -2234,8 +2746,7 @@ def mock_redo(job, instruction):
         open(os.path.join(job, fn), 'w', encoding='utf-8').write(
             '# 定向重做说明\n\n指令:%s\n\n(演示引擎:真实引擎会按指令改写对应产物并更新自检报告)\n' % instruction)
         emit(job, {'type': 'artifact', 'name': fn})
-        emit(job, {'type': 'progress', 'stage': '完成', 'pct': 100, 'step': 3, 'total': 3})
-        emit(job, {'type': 'message', 'role': 'agent', 'text': '定向重做完成:「%s」。已更新产物并重新自检。' % instruction[:60]})
+        settle(job)
     finally:
         RUNNING.discard(os.path.basename(job)); CANCEL.discard(os.path.basename(job))
 
@@ -2245,8 +2756,84 @@ def job_log(jid: str, n: int = 20000):
     job = jpath(jid)
     txt = read_tail(os.path.join(job, 'run.log'), max(1000, min(int(n or 20000), 200000)))
     ev = skill_evidence(job)
-    return {'ok': True, 'log': txt or '(没有运行日志:该任务用的是内置演示流程,或 agent 没有任何输出)',
+    return {'ok': True, 'log': redact(txt) or '(没有运行日志:该任务用的是内置演示流程,或 agent 没有任何输出)',
             'skill_used': ev['ok'], 'hits': ev['hits'], 'why': ev['why']}
+
+def _redact_config(value, key=''):
+    if isinstance(value, dict): return {k: _redact_config(v, k) for k, v in value.items()}
+    if isinstance(value, list): return [_redact_config(v, key) for v in value]
+    if any(k in key.lower() for k in ('api_key', 'token', 'password', 'secret', 's2_key')):
+        return ('s' + 'k' + '-***') if value else ''
+    return redact(value)
+
+def diagnostic_bundle(job):
+    """构建可直接交给支持人员的全脱敏诊断包；返回 zip bytes。"""
+    buf = io.BytesIO()
+    meta_files = ('任务.json', 'progress.json')
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        for fn in meta_files:
+            data = read_json(os.path.join(job, fn), {})
+            z.writestr(fn, json.dumps(redact(data), ensure_ascii=False, indent=2))
+        safe_events = []
+        try: raw_lines = open(os.path.join(job, 'events.jsonl'), encoding='utf-8', errors='ignore').read().splitlines()
+        except Exception: raw_lines = []
+        for ln in raw_lines:
+            try: safe_events.append(json.dumps(redact(json.loads(ln)), ensure_ascii=False))
+            except Exception: safe_events.append(str(redact(ln)))
+        z.writestr('events.jsonl', '\n'.join(safe_events) + ('\n' if safe_events else ''))
+        z.writestr('run.log', '\n'.join(_tail_lines(os.path.join(job, 'run.log'), 500)))
+        z.writestr('config.redacted.json', json.dumps(_redact_config(read_json(conf_path(), {})),
+                                                     ensure_ascii=False, indent=2))
+        system = {'engine_version': ENGINE_VERSION, 'platform': platform.platform(),
+                  'python': platform.python_version(), 'created_at': now(),
+                  'job_state': job_state(job)}
+        z.writestr('system.json', json.dumps(system, ensure_ascii=False, indent=2))
+        z.writestr('relay_status.json', json.dumps(redact(RELAY_LAST), ensure_ascii=False, indent=2))
+        oc_log = os.path.join(DATA, 'opencode-server.log')
+        z.writestr('opencode-server.log', '\n'.join(_tail_lines(oc_log, 500)))
+    return buf.getvalue()
+
+@app.get('/v1/jobs/{jid}/bundle')
+def job_bundle(jid: str):
+    job = jpath(jid)
+    if not os.path.isdir(job):
+        return JSONResponse({'ok': False, 'error': '任务不存在，无法导出诊断包'}, 404)
+    data = diagnostic_bundle(job)
+    return StreamingResponse(io.BytesIO(data), media_type='application/zip',
+                             headers={'Content-Disposition': 'attachment; filename="bid-dog-diagnostic-%s.zip"' % os.path.basename(jid),
+                                      'Content-Length': str(len(data))})
+
+@app.post('/v1/jobs/{jid}/bundle/save')
+def save_job_bundle(jid: str):
+    """桌面 WebView 不保证 blob download 可用：落到任务目录并在系统文件管理器中定位。"""
+    if MULTIUSER:
+        return JSONResponse({'ok': False, 'error': '网页模式请使用诊断包下载链接'}, 403)
+    job = jpath(jid)
+    if not os.path.isdir(job):
+        return JSONResponse({'ok': False, 'error': '任务不存在，无法导出诊断包'}, 404)
+    name = '中标狗_诊断包_%s.zip' % datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    path = os.path.join(job, name)
+    try:
+        with open(path, 'wb') as f: f.write(diagnostic_bundle(job))
+        _open_local(path, reveal=True)
+        return {'ok': True, 'path': path, 'name': name}
+    except Exception:
+        return JSONResponse({'ok': False, 'error': '诊断包生成失败，请先打开任务文件夹后重试'}, 500)
+
+@app.post('/v1/open_release')
+async def open_release(req: Request):
+    """仅允许打开本项目 Release，避免把本机 opener 变成任意 URL 跳转器。"""
+    if MULTIUSER:
+        return JSONResponse({'ok': False, 'error': '网页模式请直接点击下载链接'}, 403)
+    body = await req.json()
+    url = str(body.get('url') or '')
+    if not re.match(r'^https://github\.com/shandianT/bid-dog/releases(?:/|$)', url, re.I):
+        return JSONResponse({'ok': False, 'error': '下载地址未通过安全校验'}, 400)
+    try:
+        _open_local(url)
+        return {'ok': True}
+    except Exception:
+        return JSONResponse({'ok': False, 'error': '系统浏览器没有打开，请手动前往 GitHub Releases'}, 500)
 
 @app.post('/v1/jobs/{jid}/stop')
 def stop_job(jid: str):
@@ -2277,12 +2864,26 @@ async def redo_job(jid: str, req: Request):
     if not instruction: return JSONResponse({'ok': False, 'error': '缺少重做指令'}, 400)
     if os.path.basename(jid) in RUNNING:
         return JSONResponse({'ok': False, 'error': '任务正在运行,等它停下或先暂停再定向重做'}, 409)
+    try: os.unlink(os.path.join(job, 'outcome.json'))
+    except FileNotFoundError: pass
+    meta0 = read_json(os.path.join(job, '任务.json'), {})
+    conf0 = read_json(conf_path(), {})
+    up0 = s2_conf(conf0); eng0 = conf0.get('engine') or {}
+    meta0['engine_snapshot'] = {'kind': eng0.get('kind', 's2'), 'model': up0['model'],
+                                'base_url': up0['base_url'], 'wire': up0['wire'],
+                                'verify_ssl': bool(up0['verify_ssl']), 'started_at': now()}
+    write_json(os.path.join(job, '任务.json'), meta0)
     agent_cmd = config_agent_cmd()
     if not agent_cmd:
         threading.Thread(target=mock_redo, args=(job, instruction), daemon=True).start()
         return {'ok': True, 'mode': 'mock'}
     conf = read_json(conf_path(), {})
     meta = read_json(os.path.join(job, '任务.json'), {})
+    meta['redo_baseline'] = {
+        'docx': {fn: _file_digest(os.path.join(job, fn)) for fn in _body_docxs(job)},
+        'md': {fn: _file_digest(os.path.join(job, fn)) for fn in _body_mds(job)},
+    }
+    write_json(os.path.join(job, '任务.json'), meta)
     tpath = os.path.join(job, meta.get('tender', ''))
     sd = skill_dir_conf(conf)
     if not os.path.isfile(os.path.join(sd, 'SKILL.md')): sd = ensure_skill()
@@ -2488,7 +3089,14 @@ def open_job_folder(jid: str):
 
 @app.get('/v1/providers')
 def providers():
-    return read_json(conf_path(), {'providers': [], 'routing': {}}).get('providers', [])
+    stored = read_json(conf_path(), {'providers': [], 'routing': {}}).get('providers', [])
+    public = []
+    for item in stored:
+        safe = {k: v for k, v in dict(item).items()
+                if str(k).lower() not in ('api_key', 'key', 'token', 'secret', 'password')}
+        safe['key_set'] = bool(item.get('api_key'))
+        public.append(safe)
+    return public
 
 @app.delete('/v1/providers/{pid}')
 def del_provider(pid: str):
@@ -2819,11 +3427,12 @@ def _relay_stream(body, up):
         # 有的网关不理会 stream:true、直接回整包 JSON —— 按响应头判断,别按我们的请求猜
         ct = (r.headers.get('Content-Type') or '').lower()
         if payload.get('stream') and 'json' not in ct:
+            saw_done = False
             for raw in r:
                 ln = raw.decode('utf-8', 'ignore').strip()
                 if not ln.startswith('data:'): continue
                 ln = ln[5:].strip()
-                if ln == '[DONE]': break
+                if ln == '[DONE]': saw_done = True; break
                 try: d = json.loads(ln)
                 except Exception: continue
                 if d.get('usage'): usage = d['usage']
@@ -2842,6 +3451,8 @@ def _relay_stream(body, up):
                     fn = tc.get('function') or {}
                     if fn.get('name'): c['name'] = fn['name']
                     if fn.get('arguments'): c['args'] += fn['arguments']
+            if not saw_done:
+                raise http.client.IncompleteRead(b'', None)
         else:
             d = json.loads(r.read().decode('utf-8', 'ignore'))
             usage = d.get('usage') or {}
@@ -2855,14 +3466,9 @@ def _relay_stream(body, up):
                 fn = tc.get('function') or {}
                 calls[i] = {'id': tc.get('id') or '', 'name': fn.get('name') or '', 'args': fn.get('arguments') or '{}'}
     except Exception as e:
-        # 流到一半被掐断:已经吐出去的正文不能白扔。
-        # 只有「有正文 且 这一轮没有任何工具调用」时才按部分结果收尾——
-        # 一旦掺了工具调用,截断的 arguments 会让 agent 拿着半截 JSON 去执行,比失败更糟。
-        partial = ''.join(text).strip()
-        if opened[0] and partial and not calls:
-            RELAY_LAST['error'] = '上游流中断,已按已收到的 %d 字收尾:%s' % (len(partial), net_hint(e))
-        else:
-            err = net_hint(e)
+        # 已经向下游吐过任何字节后绝不能整轮重放（会重复正文，半截 tool arguments 更危险）。
+        # 明确 response.failed，让执行外壳走“继续做/重跑”，禁止把半截正文伪装 completed。
+        err = '上游流在回复完成前断开：' + net_hint(e)
     if err:
         RELAY_LAST['error'] = err
         yield sse('response.failed', {'type': 'response.failed', 'response': {'id': rid, 'status': 'failed',
@@ -2894,7 +3500,7 @@ def _relay_stream(body, up):
                         'total_tokens': int(usage.get('total_tokens') or (it + ot))}}})
 
 def _relay_passthrough(body, up):
-    """上游本身就有 /responses(比如以后 S2 网关补齐了):原样透传,一个字节都不翻译,最省事也最保真"""
+    """原生 Responses 直通，但仍核验终止事件；普通 EOF 不能把半截回复伪装成功。"""
     try:
         r = _upstream(up['base_url'], up['api_key'], '/responses', body, 900, up['verify_ssl'])
     except Exception as e:
@@ -2902,10 +3508,28 @@ def _relay_passthrough(body, up):
         yield sse('response.failed', {'type': 'response.failed', 'response': {'id': 'resp_err', 'status': 'failed',
                   'error': {'code': 'upstream_error', 'message': '中标狗中转层(直通模式):' + net_hint(e)}}})
         return
-    while True:
-        chunk = r.read(8192)
-        if not chunk: break
-        yield chunk
+    tail = b''
+    try:
+        while True:
+            chunk = r.read(8192)
+            if not chunk: break
+            tail = (tail + chunk)[-65536:]
+            yield chunk
+    except Exception as e:
+        reason = '上游 Responses 流在完整收尾前断开：' + net_hint(e)
+        RELAY_LAST.update({'ts': now(), 'error': reason, 'mode': 'passthrough'})
+        yield sse('response.failed', {'type': 'response.failed', 'response': {'id': 'resp_err', 'status': 'failed',
+                  'error': {'code': 'upstream_error', 'message': '中标狗中转层(直通模式):' + reason}}})
+        return
+    complete = (b'event: response.completed' in tail or b'"type":"response.completed"' in tail
+                or b'"type": "response.completed"' in tail)
+    failed = (b'event: response.failed' in tail or b'"type":"response.failed"' in tail
+              or b'"type": "response.failed"' in tail)
+    if body.get('stream', True) and not complete and not failed:
+        reason = '上游 Responses 流提前结束，没有收到完整结束信号'
+        RELAY_LAST.update({'ts': now(), 'error': reason, 'mode': 'passthrough'})
+        yield sse('response.failed', {'type': 'response.failed', 'response': {'id': 'resp_err', 'status': 'failed',
+                  'error': {'code': 'upstream_error', 'message': '中标狗中转层(直通模式):' + reason}}})
 
 @app.post('/v1/relay/responses')
 async def relay_responses(req: Request):
@@ -2934,13 +3558,37 @@ async def relay_chat(req: Request):
     RELAY_LAST.update({'ts': now(), 'mode': 'chat-pass', 'model': body.get('model'),
                        'msgs': len(body.get('messages') or []), 'tools': len(body.get('tools') or []), 'error': ''})
     def gen(r):
-        try:
-            while True:
+        sent = 0
+        tail = b''
+        reopened = 0
+        while True:
+            try:
                 c = r.read(8192)
-                if not c: break
-                yield c
-        except Exception:
-            return
+                if c:
+                    sent += len(c); tail = (tail + c)[-256:]
+                    yield c
+                    continue
+                # 标准 OpenAI SSE 必须以 [DONE] 收尾。普通 EOF 没有它就是静默断流。
+                if body.get('stream') and b'[DONE]' not in tail:
+                    raise http.client.IncompleteRead(tail, None)
+                break
+            except Exception as e:
+                # 首字节前可以安全重开；一旦发过字节就绝不重放，避免重复正文/重复工具调用。
+                if not sent and reopened < len(RETRY_WAITS) and _is_transient(e):
+                    time.sleep(RETRY_WAITS[reopened]); reopened += 1
+                    try:
+                        r = _upstream(up['base_url'], up['api_key'], '/chat/completions',
+                                      body, 900, up['verify_ssl'])
+                        continue
+                    except Exception as open_err:
+                        e = open_err
+                msg = '上游流在回复完成前断开：' + net_hint(e)
+                RELAY_LAST['error'] = msg
+                if body.get('stream'):
+                    yield ('data: %s\n\n' % json.dumps({'error': {
+                        'message': msg, 'type': 'upstream_stream_error', 'code': 'stream_interrupted'
+                    }}, ensure_ascii=False)).encode('utf-8')
+                return
     try:
         r = await asyncio.to_thread(_upstream, up['base_url'], up['api_key'], '/chat/completions', body, 900, up['verify_ssl'])
     except urllib.error.HTTPError as e:
@@ -3465,6 +4113,47 @@ def transcribe():
     return JSONResponse({'error': '本机未装转写模型;接 whisper.cpp sidecar 或云端转写'}, 501)
 
 HOST_GONE = False       # 桌面壳已经退出,但还有任务在跑:跑完自己走
+RELEASES_API = os.environ.get('BIDDOG_RELEASES_URL', os.environ.get(
+    'BID_RELEASES_URL', 'https://api.github.com/repos/shandianT/bid-dog/releases/latest'))
+UPDATE_TIMEOUT = float(os.environ.get('BIDDOG_UPDATE_TIMEOUT', os.environ.get('BID_UPDATE_TIMEOUT', 3)))
+
+def _env_true(name): return str(os.environ.get(name, '')).strip().lower() in ('1', 'true', 'yes', 'on')
+
+UPDATE_STATE = {'status': 'disabled' if _env_true('BID_NO_UPDATE_CHECK') else 'checking'}
+
+def _version_tuple(value):
+    nums = re.findall(r'\d+', str(value or ''))[:3]
+    return tuple((list(map(int, nums)) + [0, 0, 0])[:3])
+
+def check_for_update(url=None, opener=None):
+    """3 秒内完成的一次升级检查。异常只落状态，不向任务或页面发错误。"""
+    global UPDATE_STATE
+    if _env_true('BID_NO_UPDATE_CHECK'):
+        UPDATE_STATE = {'status': 'disabled'}
+        return UPDATE_STATE
+    url = url or RELEASES_API
+    opener = opener or urllib.request.urlopen
+    try:
+        req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json',
+                                                   'User-Agent': 'bid-dog/' + ENGINE_VERSION})
+        r = opener(req, timeout=UPDATE_TIMEOUT)
+        data = json.loads(r.read().decode('utf-8', 'ignore'))
+        releases = data if isinstance(data, list) else [data]
+        rel = next((x for x in releases if isinstance(x, dict) and not x.get('draft') and not x.get('prerelease')), None)
+        if not rel: raise ValueError('没有可用正式版本')
+        tag = str(rel.get('tag_name') or rel.get('name') or '')
+        match = re.search(r'\d+\.\d+\.\d+', tag)
+        latest = match.group(0) if match else tag.lstrip('v')
+        page = rel.get('html_url') or 'https://github.com/shandianT/bid-dog/releases'
+        UPDATE_STATE = {'status': 'available' if _version_tuple(latest) > _version_tuple(ENGINE_VERSION) else 'latest',
+                        'latest': latest, 'url': page}
+    except Exception:
+        UPDATE_STATE = {'status': 'error'}
+    return UPDATE_STATE
+
+def start_update_check():
+    if _env_true('BID_NO_UPDATE_CHECK'): return
+    threading.Thread(target=check_for_update, daemon=True, name='bid-dog-update-check').start()
 
 @app.post('/v1/shutdown')
 def shutdown():
@@ -3503,7 +4192,8 @@ def health():
     global HOST_GONE
     HOST_GONE = False
     return {'ok': True, 'data_dir': DATA, 'agent': bool(config_agent_cmd()),
-            'version': ENGINE_VERSION, 'author': AUTHOR, 'features': ENGINE_FEATURES}
+            'version': ENGINE_VERSION, 'author': AUTHOR, 'features': ENGINE_FEATURES,
+            'update': dict(UPDATE_STATE)}
 
 def migrate_conf():
     """存量配置迁移。
@@ -3529,6 +4219,7 @@ def migrate_conf():
 
 ensure_preset()   # 预置配置种子(定制发包用),必须在任何请求处理前完成
 migrate_conf()    # 存量引擎配置归并(撤下的选项不能把老用户晾在空白下拉上)
+start_update_check()
 
 web = os.environ.get('BID_WEB_DIR') or os.path.join(HERE, '..', 'app', 'src')
 if os.path.isdir(web): app.mount('/', StaticFiles(directory=web, html=True), name='web')

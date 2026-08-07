@@ -4,7 +4,7 @@
 **给谁用** — 拿到 Key 的同事和客户：装上、粘 Key、拖文件，不用注册 AI 账号。写代码的看文末架构小节。
 **怎么开始** — 到 [Releases](https://github.com/shandianT/bid-dog/releases/latest) 下载 dmg / exe → 打开后粘一串 Key、选一个模式 → 把招标文件拖进窗口。
 
-[![release](https://img.shields.io/badge/release-v0.18.0-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
+[![release](https://img.shields.io/badge/release-v0.18.2-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
 [![build](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/macOS%20Apple%20Silicon%20%7C%20Windows%20x64-111111)
 
@@ -53,8 +53,8 @@
 
 | 系统 | 安装包 | 说明 |
 |---|---|---|
-| macOS | [`bid-dog_0.18.0_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.0/bid-dog_0.18.0_aarch64.dmg) | Apple Silicon（M 系列） |
-| Windows | [`bid-dog_0.18.0_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.0/bid-dog_0.18.0_x64-setup.exe) | Windows 10 / 11 64 位 |
+| macOS | [`bid-dog_0.18.2_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_aarch64.dmg) | Apple Silicon（M 系列） |
+| Windows | [`bid-dog_0.18.2_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_x64-setup.exe) | Windows 10 / 11 64 位 |
 
 安装包目前未做商业代码签名，两个系统各有一次放行动作，做完就再也不会提示：
 
@@ -95,7 +95,7 @@
 
 还有三条：
 
-- **没出 Word 不算跑完。** 模型偶尔会把正文写完就收工、不执行最后一步导出。这种时候引擎自己把 Word 出出来——确定性脚本、不重跑、不花额度；实在出不来就直说「跑完了，但没有生成最终 Word」，而不是报一句「完成」让你自己去找。
+- **没出 Word 不算跑完。** 模型偶尔会把正文写完就收工、不执行最后一步导出。这种时候引擎自己把 Word 出出来——确定性脚本、不重跑、不花额度；实在出不来就明确停止在真实步骤并显示红色「没出 Word，未完成」，不会再进入“已完成”分组。
 - **不编造。** 素材库（公司资料、资质案例、图片索引）是唯一事实来源。资质、案例、报价缺了就标〔需补充〕，进补料清单。
 - **不替你签字。** 投标人名称、报价、资质有效期、承诺与签章都留给人确认，出件前检查里的红色项不处理就不让出件。
 
@@ -148,6 +148,7 @@ Tauri 壳(Rust + Web)  ──拉起/守护──▶  本地引擎(FastAPI, PyIns
 - [更新日志](CHANGELOG.md) —— 每版做了什么
 
 遇到问题或有建议，欢迎提 [Issue](https://github.com/shandianT/bid-dog/issues)：请附系统版本、中标狗版本、现象和复现步骤；**请勿附带 API Key、客户机密或完整涉密标书**。
+任务报错时可以直接点消息末尾的「导出诊断包」；包内日志和配置已脱敏，比截图更容易定位问题。
 
 中标狗只做辅助分析与撰写，不保证中标，也代替不了投标负责人、法务和专业人员的最终审核。以招标文件原文和正式澄清文件为准。
 

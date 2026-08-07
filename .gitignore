@@ -2,6 +2,9 @@ node_modules/
 app/src-tauri/target/
 app/src-tauri/gen/
 __pycache__/
+.pytest_cache/
+tests/acceptance_samples.local.json
+tests/acceptance-results-*.md
 *.pyc
 .DS_Store
 dist/

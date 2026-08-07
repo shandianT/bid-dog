@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: bid-assistant-web:0.18.0
+    image: bid-assistant-web:0.18.2
     restart: unless-stopped
     ports:
       - "8080:8080"          # 生产建议只绑本机 "127.0.0.1:8080:8080",由 Caddy/Nginx 接 HTTPS
