@@ -4,19 +4,23 @@
 **给谁用** — 拿到 Key 的同事和客户：装上、粘 Key、拖文件，不用注册 AI 账号。写代码的看文末架构小节。
 **怎么开始** — 到 [Releases](https://github.com/shandianT/bid-dog/releases/latest) 下载 dmg / exe → 打开后粘一串 Key、选一个模式 → 把招标文件拖进窗口。
 
-[![release](https://img.shields.io/badge/release-v0.17.9-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
+[![release](https://img.shields.io/badge/release-v0.18.0-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
 [![build](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/macOS%20Apple%20Silicon%20%7C%20Windows%20x64-111111)
 
-**官网**
+**官网**：https://bid-dog.vercel.app
 
-https://bid-dog.vercel.app
+**在线体验**：https://bid-dog.vercel.app/demo.html?demo=1（不用安装即可体验）
 
-**在线体验**
+---
 
-https://bid-dog.vercel.app/demo.html?demo=1
+## v0.18.0 更新亮点
 
-不用安装即可体验。
+- **默认执行外壳切换为 OpenCode**：使用发放的 Key 时自动走内置 OpenCode，无需另装 Node.js，也不用登录 OpenCode 账号。
+- **Codex 仍可随时切回**：在设置中显式选择 Codex CLI 即可使用自己的订阅，遇到兼容问题有稳定回退路径。
+- **安装包已内置并自检执行外壳**：CI 构建时会实际运行 `opencode --version`；Windows x64 使用兼容老 CPU 的 baseline 版本。
+
+完整对比数据和变更原因见 [更新日志](CHANGELOG.md#0180---2026-08-06)。
 
 ---
 
@@ -59,8 +63,8 @@ https://bid-dog.vercel.app/demo.html?demo=1
 
 | 系统 | 安装包 | 说明 |
 |---|---|---|
-| macOS | [`bid-dog_0.17.9_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.9/bid-dog_0.17.9_aarch64.dmg) | Apple Silicon（M 系列） |
-| Windows | [`bid-dog_0.17.9_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.17.9/bid-dog_0.17.9_x64-setup.exe) | Windows 10 / 11 64 位 |
+| macOS | [`bid-dog_0.18.0_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.0/bid-dog_0.18.0_aarch64.dmg) | Apple Silicon（M 系列） |
+| Windows | [`bid-dog_0.18.0_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.0/bid-dog_0.18.0_x64-setup.exe) | Windows 10 / 11 64 位 |
 
 安装包目前未做商业代码签名，两个系统各有一次放行动作，做完就再也不会提示：
 
@@ -113,11 +117,11 @@ https://bid-dog.vercel.app/demo.html?demo=1
 
 | 你用的 | 花谁的额度 | 什么时候用 |
 |---|---|---|
-| **发给你的那串 Key**（标准 / 极速两种模式） | 发放方的 token 套餐 | 默认路径。不用注册、不用登录，装完粘上就能产真实标书 |
+| **发给你的那串 Key**（标准 / 极速两种模式） | 发放方的 token 套餐 | 默认由安装包内置的 OpenCode 执行。不用注册、不用登录，装完粘上就能产真实标书 |
 | **你自己的 Claude Code / Codex CLI 订阅** | 你自己的订阅 | 你本来就有订阅，想用自己的模型跑 |
 | 本机已登录的 SoWork | 你本机那个账号 | 公司内部已经铺了 SoWork |
 
-用发给你的 Key 时不消耗你自己的订阅额度，也不动你本机原有的 CLI 登录态和配置：它用的是应用数据目录里另一套独立配置。
+用发给你的 Key 时不消耗你自己的订阅额度，也不动你本机原有的 CLI 登录态和配置：内置 OpenCode 只作为本地执行外壳，使用的是应用数据目录里另一套独立配置。
 
 Key 只存在本机的引擎配置里，页面不回显；执行外壳拿到的是一串本机随机口令，真 Key 只在引擎进程内用。任务文件、产物、素材都在「文稿/中标狗」，删掉应用文件还在。
 
@@ -136,6 +140,7 @@ Tauri 壳(Rust + Web)  ──拉起/守护──▶  本地引擎(FastAPI, PyIns
 - **桌面壳**：Tauri v2。负责窗口、拖拽、拉起并守护引擎、调系统默认应用直接打开产物。
 - **本地引擎 sidecar**：FastAPI 用 PyInstaller 打成单文件二进制随安装包分发，客户机上没有 Python 也能跑；协议翻译、任务编排、质检调度都在这一层。
 - **事件流**：任务状态由引擎按 SSE 推，前端只渲染。事件流是 async 生成器，不占死线程；页面重新可见时补一次同步再重挂流，后台标签被挂起也不假死。
+- **执行外壳**：v0.18.0 默认内置 OpenCode 1.18.13；Codex CLI 保留为显式可选回退。
 - **技能包**：招投标流程 + 出件脚本（建 Word、格式核验、成品质检）。质检是确定性脚本、零 token，不依赖模型自觉——模型没跑，引擎也会在完成后补审计并按需重出 Word。
 
 目录：`app/` 桌面壳 · `server/` 本地引擎 · `site/` 官网 · `docs/` 文档。构建见 [BUILD.md](BUILD.md)。

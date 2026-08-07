@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTM
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-ENGINE_VERSION = '0.17.9'
+ENGINE_VERSION = '0.18.0'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
@@ -449,12 +449,19 @@ def agent_env(eng=None):
         env.update(shell_env_snapshot())          # 终端里有、App 里没有的,以终端为准
     paths = [p for p in EXTRA_BIN if os.path.isdir(p)]
     env['PATH'] = os.pathsep.join(paths + [env.get('PATH', ''), os.environ.get('PATH', '')])
-    if (eng.get('kind') or '') == 's2':
-        try: env.update(s2_env(eng))                           # S2 引擎:换成我们自己的 CODEX_HOME 与 Key
-        except Exception: pass
-    if (eng.get('kind') or '') == 'opencode':
-        try: env.update(opencode_env(eng))                     # opencode 外壳:隔离 XDG + 直通端点口令
-        except Exception: pass
+    # 「自动(默认)」= s2 = OpenCode,和显式选 opencode 走同一套环境:隔离 XDG + 生成 provider 配置
+    # + 直通端点口令。**这里漏一个 kind,外壳就拿不到我们的 provider**,表现是它报
+    # 「UnknownError / Unexpected server error」——完全看不出是配置没送到(真机踩过)。
+    if (eng.get('kind') or '') in ('s2', 'opencode'):
+        # 出错不再静默吞掉:配置没送到时 opencode 只会甩一句
+        # 「UnknownError / Unexpected server error」,完全看不出是我们这边没生成配置。
+        # 把真实原因写进环境变量,报错翻译层据此说人话(见 real_agent / agent_test)。
+        try: env.update(opencode_env(eng))
+        except Exception as e:
+            env['BIDDOG_SHELL_CONF_ERR'] = '生成 OpenCode 配置失败:%s' % e
+    # 显式选择 codex = 使用用户自己的 Codex CLI 订阅与登录态。这里不能注入中标狗生成的
+    # CODEX_HOME / S2 Key，否则「切回 Codex」表面上切了引擎，实际仍在花发放方的额度，
+    # 还会覆盖用户原有的 ~/.codex 配置。
     for ln in (eng.get('env') or '').splitlines():
         ln = ln.strip()
         if not ln or ln.startswith('#') or '=' not in ln: continue
@@ -850,6 +857,16 @@ def halt(job, why):
                'step': int(prev.get('step') or 0), 'total': int(prev.get('total') or 12)})
 
 def real_agent(job, cmd):
+    eng = read_json(conf_path(), {}).get('engine') or {}
+    env = agent_env(eng)
+    conf_err = env.pop('BIDDOG_SHELL_CONF_ERR', None)
+    if conf_err:
+        emit(job, {'type': 'error',
+                   'text': '%s。这是本机配置问题，不是网关或 Key 的问题；多为数据目录不可写。' % conf_err,
+                   'actions': [{'act': 'open_engine', 'label': '检查生成引擎设置'}]})
+        halt(job, '已停止（执行外壳配置失败）')
+        return
+    env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS'] = '0'  # 增补 PATH/附加环境变量 + -p 模式等后台任务跑完
     RUNNING.add(os.path.basename(job))
     log = open(os.path.join(job, 'run.log'), 'a', encoding='utf-8')
     emit(job, {'type': 'message', 'role': 'agent', 'text': '真实 agent 已启动,进度见事件流。'})
@@ -891,8 +908,6 @@ def real_agent(job, cmd):
     threading.Thread(target=watcher, daemon=True).start()
     rc = -1; spawn_err = ''; spawn_actions = None
     base = os.path.basename(job)
-    env = {**agent_env(read_json(conf_path(), {}).get('engine') or {}),
-           'CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS': '0'}  # 增补 PATH/附加环境变量 + -p 模式等后台任务跑完
     proc = None
     try:
         # 后台跑:stdin 关掉(CLI 不会等交互/弹窗)、新会话(不占当前终端会话,少被 macOS 当前台程序)
@@ -1203,15 +1218,22 @@ def config_agent_cmd():
                 '--thinking', (eng.get('thinking') or 'off'),
                 '--timeout', str(int(eng.get('timeout') or 1800)),
                 '--message', prompt]
-    if kind == 'opencode':
-        # opencode 原生 OpenAI 兼容:baseURL 指本机直通端点即可,零协议翻译。--auto=非交互放行
+    if kind in ('s2', 'opencode'):
+        # 「自动(默认)」= OpenCode。拿真实招标文件做过同模型、同素材、同提示词的对比,
+        # 它在唯一严格可比的那组里全面胜出:偏离表 112 行 vs 36 行(应答密度 6.2x vs 2.0x)、
+        # 出了 codex 漏掉的《评标索引》、废标风险清单 19.7KB vs 0.7KB、
+        # 三份里唯一质检判「通过」的,而模板化命中同为 0(是写透了不是灌水)。
+        # 结构性原因:它有原生 task 子 agent,每章一个子 agent 独立写、各自有完整上下文预算;
+        # codex 在单一上下文里串行写完六章,越往后预算越紧(实测它第 1 章只有 1320 字)。
+        #
+        # opencode 原生 OpenAI 兼容:baseURL 指本机直通端点即可,零协议翻译。--auto=非交互放行。
+        # --dir {out}:把工作目录钉死在任务目录(它默认会向上找"项目根",可能钉错层)。
         up = s2_conf(conf)
-        # --dir {out}:把 opencode 的工作目录钉死在任务目录(它默认会向上找"项目根",可能钉错层)
         return [resolve_cli('opencode', eng) or 'opencode', 'run', '--auto', '--dir', '{out}',
                 '-m', 'biddog-s2/' + up['model'], prompt]
+    # codex:保留为显式可选项。切换到 OpenCode 只有一单样本支撑,客户真撞上问题要能一键切回来。
     # --skip-git-repo-check:任务目录不是 git 仓库也能跑
     # --dangerously-bypass-approvals-and-sandbox:非交互执行,免"信任目录/审批"卡住(本机自有目录)
-    # s2 与 codex 共用同一个 CLI,区别只在环境变量(CODEX_HOME 指向我们生成的配置),见 s2_env
     return [resolve_cli('codex', eng) or 'codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', prompt]
 
 @app.get('/v1/agent')
@@ -1284,26 +1306,11 @@ def agent_test():
         cli = resolve_cli('codex', eng)
         if not cli: return {'ok': False, 'error': '没找到 codex 命令,请先安装 Codex CLI 并登录'}
         cmd = [cli, 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', probe]
-    elif kind == 'opencode':
-        up = s2_conf(conf)
-        if not up['api_key']:
-            return {'ok': False, 'error': '还没填 S2 API Key(和「S2 模型」引擎共用同一串 Key)。'}
-        try:
-            _openai_req(up['base_url'], up['api_key'], '/models', timeout=20, verify=up['verify_ssl'])
-        except urllib.error.HTTPError as e:
-            msg = {401: 'Key 不对或已停用', 403: 'Key 没有权限', 429: '额度/频率超限'}.get(e.code, 'HTTP %s' % e.code)
-            return {'ok': False, 'error': '连不上 S2 网关:%s。地址:%s' % (msg, up['base_url'])}
-        except Exception as e:
-            return {'ok': False, 'error': '连不上 S2 网关:%s' % net_hint(e)}
-        cli = resolve_cli('opencode', eng)
-        if not cli:
-            return {'ok': False, 'need_provision': True,
-                    'error': 'S2 网关是通的,只差 OpenCode 外壳。点「一键安装执行外壳」(约 60MB,解压后约 170MB);'
-                             '或手动:npm i -g opencode-ai。装完都不用登录。'}
-        cmd = [cli, 'run', '--auto', '-m', 'biddog-s2/' + up['model'], probe]
-    elif kind == 's2':
-        # 三层分开验:①Key/网关能不能通 ②Codex CLI 在不在 ③整条链路(Codex→中转→S2)能不能跑通。
+    elif kind in ('s2', 'opencode'):
+        # 三层分开验:①Key/网关能不能通 ②执行外壳在不在 ③整条链路(外壳→中转→网关)能不能跑通。
         # 分层报错是为了让客户自己看得懂卡在哪一层,而不是只看到一句"异常退出"。
+        # s2 与 opencode 现在是同一个引擎(「自动(默认)」= OpenCode),自检合并成一条,
+        # 免得两处分头维护、迟早说出两套不一样的话。
         up = s2_conf(conf)
         if not up['api_key']:
             return {'ok': False, 'error': '还没填 API Key——现在新建任务会跑内置演示流程(样例稿)。'
@@ -1320,11 +1327,13 @@ def agent_test():
             return {'ok': False, 'error': '连不上 S2 网关:%s。地址:%s' % (msg, up['base_url'])}
         except Exception as e:
             return {'ok': False, 'error': '连不上 S2 网关:%s' % net_hint(e)}
-        cli = resolve_cli('codex', eng)
+        cli = resolve_cli('opencode', eng)
         if not cli:
             return {'ok': False, 'need_provision': True,
-                    'error': 'S2 网关本身是通的,只差执行外壳。点下面的「一键安装执行外壳」即可(约 130MB,不需要登录、不消耗任何订阅额度);或手动 npm i -g @openai/codex。'}
-        cmd = [cli, 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', probe]
+                    'error': 'S2 网关本身是通的,只差执行外壳。点下面的「一键安装执行外壳」即可'
+                             '(压缩约 60MB、解压约 170MB,不需要登录、不消耗任何订阅额度);'
+                             '或手动 npm i -g opencode-ai。'}
+        cmd = [cli, 'run', '--auto', '-m', 'biddog-s2/' + up['model'], probe]
     else:   # custom / env:把命令里的占位符换成临时目录,只验证能否跑起来
         raw = os.environ.get('AGENT_CMD') or eng.get('cmd', '')
         if not raw: return {'ok': False, 'error': '还没填自定义命令'}
@@ -1334,11 +1343,16 @@ def agent_test():
         open(os.path.join(tmp, 'probe.md'), 'w', encoding='utf-8').write('# 连通性测试\n')
         cmd = rep(raw) if isinstance(raw, str) else [rep(a) for a in raw]
     cmd = login_shell_wrap(cmd, eng)
+    run_env = agent_env(eng)
+    conf_err = run_env.pop('BIDDOG_SHELL_CONF_ERR', None)
+    if conf_err:
+        return {'ok': False, 'error': '%s。这是本机配置问题,不是网关或 Key 的问题;'
+                                      '多为数据目录不可写。' % conf_err}
     t0 = time.time()
     try:
         r = subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True,
                            stdin=subprocess.DEVNULL, timeout=int(eng.get('test_timeout') or 120),
-                           env=agent_env(eng), cwd=DATA, **DETACH)
+                           env=run_env, cwd=DATA, **DETACH)
     except subprocess.TimeoutExpired:
         return {'ok': False, 'error': '测试超时(超过 2 分钟没有返回)。多为网关不通或 CLI 在等待登录/授权。'}
     except FileNotFoundError as e:
@@ -1351,6 +1365,9 @@ def agent_test():
         return {'ok': True, 'latency_ms': ms, 'reply': out[-300:] or '(无输出)'}
     low = out.lower()
     hint = ''
+    if 'unknownerror' in low.replace(' ', '') and 'relay' not in low:
+        hint = ('（执行外壳报了一个它自己也说不清的错。最常见的原因是它连不上本机中转层——'
+                '请确认应用没有被安全软件拦截本机回环连接，然后重试。）')
     if 'thinking' in low and ('not supported' in low or 'unsupported' in low):
         hint = '该模型不支持所选思考等级,请把「思考等级」改成 off。'
     elif any(k in low for k in ('connection refused', 'gateway', 'econnrefused', 'timed out', 'tls', 'certificate')):
@@ -2557,11 +2574,13 @@ def _provision_codex(which='codex'):
 
 @app.post('/v1/agent/provision')
 async def agent_provision(req: Request):
-    """一键安装执行外壳到数据目录(codex 约 130MB / opencode 压缩约 60MB、解压约 170MB)。不碰系统目录,免管理员权限。
+    """一键安装执行外壳到数据目录(默认 OpenCode:压缩约 60MB、解压约 170MB;codex 约 130MB)。不碰系统目录,免管理员权限。
     已有可用外壳(内置或此前装过)则直接返回;文件坏了(跑不动 --version)会自动删掉重下。"""
-    try: which = ((await req.json()).get('which') or 'codex')
-    except Exception: which = 'codex'
-    if which not in ('codex', 'opencode'): which = 'codex'
+    # 默认装 OpenCode:「自动(默认)」引擎现在就是它。前端不传 which 时不该再去装 codex ——
+    # 那样客户点完「一键安装执行外壳」,装回来的还是个用不上的壳,自检照样报缺外壳。
+    try: which = ((await req.json()).get('which') or 'opencode')
+    except Exception: which = 'opencode'
+    if which not in ('codex', 'opencode'): which = 'opencode'
     if PROV['state'] == 'running': return PROV
     b = bundled_cli('opencode-cli' if which == 'opencode' else 'codex-cli')
     if b:
@@ -2957,8 +2976,12 @@ def health():
             'version': ENGINE_VERSION, 'author': AUTHOR, 'features': ENGINE_FEATURES}
 
 def migrate_conf():
-    """存量配置迁移:界面撤下 opencode 选项后,存过 kind=opencode 的用户会遇到空白下拉+裸值摘要。
-    opencode 与 s2 本就共用 Key/网关/模型字段 → 直接归并到 s2;未知 kind 一律落安全值。"""
+    """存量配置迁移。
+
+    `s2`(界面上的「自动(默认)」)现在就是 OpenCode —— 拿真实招标文件做过对比后转正的。
+    历史上存过 kind=opencode 的用户依旧归并到 s2:两者本就共用 Key/网关/模型字段,
+    而且现在连执行外壳都是同一个,留两个值只会让「当前生效的是哪个引擎」这件事更难说清。
+    未知 kind 一律落安全值。"""
     cp = os.path.join(DATA, 'config.json')
     conf = read_json(cp, None)
     if not conf: return

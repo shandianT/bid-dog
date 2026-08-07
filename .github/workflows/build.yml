@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -50,36 +50,65 @@ jobs:
             cp dist/bid-engine "../app/src-tauri/binaries/bid-engine-$TRIPLE"
           fi
           ls -la ../app/src-tauri/binaries/
-      - name: bundle Codex CLI (S2 引擎执行外壳,客户免装 Node/免登录)
+      - name: bundle OpenCode CLI (默认执行外壳,客户免装 Node/免登录)
         shell: bash
         working-directory: app
         run: |
-          # 版本与引擎 CODEX_PIN 保持一致:S2 中转按这个版本的 Responses 行为实测过
-          CODEX_PIN=0.146.0
+          # 版本与引擎 OPENCODE_PIN 保持一致,并**钉死**不跟随 latest ——
+          # 上游发版极频繁(npm 上万个版本),排队/并发编排正是 issue 最密集的区域,
+          # 跟随 latest 等于把客户机当测试环境。
+          OPENCODE_PIN=1.18.13
           TRIPLE=$(rustc -Vv | sed -n 's/^host: //p')
+          # ⚠ x64 一律打 **baseline** 变体:打包时不可能知道客户 CPU 支不支持 AVX2,
+          # 而标准版在老 CPU 上是**直接崩**,报错完全看不出是指令集的问题。
+          # 招投标客户里老工控机/老办公机不少,宁可慢一点也不能装上跑不起来。
+          # arm64 没有 baseline 变体(AVX2 是 x86 指令集,实测 npm 上三个 arm64 baseline 全 404)。
           if [ "$RUNNER_OS" = "Windows" ]; then
-            PKG=win32-x64; INNER="package/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
-            OUT="src-tauri/binaries/codex-cli-$TRIPLE.exe"
+            PKG=opencode-windows-x64-baseline
+            INNER="package/bin/opencode.exe"; OUT="src-tauri/binaries/opencode-cli-$TRIPLE.exe"
           else
-            PKG=darwin-arm64; INNER="package/vendor/aarch64-apple-darwin/bin/codex"
-            OUT="src-tauri/binaries/codex-cli-$TRIPLE"
+            PKG=opencode-darwin-arm64
+            INNER="package/bin/opencode"; OUT="src-tauri/binaries/opencode-cli-$TRIPLE"
           fi
-          curl -sSL --retry 3 "https://registry.npmjs.org/@openai/codex/-/codex-$CODEX_PIN-$PKG.tgz" -o codex.tgz
-          mkdir -p codex_x src-tauri/binaries
-          tar xzf codex.tgz -C codex_x "$INNER"
-          mv "codex_x/$INNER" "$OUT"
+          curl -sSL --retry 3 "https://registry.npmjs.org/$PKG/-/$PKG-$OPENCODE_PIN.tgz" -o oc.tgz
+          mkdir -p oc_x src-tauri/binaries
+          tar xzf oc.tgz -C oc_x "$INNER"
+          mv "oc_x/$INNER" "$OUT"
           chmod +x "$OUT" 2>/dev/null || true
-          rm -rf codex.tgz codex_x
+          rm -rf oc.tgz oc_x
+          "$OUT" --version || { echo "内置外壳跑不起来,不要发这个包"; exit 1; }
           ls -la src-tauri/binaries/
       - name: install deps & icons
         working-directory: app
         run: |
-          npm install
+          npm ci
           npx tauri icon app-icon.png
       - name: build installers
         working-directory: app
         shell: bash
-        run: npm run build ${{ matrix.build_args }}
+        run: |
+          # 没有商业证书时，macOS 也必须做 ad-hoc 签名：既保证整个 .app 资源封装有效，
+          # 也会重签 npm 上游自带无效 linker signature 的 OpenCode sidecar。
+          # 这不是 Apple Developer 签名/公证，用户仍需按 README 首次放行。
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export APPLE_SIGNING_IDENTITY="-"
+          fi
+          npm run build ${{ matrix.build_args }}
+      - name: verify macOS DMG signature and bundled executables
+        if: runner.os == 'macOS'
+        working-directory: app
+        shell: bash
+        run: |
+          dmg_path=$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)
+          mount_dir="$RUNNER_TEMP/bid-dog-dmg"
+          mkdir -p "$mount_dir"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$dmg_path"
+          cleanup() { hdiutil detach "$mount_dir" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          app_path=$(find "$mount_dir" -maxdepth 1 -name '*.app' -print -quit)
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          "$app_path/Contents/MacOS/opencode-cli" --version
+          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.18.0"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -88,7 +117,10 @@ jobs:
 
   release:
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -104,26 +136,33 @@ jobs:
           ls -la out
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: desktop-v0.17.9
-          name: 中标狗桌面版 v0.17.9
+          tag_name: desktop-v0.18.0
+          name: 中标狗桌面版 v0.18.0
           # 不再标 prerelease:标了的话 /releases/latest 与 /releases/latest/download/… 全部 404,
           # 官网和 README 的「下载最新版」就没法用一条稳定链接
           prerelease: false
           body: |
             中标狗桌面应用安装包(自动构建,未签名)。作者:FDE-家涛。
-            官网(成品 Word 页面):
-            https://bid-dog.vercel.app
+            官网(含在线体验、成品 Word 页面):https://bid-dog.vercel.app
 
-            在线体验(不用装):
-            https://bid-dog.vercel.app/demo.html?demo=1
-
-            - macOS Apple Silicon(M 系列): `bid-dog_0.17.9_aarch64.dmg`
-            - Windows: `bid-dog_0.17.9_x64-setup.exe`
+            - macOS Apple Silicon(M 系列): `bid-dog_0.18.0_aarch64.dmg`
+            - Windows: `bid-dog_0.18.0_x64-setup.exe`
             -(需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可)
 
             **macOS 提示「已损坏,无法打开」?** 不是文件坏了,是系统对未签名应用的拦截。把应用拖入「应用程序」后,终端执行:
             `xattr -cr /Applications/中标狗.app` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。详见仓库 docs/Mac安装说明.md。
             Windows SmartScreen 提示时点「更多信息 → 仍要运行」。
+
+            v0.18.0:
+            - **默认引擎换成 OpenCode**。同一份真实招标文件、同素材、同模型、同提示词跑出来的结论:
+              偏离表 112 行 vs 36 行(应答密度 6.2x vs 2.0x)、出了 codex 漏掉的《评标索引》
+              (评委按它逐项翻,缺项=那项默认没响应)、废标风险清单 19.7KB vs 0.7KB、
+              三份里唯一质检判「通过」,而模板化命中同为 0——字多是写透了不是灌水。
+              结构性原因:opencode 有原生子 agent,每章一个独立写、各有完整上下文预算;
+              codex 单上下文串行写六章,越往后预算越紧(它第 1 章只有 1320 字)。
+              **codex 保留为显式可选项**,一单样本还不够,撞上问题能一键切回来。
+              安装包内置 OpenCode,x64 一律打 baseline 变体(打包时不知道客户 CPU 支不支持 AVX2,
+              标准版在老 CPU 上直接崩),CI 打完当场验证跑得起来才发包。
 
             v0.17.9:
             - **参考资料真的送到 agent 手上**(第五例「界面承诺、链路没接」)。用户传一份去年的

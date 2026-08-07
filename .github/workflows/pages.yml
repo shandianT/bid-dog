@@ -29,13 +29,6 @@ jobs:
 
       - name: configure pages
         uses: actions/configure-pages@v5
-        with:
-          # enablement 需要比 GITHUB_TOKEN 更高的权限:
-          # 配了 PAGES_PAT(repo scope)就全自动开启 Pages;
-          # 没配就回落到 GITHUB_TOKEN —— 此时需先在
-          # Settings → Pages → Source 手动选一次 "GitHub Actions"
-          token: ${{ secrets.PAGES_PAT || github.token }}
-          enablement: true
 
       - name: upload site/
         uses: actions/upload-pages-artifact@v3

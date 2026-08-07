@@ -515,6 +515,8 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       <option value="s2">自动(默认)</option>
       <option value="mock">内置演示流程</option>
       <option value="sowork">SoWork(商汤)</option>
+      <option value="claude">Claude Code</option>
+      <option value="codex">Codex CLI</option>
       <option value="custom">自定义命令</option>
     </select>
     <button class="btn gy" onclick="testAgent()">测试连接</button>
@@ -1626,16 +1628,16 @@ function onKindChange(){
   // 换了引擎,上一个引擎的 CLI 路径与就绪状态不再适用:按新引擎重取(引擎侧也有同族校验兜底)
   const a = S.lastAgent;
   if(a){
-    const key0 = (k==='sowork') ? 'sowork' : (k==='s2' ? 'codex' : k);
+    const key0 = (k==='sowork') ? 'sowork' : (k==='s2' ? 'opencode' : k);
     const found = (a.paths||{})[key0] || '';
     el('agCli').value = '';
     el('agCliHint').textContent = found ? '✓ 已自动检测到:'+found : '';
     el('agCliHint').style.color = found ? 'var(--green)' : 'var(--dim)';
     if(k==='s2'){
-      const bundled = a.codex_bundled;
-      const okk = (a.available||{}).codex;
+      const bundled = a.opencode_bundled;
+      const okk = (a.available||{}).opencode;
       el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
-        : (okk ? '✓ 执行外壳已就绪:'+((a.paths||{}).codex||'')
+        : (okk ? '✓ 执行外壳已就绪:'+((a.paths||{}).opencode||'')
                : '✗ 缺执行外壳(点右侧一键安装,装完不用登录)');
       el('agS2ShellSt').style.color = (bundled||okk) ? 'var(--green)' : 'var(--warn, #c77b00)';
       el('agS2Install').style.display = (bundled||okk) ? 'none' : 'inline-block';
@@ -1669,13 +1671,15 @@ async function loadS2Models(force){
   return null;
 }
 async function provisionShell(){
-  const which = 'codex';
+  // 「自动(默认)」引擎已转正为 OpenCode,这里要装的就是它。
+  // 之前写死 'codex' 会出现:客户点完「一键安装执行外壳」,装回来一个用不上的壳,自检照样报缺外壳。
+  const which = 'opencode';
   const st = el('agS2ShellSt'), btn = el('agS2Install');
   btn.disabled = true; btn.textContent = '安装中…';
   try{
     let r = await api('/v1/agent/provision', {method:'POST', headers:{'Content-Type':'application/json'},
                        body: JSON.stringify({which})});
-    // 轮询进度:下载约 130MB,慢网络可能要几分钟,把百分比一直报给用户
+    // 轮询进度:OpenCode 压缩包最大约 60MB,解压约 170MB;慢网络可能要几分钟,把百分比一直报给用户
     while(r.state === 'running'){
       st.textContent = '⇣ ' + (r.note||'下载中…') + ' ' + (r.pct||0) + '%';
       st.style.color = 'var(--sub)';
@@ -1710,7 +1714,8 @@ async function loadAgent(){
     if(!el('agKind').value) el('agKind').value = (a.s2_key_set||a.s2_borrowed) ? 's2' : 'mock';
     el('agMode').value = a.mode || 'agents';
     const kind0 = (a.kind === 'env' ? 'mock' : a.kind) || 'mock';
-    const found = (a.paths || {})[kind0 === 'sowork' ? 'sowork' : kind0] || '';
+    const cliKind = kind0 === 'sowork' ? 'sowork' : (kind0 === 's2' ? 'opencode' : kind0);
+    const found = (a.paths || {})[cliKind] || '';
     // 自动找到就直接填进来:用户看得见,保存后即固定;路径失效时引擎仍会回落自动查找
     el('agCli').value = a.cli_path || found || '';
     el('agCliHint').textContent = a.cli_path
@@ -1732,14 +1737,14 @@ async function loadAgent(){
     el('agS2Model').placeholder = '生成用哪个模型(当前 '+(a.s2_model_effective||d.model||'')+',点这里换)';
     if((a.s2_key_set||a.s2_borrowed) && !S.s2Models) loadS2Models(0);
     // 执行外壳状态:内置(安装包自带)> 已装(路径)> 缺 → 给一键安装按钮
-    const bundled = a.codex_bundled;
-    const cxOk = a.available && a.available.codex;
+    const bundled = a.opencode_bundled;
+    const cxOk = a.available && a.available.opencode;
     el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
-      : (cxOk ? '✓ 执行外壳已就绪:'+((a.paths||{}).codex||'')
+      : (cxOk ? '✓ 执行外壳已就绪:'+((a.paths||{}).opencode||'')
               : '✗ 缺执行外壳(负责跑命令写文件,点右侧一键安装,装完不用登录)');
     el('agS2ShellSt').style.color = (bundled || cxOk) ? 'var(--green)' : 'var(--warn, #c77b00)';
     el('agS2Install').style.display = (bundled || cxOk) ? 'none' : 'inline-block';
-    el('agS2Install').textContent = '一键安装执行外壳(约 130MB)';
+    el('agS2Install').textContent = '一键安装执行外壳(下载约 60MB)';
     onKindChange();
     // 折叠摘要:平时只看这一行,展开才见全部选项
     const engName = ({mock:'内置演示流程',s2:'自动',sowork:'SoWork(商汤)',claude:'Claude Code',codex:'Codex CLI',custom:'自定义命令'})[a.kind==='env'?'custom':a.kind] || a.kind;

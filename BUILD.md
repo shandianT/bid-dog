@@ -1,4 +1,4 @@
-# 标书助手 · 出安装包指南(Mac / Windows)
+# 中标狗 · 出安装包指南（macOS / Windows）
 
 ## 拿到安装包的三条路(按省事程度排序)
 1. **GitHub Actions(推荐,不需要 Windows 机器)**:把本目录推到一个 GitHub 仓库(.github/workflows/build.yml 已备好),Actions 自动在 macOS 与 Windows 云机上构建,Artifacts 里直接下载 .dmg(Apple Silicon) 与 -setup.exe。
@@ -12,7 +12,7 @@
 
 ## 先跑起来(开发态)
 ```bash
-pip install fastapi uvicorn python-multipart
+pip install fastapi uvicorn python-multipart python-docx certifi
 python3 server/engine_v1.py        # 127.0.0.1:8080,同时也直接托管了前端
 ```
 浏览器开 http://127.0.0.1:8080 即是完整功能:拖招标文件建任务 → SSE 实时进度 → agent 提问点按钮回答 → 交付物下载 → 模型接入可添加并测通。
@@ -33,13 +33,17 @@ python3 server/engine_v1.py        # 127.0.0.1:8080,同时也直接托管了前�
 ## 构建
 ```bash
 cd app
-npm install
+npm ci
 npx tauri icon app-icon.png   # 由 app-icon.png 生成全套图标(icns/ico/png)
-npm run build                  # = tauri build
+# macOS：ad-hoc 签名保证 .app 与两个 sidecar 的本地签名完整（不等于商业签名/公证）
+APPLE_SIGNING_IDENTITY=- npm run build -- --bundles dmg
+
+# Windows：在 Windows 机器上执行
+npm run build -- --bundles nsis
 ```
 
 产物位置(app/src-tauri/target/release/bundle/):
-- macOS:dmg/标书助手_0.9.0_aarch64.dmg(在 Mac 上构建)
+- macOS:dmg/中标狗_0.18.0_aarch64.dmg(在 Mac 上构建)
 - Windows:nsis/*-setup.exe(在 Windows 上构建)
 
 注意:Tauri 不支持跨平台交叉编译——Mac 包在 Mac 上打,Windows 包在 Windows 上打(或用 GitHub Actions 双平台流水线,tauri-action 官方模板即可)。
@@ -50,7 +54,7 @@ npm run dev   # 带热重载起桌面窗口
 ```
 
 ## 签名(正式分发前)
-- macOS:Apple Developer 证书 + 公证(tauri.conf.json 的 bundle.macOS 段配 signingIdentity)
+- macOS:当前 CI 使用 `APPLE_SIGNING_IDENTITY=-` 做 ad-hoc 签名，确保应用和 sidecar 的签名结构有效，但仍未获得系统信任。正式分发应换成 Apple Developer 证书 + 公证(`tauri.conf.json` 的 `bundle.macOS.signingIdentity` 或 CI 证书环境变量)
 - Windows:代码签名证书(bundle.windows.certificateThumbprint),否则 SmartScreen 会拦
 
 ## 把 mock 换成真实 agent(只动协作层,UI 零改动)
@@ -68,11 +72,13 @@ npm run dev   # 带热重载起桌面窗口
 - 前端启动先等内置引擎就绪(约 8 秒),等不到才降级演示模式,之后探测到引擎会自动切回真实模式。
 本机手动构建同理:先按上面 pyinstaller 命令产出二进制放进 `app/src-tauri/binaries/<名字>-<host triple>[.exe]` 再 `npm run build`;不放 sidecar 也能构建,应用为演示模式。
 
-**v0.12.1 起 externalBin 还声明了 `binaries/codex-cli`(S2 引擎执行外壳)**:CI 会从 npm registry 下载
-`@openai/codex@0.146.0-<平台>` 的 tgz,抽出 `package/vendor/<triple>/bin/codex[.exe]` 重命名为
-`codex-cli-<host triple>[.exe]` 放进 binaries/(见 build.yml「bundle Codex CLI」步骤)。本机手动构建安装包时
-需照做一次,否则 tauri bundle 会因缺 externalBin 文件报错;只跑 `tauri dev` 不受影响。
-版本钉 0.146.0(与引擎 CODEX_PIN 一致,升级前先跑全量回归)。Codex 为 Apache-2.0 许可,可随包分发。
+**v0.18.0 起 externalBin 默认声明 `binaries/opencode-cli`（S2 引擎执行外壳）**：CI 会从 npm registry 下载
+OpenCode 1.18.13 对应平台包，抽出 `package/bin/opencode[.exe]`，重命名为
+`opencode-cli-<host triple>[.exe]` 放进 `binaries/`（见 `build.yml` 的「bundle OpenCode CLI」步骤）。
+Windows x64 固定使用 `opencode-windows-x64-baseline`，兼容不支持 AVX2 的旧 CPU；macOS 使用
+`opencode-darwin-arm64`。CI 会在打包前运行 `--version`，外壳不能执行就立即失败，不发布安装包。
+本机手动构建安装包时也需按工作流准备该 sidecar，否则 Tauri 会因缺少 `externalBin` 文件报错；
+只跑 `tauri dev` 不受影响。版本必须与 `server/engine_v1.py` 的 `OPENCODE_PIN` 保持一致。
 真实 agent 生成(可选,没配任何 Key 时引擎走内置 mock 演示流程):见上文「先跑起来(开发态)」里的两条路。
 
 ## 官网(site/)
