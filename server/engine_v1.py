@@ -7,19 +7,19 @@
 真实 agent:环境变量 AGENT_CMD 命令模板(占位符 {tender}/{out}/{materials}),不配则跑内置 mock 流程。
 打包:pyinstaller -F engine_v1.py → 作为 Tauri sidecar 随安装包分发(见 BUILD.md)。
 """
-import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error
+import os, re, sys, ssl, json, glob, time, signal, hashlib, secrets, base64, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error, urllib.parse
 from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-ENGINE_VERSION = '0.18.0'
+ENGINE_VERSION = '0.18.1'
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
                    's2_engine', 'responses_relay', 'codex_bundled', 'agent_provision', 'preset_config',
-                   'quality_gate', 'job_start', 'multi_file_job', 'models_cache', 'async_sse', 's2_quick_setup',
+                   'quality_gate', 'job_start', 'job_resume', 'multi_file_job', 'models_cache', 'async_sse', 's2_quick_setup',
                    'opencode_engine', 'relay_chat_passthrough', 'opencode_bundled', 'dual_shell_provision',
                    'worklog_stream', 'stage_eta']
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -844,6 +844,283 @@ def skill_evidence(job):
     if not log: why = '没有拿到运行日志,无法确认(agent 可能没有输出)'
     return {'ok': False, 'hits': [], 'why': why}
 
+# ==================== OpenCode server 模式 ====================
+# 以前是 `opencode run --auto`:喂一条 prompt、等进程死,中间什么都看不见、停不掉、崩了从头来。
+# server 模式把这三件事都解开了。以下端点名与请求体全部是从 1.18.13 的 /doc 实拉后跑通的,
+# 调研资料里的 `/session/{id}/prompt_async` 在这个版本根本不存在,照着写会全错;
+# `/session/{id}/abort` 倒是有(无 /api 前缀),但我们用 `/api/session/{id}/interrupt`。
+OC = {'proc': None, 'port': 0, 'base': '', 'pw': ''}     # 常驻 server 句柄
+OC_LOCK = threading.Lock()
+
+def _free_port():
+    s = socket.socket(); s.bind(('127.0.0.1', 0)); p = s.getsockname()[1]; s.close(); return p
+
+def oc_auth():
+    """server 的访问凭证。不设密码时 opencode 自己会警告 `server is unsecured` ——
+    那不是空话:这个 server 的 bash 与 edit 是全放行的,本机任何一个进程只要
+    POST 一下就能以当前用户身份执行任意命令。所以每次起 server 现生成一把随机口令。
+    实测认证方式是 HTTP Basic,**用户名必须正好是 opencode**(试过 x/admin/空,全 401),
+    SSE 事件流同样要带。"""
+    if not OC['pw']: return {}
+    tok = base64.b64encode(('opencode:' + OC['pw']).encode()).decode()
+    return {'Authorization': 'Basic ' + tok}
+
+def oc_api(path, data=None, timeout=60, method=None):
+    """打 opencode server。返回 (status, 解包后的 body)。它的响应统一裹在 data 里。"""
+    if not OC['base']: return 0, None
+    hdr = {'Content-Type': 'application/json'}; hdr.update(oc_auth())
+    req = urllib.request.Request(
+        OC['base'] + path, data=json.dumps(data).encode() if data is not None else None,
+        headers=hdr, method=method or ('POST' if data is not None else 'GET'))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read().decode('utf-8', 'ignore')
+            out = json.loads(body) if body.strip() else None
+            if isinstance(out, dict) and 'data' in out and len(out) <= 2: out = out['data']
+            return r.status, out
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode('utf-8', 'ignore')[:400]
+    except Exception as e:
+        return -1, str(e)[:200]
+
+def oc_model(conf=None):
+    up = s2_conf(conf or read_json(conf_path(), {}))
+    return {'providerID': 'biddog-s2', 'modelID': up['model']}
+
+def oc_serve(eng=None):
+    """确保常驻 opencode server 活着,返回 base url;起不来返回 ''(上层回落 CLI 模式)。
+
+    **healthy 不等于能用**:第一次接这个模式时踩过 —— 环境变量没传进去,
+    /global/health 照样返回 healthy,真正调模型才 401,而 opencode 把它包成一句
+    `UnknownError / Unexpected server error`,完全看不出是 Key 没送到。
+    所以起完必须真调一次模型探活。"""
+    with OC_LOCK:
+        if OC['proc'] and OC['proc'].poll() is None and OC['base']:
+            return OC['base']
+        eng = eng if eng is not None else (read_json(conf_path(), {}).get('engine') or {})
+        cli = resolve_cli('opencode', eng)
+        if not cli: return ''
+        port = _free_port()
+        env = agent_env(eng)
+        if env.get('BIDDOG_SHELL_CONF_ERR'): return ''
+        pw = secrets.token_urlsafe(24)
+        env['OPENCODE_SERVER_PASSWORD'] = pw
+        logf = open(os.path.join(DATA, 'opencode-server.log'), 'a', encoding='utf-8')
+        try:
+            p = subprocess.Popen([cli, 'serve', '--port', str(port), '--hostname', '127.0.0.1'],
+                                 stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
+                                 env=env, cwd=DATA, **DETACH)
+        except Exception:
+            return ''
+        OC.update({'proc': p, 'port': port, 'base': 'http://127.0.0.1:%d' % port, 'pw': pw})
+        for _ in range(60):
+            if p.poll() is not None: OC.update({'proc': None, 'base': '', 'pw': ''}); return ''
+            st, _b = oc_api('/global/health', timeout=3)
+            if st == 200: break
+            time.sleep(0.5)
+        else:
+            kill_tree(p); OC.update({'proc': None, 'base': '', 'pw': ''}); return ''
+        return OC['base']
+
+def oc_probe():
+    """真调一次模型确认整条链路通(healthy 骗不了这一步)。返回 (ok, 说明)。"""
+    st, ses = oc_api('/api/session', {'title': '连通性探活'}, timeout=30)
+    sid = (ses or {}).get('id') if isinstance(ses, dict) else None
+    if not sid: return False, '建不出会话(HTTP %s)' % st
+    oc_api('/api/session/%s/prompt' % sid, {'model': oc_model(), 'prompt': {'text': '只回两个字:可用'}},
+           timeout=90)
+    # 必须等它真的答完再看有没有报错。以前这里用 oc_busy 判,而 oc_busy 恒为 False,
+    # 于是一秒就往下走、在回复还没到的时候读消息、没看见 error 就宣布「通了」——
+    # Key 是错的也照样通过,这个探活等于白做。
+    for _ in range(90):
+        time.sleep(1)
+        if oc_turn(sid)[0]: break
+    st, ms = oc_api('/api/session/%s/message' % sid, timeout=30)
+    for m in (ms or []) if isinstance(ms, list) else []:
+        err = (m.get('error') or {}).get('message') or ''
+        if err:
+            if '401' in err or 'incorrect API key' in err:
+                return False, 'Key 没送到执行外壳或 Key 无效(原文:%s)' % err[:120]
+            return False, err[:160]
+    return True, ''
+
+# 一轮说完了的落定值。'tool-calls' 不在里面 —— 那是「这段话说完了,接着还要调工具」。
+OC_FINISH = {'stop', 'length', 'content-filter', 'content_filter',
+             'error', 'aborted', 'abort', 'canceled', 'cancelled'}
+OC_QUIET = 25      # 已 finish 且事件流再静这么多秒,才算整单收工
+OC_STALL = 900     # 事件流彻底没动静这么久又没 finish,当卡死处理,别干等三小时
+
+def oc_turn(sid):
+    """这一轮跑完了没有,返回 (done, 出错说明)。
+
+    **不要用 GET /session/status 判忙** —— 1.18.13 上它恒返回 `{}`。这不是猜:
+    真机连续 150 秒每 10 秒取一次,15 次全是空的。第一版 oc_run 就栽在这儿:
+    busy 恒为 False,8 秒空转直接宣布「跑完了、任务目录里没有生成任何交付物」,
+    而那会儿 agent 正在读素材、转招标文件,后面还有十来步要走。
+    schema 里那个 session.idle 事件也指望不上,这版**一次都不发**(实测整轮 0 次)。
+
+    真正能判的是消息列表:数组按时间**倒序**,[0] 就是最新一条 ——
+        finish=None          还在生成
+        finish='tool-calls'  这段说完了,后面还要调工具,没完
+        finish='stop'        这一轮真收工了
+    """
+    st, ms = oc_api('/api/session/%s/message' % sid, timeout=30)
+    if st != 200 or not isinstance(ms, list) or not ms:
+        return False, ''          # 取不到就当没跑完:宁可多等,也不能误判成「没产出」
+    top = ms[0]
+    if top.get('type') != 'assistant': return False, ''
+    err = ((top.get('error') or {}).get('message') or '') if isinstance(top.get('error'), dict) else ''
+    if err: return True, str(err)[:300]
+    return (top.get('finish') in OC_FINISH), ''
+
+def oc_session(job, directory):
+    """给任务建/取会话。会话 id 落进 任务.json —— 崩了、关窗了都能凭它续跑。"""
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    sid = meta.get('oc_session')
+    if sid:
+        st, s = oc_api('/api/session/%s' % sid, timeout=20)
+        if st == 200 and isinstance(s, dict) and s.get('id'): return sid
+    st, s = oc_api('/api/session?directory=%s' % urllib.parse.quote(directory),
+                   {'title': meta.get('name') or os.path.basename(job)}, timeout=30)
+    sid = (s or {}).get('id') if isinstance(s, dict) else None
+    if sid:
+        meta['oc_session'] = sid
+        write_json(os.path.join(job, '任务.json'), meta)
+    return sid
+
+def oc_send(sid, text, delivery='queue'):
+    """给会话投一条消息。**这个接口是异步的:0 秒返回 200,不等跑完。**
+
+    delivery 是 1.18.13 的原生字段:
+      queue = 排队,等当前这轮跑完再处理(实测第一条完整跑完、第二条随后被回应,两条都不丢)
+      steer = 立刻引导当前这轮
+    产品负责人定的「想到什么先记下来、下个环节带上」就是 queue。"""
+    st, b = oc_api('/api/session/%s/prompt' % sid,
+                   {'model': oc_model(), 'delivery': delivery, 'prompt': {'text': text}}, timeout=60)
+    return st in (200, 201, 202, 204), b
+
+def oc_interrupt(sid):
+    st, _ = oc_api('/api/session/%s/interrupt' % sid, {}, timeout=20)
+    return st in (200, 201, 202, 204)
+
+# 事件 → 人话。opencode 的事件类型很细,但用户要看的只有「它此刻在动哪个文件、跑什么命令」。
+_OC_TOOL_CN = {'read': '读', 'write': '写', 'edit': '改', 'bash': '执行', 'glob': '找文件',
+               'grep': '搜内容', 'task': '派子 agent', 'skill': '用技能', 'webfetch': '抓网页',
+               'todowrite': '记待办', 'question': '问你一个问题'}
+
+def _oc_line(ev):
+    """把一条 opencode 事件翻成一行台词;不值得显示的返回 None。"""
+    t = ev.get('type') or ''
+    p = ev.get('properties') or {}
+    if t.endswith('message.part.updated') or t == 'message.part.updated':
+        part = p.get('part') or {}
+        if part.get('type') != 'tool': return None
+        stt = (part.get('state') or {})
+        if stt.get('status') != 'running': return None
+        tool = part.get('tool') or ''
+        inp = stt.get('input') or {}
+        arg = (inp.get('filePath') or inp.get('command') or inp.get('pattern')
+               or inp.get('description') or inp.get('prompt') or '')
+        arg = str(arg).replace('\n', ' ')[:90]
+        return '%s %s' % (_OC_TOOL_CN.get(tool, tool), arg) if arg else _OC_TOOL_CN.get(tool, tool)
+    if 'reasoning.started' in t: return '思考中…'
+    if 'agent.switched' in t: return '切换角色:%s' % (p.get('agent') or '')
+    if 'session.error' in t or t == 'session.error':
+        return '⚠ %s' % str((p.get('error') or {}).get('message') or p)[:140]
+    return None
+
+def oc_watch(job, sid, stop, beat=None):
+    """订阅单会话的 SSE,把事件流转成我们的台词 / 提问 / 报错,顺带当心跳。
+
+    这是「它正在做什么」第一次对 opencode 真的有内容 —— 之前那块靠增量读 stdout,
+    而 opencode 的子 agent 输出根本不走 stdout(实测 run.log 停在 8KB 不动)。
+
+    beat 是给 oc_run 判收工用的心跳:每收到一条事件就盖个时间戳。光看消息 finish
+    会在排队的两轮之间踩空,得配合「事件流也静下来了」一起判。"""
+    url = OC['base'] + '/api/session/%s/event' % sid
+    buf, asked, last, flushed, admitted = [], set(), '', time.time(), 0
+    seen = 0        # 这个会话已经消费过多少条事件
+    def flush():
+        nonlocal buf, flushed
+        if buf: emit(job, {'type': 'worklog', 'lines': buf[-8:]}); buf = []
+        flushed = time.time()
+    while not stop.is_set():
+        try:
+            req = urllib.request.Request(url, headers=oc_auth())
+            with urllib.request.urlopen(req, timeout=600) as r:
+                idx = 0
+                for raw in r:
+                    if stop.is_set(): break
+                    line = raw.decode('utf-8', 'ignore').strip()
+                    if not line.startswith('data:'): continue
+                    try: ev = json.loads(line[5:].strip())
+                    except Exception: continue
+                    # 重连时它会把这个会话的历史**整段重放**(实测:断开重连,一模一样的
+                    # 8 条又来一遍)。不跳过的话,长任务每断一次台词就整段重复;更糟的是
+                    # 重放的第一条派活会被当成第二条,对着用户说「收到你补充的要求」——
+                    # 他什么都没说。按序号跳过已经消费过的。
+                    idx += 1
+                    if idx <= seen: continue
+                    seen = idx
+                    if beat is not None: beat['ts'] = time.time()
+                    t = ev.get('type') or ''
+                    if 'question.asked' in t:
+                        q = (ev.get('properties') or {})
+                        rid = q.get('id') or q.get('requestID')
+                        if rid and rid not in asked:
+                            asked.add(rid); oc_emit_question(job, sid, rid, q)
+                        continue
+                    if 'prompt.admitted' in t:
+                        # 第一条是我们自己派下去的活,别对着用户说「收到你补充的要求」——
+                        # 他什么都还没补充呢。从第二条起才是真的插话。
+                        admitted += 1
+                        if admitted > 1: buf.append('收到你补充的要求,已排进队列')
+                        continue
+                    ln = _oc_line(ev)
+                    if ln and ln != last: buf.append(ln); last = ln
+                    # 攒够三条、或者隔了三秒就发一次:只按条数发的话,
+                    # 它慢下来时台词会长时间一片空白,看着像死机了
+                    if buf and (len(buf) >= 3 or time.time() - flushed >= 3): flush()
+        except Exception:
+            pass
+        flush()
+        if not stop.is_set(): time.sleep(2)   # 断了就重连,别让台词永久静音
+
+def oc_emit_question(job, sid, rid, q):
+    """agent 主动提问 → 推给前端。
+
+    这是七条「界面承诺、链路没接」里唯一能靠 opencode 直接治好的一条:
+    以前 agent 问了、用户答了,答案写进 answers.jsonl 就没人读了。
+    现在答案会经 /question/{id}/reply 真的回到它的上下文里。"""
+    qs = q.get('questions') or []
+    first = qs[0] if qs else {}
+    text = first.get('question') or q.get('question') or '需要你确认一件事'
+    opts = [o.get('label') if isinstance(o, dict) else str(o)
+            for o in (first.get('options') or [])]
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    pend = meta.setdefault('oc_questions', {})
+    pend[rid] = {'session': sid, 'text': text, 'ts': now()}
+    write_json(os.path.join(job, '任务.json'), meta)
+    # 只报 agent 真正给的选项。「我来输入」是界面自己的自救入口,由前端统一补 ——
+    # 放在这里等于让每一个发问题事件的地方都记得拼一次,漏一处用户就没法回答了。
+    emit(job, {'type': 'question', 'id': rid, 'text': text, 'options': opts})
+
+def oc_answer(job, rid, text):
+    """把用户的回答送回 agent。返回 (ok, 说明)。"""
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    rec = (meta.get('oc_questions') or {}).get(rid)
+    if not rec: return False, '这个问题不在待回答清单里(可能已经答过或已过期)'
+    sid = rec.get('session')
+    st, b = oc_api('/api/session/%s/question/%s/reply' % (sid, rid),
+                   {'answers': [[text]]}, timeout=30)
+    if st not in (200, 201, 202, 204):
+        st, b = oc_api('/question/%s/reply' % rid, {'answers': [[text]]}, timeout=30)
+    ok = st in (200, 201, 202, 204)
+    if ok:
+        meta.setdefault('oc_questions', {}).pop(rid, None)
+        write_json(os.path.join(job, '任务.json'), meta)
+    return ok, ('' if ok else '回传失败(HTTP %s):%s' % (st, str(b)[:120]))
+
 def halt(job, why):
     """任务终止:保留它跑到哪一步,不要把进度清零。
 
@@ -855,6 +1132,69 @@ def halt(job, why):
     emit(job, {'type': 'progress', 'stage': why, 'terminal': True,
                'pct': min(int(prev.get('pct') or 0), 99),   # 保住进度,但绝不让它等于 100(那是"完成")
                'step': int(prev.get('step') or 0), 'total': int(prev.get('total') or 12)})
+
+def oc_run(job, prompt):
+    """用 OpenCode server 模式跑一单。跑不起来返回 False,上层回落到 CLI 模式。
+
+    跟 CLI 模式(`run --auto`)的区别:
+      · 看得见 —— SSE 事件流转成真实台词(CLI 模式下 opencode 的子 agent 根本不写 stdout)
+      · 停得掉 —— interrupt 优雅中断,半截产物完整落盘,不是杀进程组
+      · 问得着 —— agent 的提问推给用户,答案经 /question/reply 真的回到它上下文
+      · 崩了能续 —— 会话 id 落在 任务.json,重开应用凭它接着做
+    """
+    if not oc_serve(): return False
+    sid = oc_session(job, job)
+    if not sid: return False
+    ok, why = oc_probe_once()
+    if not ok:
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '⚠ 执行外壳起来了但链路没通(%s),这一单改用兼容模式跑。' % why})
+        return False
+    base = os.path.basename(job)
+    stop = threading.Event()
+    beat = {'ts': time.time()}          # oc_watch 每收到一条事件就刷新
+    threading.Thread(target=oc_watch, args=(job, sid, stop, beat), daemon=True).start()
+    sent, _ = oc_send(sid, prompt, delivery='queue')
+    if not sent:
+        stop.set(); return False
+    emit(job, {'type': 'message', 'role': 'agent',
+               'text': '已交给执行外壳开工。跑的过程中你随时可以在这里补要求——'
+                       '**会排到当前这一步之后生效**,不会打断它。'})
+    try:
+        for _ in range(3 * 3600):
+            if base in CANCEL: break
+            time.sleep(1)
+            quiet = time.time() - beat['ts']
+            done, err = oc_turn(sid)
+            if err:
+                emit(job, {'type': 'message', 'role': 'agent',
+                           'text': '⚠ 执行外壳报错:%s' % err})
+                break
+            # 收工要两条同时成立:最新一条 assistant 已经 finish,**并且**事件流也静了。
+            # 只看 finish 会在排队的两轮之间踩空 —— 第一轮 stop 的那一瞬,
+            # queue 里的第二条还没起来,会被当成整单跑完。
+            if done and quiet >= OC_QUIET: break
+            # 事件流彻底没动静又没 finish:多半卡住了,当面说,别干等三小时
+            if quiet >= OC_STALL:
+                emit(job, {'type': 'message', 'role': 'agent',
+                           'text': '⚠ 执行外壳已经 %d 分钟没有任何动静,先停下来。'
+                                   '已经写出来的东西都在,可以点「继续做」接着跑。'
+                                   % (OC_STALL // 60)})
+                break
+    finally:
+        stop.set()
+    return True
+
+_OC_PROBED = {'ok': False, 'why': '', 'ts': 0.0}
+
+def oc_probe_once(ttl=600):
+    """探活带缓存:每单都真调一次模型太浪费,但也不能一次都不探 ——
+    healthy 返回 True 而 Key 没送到时,opencode 只会甩一句 UnknownError(踩过)。"""
+    if _OC_PROBED['ok'] and time.time() - _OC_PROBED['ts'] < ttl:
+        return True, ''
+    ok, why = oc_probe()
+    _OC_PROBED.update({'ok': ok, 'why': why, 'ts': time.time()})
+    return ok, why
 
 def real_agent(job, cmd):
     eng = read_json(conf_path(), {}).get('engine') or {}
@@ -1487,8 +1827,69 @@ def _launch_job(jid, job, mock='auto'):
                           .replace('{materials}', mat).replace('{jobid}', jid).replace('{skill}', sd_path))
         cmd = [sub(a) for a in agent_cmd] if isinstance(agent_cmd, list) else sub(agent_cmd)
         cmd = login_shell_wrap(cmd, (read_json(conf_path(), {}).get('engine') or {}))
-        threading.Thread(target=real_agent, args=(job, cmd), daemon=True).start()
+        # OpenCode 引擎优先走 server 模式(看得见/停得掉/问得着/崩了能续);
+        # 起不来或链路没通就自动回落 CLI 模式,行为跟以前一模一样 —— 不能因为新路子没通就跑不了单。
+        kind_now = ((read_json(conf_path(), {}).get('engine') or {}).get('kind') or 's2')
+        oc_prompt = sub(next((a for a in (agent_cmd if isinstance(agent_cmd, list) else [])
+                              if 'SKILL.md' in str(a) or len(str(a)) > 300), ''))
+        if kind_now in ('s2', 'opencode') and oc_prompt and not os.environ.get('BID_NO_OC_SERVER'):
+            threading.Thread(target=agent_via_server_or_cli,
+                             args=(job, oc_prompt, cmd), daemon=True).start()
+        else:
+            threading.Thread(target=real_agent, args=(job, cmd), daemon=True).start()
     return {'job_id': jid, 'mode': 'mock' if use_mock else 'agent'}
+
+def finish_job(job):
+    """server 模式跑完后的收尾。刻意跟 CLI 模式(real_agent 里那段)保持同一套动作:
+    收拢子目录产物 → 缺 Word 就零 token 补出来 → 完成播报 → 技能包证据 → 成品质检。
+    两条路的收尾必须一致,否则会出现「换了条路跑,完成播报就不一样」这种说不清的差异。"""
+    base = os.path.basename(job)
+    if base in CANCEL:
+        CANCEL.discard(base); return
+    harvest(job)
+    known = set(list_deliverables(job))
+    for fn in known: emit(job, {'type': 'artifact', 'name': fn})
+    try: ensure_docx(job, known)
+    except Exception as e:
+        emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 补出 Word 未能执行:%s' % e})
+    if not known:
+        emit(job, {'type': 'error',
+                   'text': '执行外壳跑完了,但**任务目录里没有生成任何交付物**。'
+                           '请看运行日志确认它停在哪一步。',
+                   'actions': [{'act': 'open_log', 'label': '查看运行日志'},
+                               {'act': 'rerun', 'label': '重跑本任务'}]})
+        halt(job, '已停止(没有产出)')
+        return
+    emit(job, {'type': 'progress', 'stage': '完成', 'pct': 100, 'step': 12, 'total': 12})
+    summary, actions = artifact_summary(job, known)
+    used = skill_evidence(job)
+    if not used['ok']:
+        summary += ('\n\n⚠ **没有检测到技能包被使用**(%s)。这一版多半是模型自由发挥的结果,'
+                    '通常表现为:结构不全、格式门禁不过、没有响应矩阵与偏离表。' % used['why'])
+        actions = (actions or []) + [{'act': 'open_log', 'label': '查看运行日志'}]
+    emit(job, {'type': 'message', 'role': 'agent', 'text': summary, 'actions': actions})
+    emit(job, {'type': 'skill_used', 'ok': used['ok'], 'hits': used['hits'], 'why': used['why']})
+    try: quality_audit(job, known)
+    except Exception as e:
+        emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 成品质检未能执行:%s' % e})
+
+def agent_via_server_or_cli(job, prompt, cmd):
+    """先试 server 模式,不成回落 CLI。两条路的收尾(收拢产物/补出 Word/质检/播报)必须一致 ——
+    否则会出现「换了条路跑,完成播报就不一样」这种说不清的差异。"""
+    base = os.path.basename(job)
+    RUNNING.add(base)
+    used_server = False
+    try:
+        used_server = oc_run(job, prompt)
+    except Exception as e:
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '⚠ server 模式异常(%s),改用兼容模式重跑这一单。' % str(e)[:120]})
+    finally:
+        RUNNING.discard(base)
+    if not used_server:
+        real_agent(job, cmd)      # 回落:它自己会管 RUNNING 与全部收尾
+        return
+    finish_job(job)
 
 @app.post('/v1/jobs/{jid}/start')
 def start_job(jid: str, mock: str = 'auto'):
@@ -1531,15 +1932,26 @@ def job_state(job, meta=None, prog=None):
     if os.path.basename(job) in RUNNING: return 'running'
     stage = str(prog.get('stage') or '')
     if int(prog.get('pct') or 0) >= 100: return 'done'
+    # 暂停要跟「停止」分开:停止是这一单结束了,暂停是它还在半路、等着被接着做
+    if meta.get('paused') and meta.get('oc_session'): return 'paused'
     if stage.startswith('已停止'): return 'stopped'
     if not prog: return 'staged'                                 # 从没跑过
     return 'unknown'      # 进程没了、进度也没到头:多半是引擎被杀或断电,单独标出来别装作在跑
 
 # 每种状态下前端允许做什么。放在引擎侧,免得前端各处自己拼条件、拼错了就是死按钮
-STATE_CAN = {'staged': ['start', 'delete'], 'running': ['stop', 'ask', 'delete'],
+STATE_CAN = {'staged': ['start', 'delete'], 'running': ['pause', 'stop', 'ask', 'delete'],
              'done': ['redo', 'rerun', 'ask', 'export', 'delete'],
+             'paused': ['resume', 'rerun', 'redo', 'ask', 'export', 'delete'],
+             # 停止过、但留下了会话的,也能接着做 —— 由 /v1/jobs 逐单判断(见 list_jobs)
              'stopped': ['rerun', 'redo', 'ask', 'export', 'delete'],
              'unknown': ['rerun', 'ask', 'export', 'delete']}
+
+def job_can(job, state, meta):
+    """这一单此刻能做什么。stopped 且留下了会话的,额外给「继续做」——
+    没有会话就不给:那颗按钮点下去只会失败,不如不出现。"""
+    can = list(STATE_CAN.get(state, []))
+    if state == 'stopped' and meta.get('oc_session'): can.insert(0, 'resume')
+    return can
 
 @app.get('/v1/jobs')
 def list_jobs():
@@ -1553,7 +1965,7 @@ def list_jobs():
         out.append({'job_id': jid, 'name': meta.get('name', jid), 'created_at': meta.get('created_at', ''),
                     'stage': prog.get('stage', '启动中'), 'pct': prog.get('pct', 0),
                     'staged': bool(meta.get('staged')),
-                    'state': st, 'can': STATE_CAN.get(st, [])})
+                    'state': st, 'can': job_can(job, st, meta)})
     return out
 
 @app.get('/v1/jobs/{jid}/events')
@@ -1752,6 +2164,63 @@ async def rerun_job(jid: str):
         threading.Thread(target=real_agent, args=(nj, cmd), daemon=True).start()
     return {'ok': True, 'job_id': nid, 'mode': 'mock' if use_mock else 'agent'}
 
+RESUME_PROMPT = (
+    '接着做这一单。**先看一眼任务目录里已经有什么** —— 已经写好的不要重写、不要推翻,'
+    '从没做完的地方往下接,一直做到出 .docx 为止。'
+    '如果中途我补过要求或答过你的问题,以最新的为准。')
+
+def resume_worker(job, cmd):
+    """「继续做」的执行体。刻意跟正常跑同一套收尾,免得续做完的播报跟跑完的不一样。"""
+    base = os.path.basename(job)
+    RUNNING.add(base)
+    used = False
+    try:
+        used = oc_run(job, RESUME_PROMPT)
+    except Exception as e:
+        emit(job, {'type': 'message', 'role': 'agent', 'text': '⚠ 续做异常:%s' % str(e)[:160]})
+    finally:
+        RUNNING.discard(base)
+    if not used:
+        # 这里**不能**回落成从头重跑:用户点的是「继续做」,悄悄从头来会把已有产物覆盖掉
+        emit(job, {'type': 'error', 'text': '没能接着做(执行外壳没起来或原会话已失效)。'
+                                            '已经写出来的东西都还在,可以改用「重跑本任务」从头来。',
+                   'actions': [{'act': 'open_log', 'label': '查看运行日志'},
+                               {'act': 'rerun', 'label': '重跑本任务'}]})
+        halt(job, '已停止(没能续做)')
+        return
+    finish_job(job)
+
+@app.post('/v1/jobs/{jid}/resume')
+async def resume_job(jid: str):
+    """接着做:在**原来那个会话**里往下接,它还记得读过什么、写到哪。
+
+    与「重跑本任务」的区别:重跑是另起一单从头来,产物全新;续做是同一单往下写。
+    只有 server 模式留下了会话才做得到 —— 做不到就当面说,绝不悄悄改成从头重跑。"""
+    job = jpath(jid)
+    if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
+    base = os.path.basename(jid)
+    if base in RUNNING: return JSONResponse({'ok': False, 'error': '这一单正在跑,不用续'}, 400)
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    sid = meta.get('oc_session')
+    if not sid:
+        return JSONResponse({'ok': False, 'error': '这一单没有留下可以接着做的会话'
+                                                   '(多半是用兼容模式跑的),只能「重跑本任务」从头来。'}, 400)
+    if not oc_serve():
+        return JSONResponse({'ok': False, 'error': '执行外壳没起来,接不上原来的会话'}, 400)
+    st, _s = oc_api('/api/session/%s' % sid, timeout=20)
+    if st != 200:
+        return JSONResponse({'ok': False, 'error': '原来的会话已经不在了(执行外壳重装过或数据被清理),'
+                                                   '只能「重跑本任务」从头来。'}, 400)
+    meta['paused'] = False; write_json(os.path.join(job, '任务.json'), meta)
+    CANCEL.discard(base)
+    emit(job, {'type': 'message', 'role': 'agent',
+               'text': '好,接着上次的地方往下做。它还记得前面读过什么、写到哪,不会推翻已经写好的。'})
+    emit(job, {'type': 'progress', 'stage': '继续做', 'pct': max(1, int(
+        (read_json(os.path.join(job, 'progress.json'), {}).get('pct') or 1))), 'step': int(
+        read_json(os.path.join(job, 'progress.json'), {}).get('step') or 1), 'total': 12})
+    threading.Thread(target=resume_worker, args=(job, None), daemon=True).start()
+    return {'ok': True}
+
 def mock_redo(job, instruction):
     """演示引擎的定向重做:三步小流程,产出重做说明,进度回到完成态"""
     RUNNING.add(os.path.basename(job))
@@ -1786,7 +2255,13 @@ def stop_job(jid: str):
     if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': 'not found'}, 404)
     if base not in RUNNING: return {'ok': True, 'note': '任务本来就没有在运行'}
     CANCEL.add(base)          # 由 real_agent 收尾时清除;提前清会让"手动停止"被误报成"异常退出"
-    kill_tree(PROCS.pop(base, None))
+    # server 模式:先请它优雅中断(半截产物完整落盘、会话保留、之后能续跑),
+    # 而不是直接杀进程组 —— kill 掉的是共用的常驻 server,会把别的任务一起打死。
+    sid = (read_json(os.path.join(job, '任务.json'), {}) or {}).get('oc_session')
+    if sid and OC.get('base'):
+        oc_interrupt(sid)
+    else:
+        kill_tree(PROCS.pop(base, None))
     RUNNING.discard(base)
     emit(job, {'type': 'message', 'role': 'agent', 'text': '已按你的要求停止。已生成的产物都保留着,可以「重跑」或「定向重做」。'})
     halt(job, '已停止(手动)')
@@ -1879,27 +2354,82 @@ async def message(jid: str, req: Request):
         emit(job, {'type': 'message', 'role': 'agent', 'text': '收到:「%s」。已纳入当前章节,继续推进。' % text})
     else:
         open(os.path.join(job, 'inbox.jsonl'), 'a', encoding='utf-8').write(json.dumps(body, ensure_ascii=False) + '\n')
-        # 真实 agent 收件没有即时回声,给一条轻量回执,用户不至于以为消息丢了
-        emit(job, {'type': 'message', 'role': 'sys', 'text': '已送达正在写标书的 agent,会在合适的节点回应'})
+        # 运行期插话:server 模式下用 OpenCode 原生的 delivery=queue —— 实测语义是
+        # 「排到当前这一步之后,不打断」,正是产品负责人定的「想到什么先记下来、下个环节带上」。
+        # 以前这里只写 inbox.jsonl 然后回一句「已送达正在写标书的 agent」,
+        # 而那个文件**没有任何消费者**,话 100% 丢失(七条假承诺里的第一条)。
+        sid = (read_json(os.path.join(job, '任务.json'), {}) or {}).get('oc_session')
+        queued = False
+        if sid and OC.get('base'):
+            queued, _b = oc_send(sid, text, delivery='queue')
+        emit(job, {'type': 'message', 'role': 'sys',
+                   'text': ('已排进队列 —— 它会在跑完手上这一步之后带上这条,不会打断当前工作。'
+                            if queued else
+                            '已记下这条。当前这一轮用的是兼容模式,agent 中途读不到——'
+                            '它会在下次「重跑」或「定向重做」时带上。')})
     return {'ok': True}
 
 @app.post('/v1/jobs/{jid}/answers')
 async def answer(jid: str, req: Request):
+    """回答 agent 的提问。
+
+    以前这里只把答案写进 answers.jsonl —— 而那个文件**没有任何消费者**,
+    agent 一个字都收不到,界面却回一句「好,按 X 处理,继续」。
+    现在走 OpenCode 的 /question/{id}/reply,答案真的进它的上下文;
+    回传失败就当面说,不再假装已生效。"""
     body = await req.json(); job = jpath(jid)
-    # 先关问题:事件流里记下"该问题已答",重连/切任务回放时选项不再复活
-    emit(job, {'type': 'question_closed', 'id': body.get('question_id') or ''})
-    emit(job, {'type': 'message', 'role': 'user', 'text': body.get('choice') or body.get('text', '')})
-    emit(job, {'type': 'message', 'role': 'agent', 'text': '好,按「%s」处理,继续。' % (body.get('choice') or body.get('text', ''))})
-    open(os.path.join(job, 'answers.jsonl'), 'a', encoding='utf-8').write(json.dumps(body, ensure_ascii=False) + '\n')
-    return {'ok': True}
+    rid = body.get('question_id') or ''
+    txt = body.get('choice') or body.get('text', '')
+    emit(job, {'type': 'question_closed', 'id': rid})
+    emit(job, {'type': 'message', 'role': 'user', 'text': txt})
+    open(os.path.join(job, 'answers.jsonl'), 'a', encoding='utf-8').write(
+        json.dumps(body, ensure_ascii=False) + '\n')     # 留档,便于事后追溯
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    if rid and rid in (meta.get('oc_questions') or {}):
+        ok, why = oc_answer(job, rid, txt)
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': ('好,按「%s」处理,已回传给正在写标书的 agent,它会接着做。' % txt[:40]) if ok
+                           else ('⚠ 答案没能回传给 agent(%s)。它可能还在等,或已经按自己的判断继续了——'
+                                 '建议记下这条,跑完用「定向重做」把它落实。' % why)})
+        return {'ok': ok, 'delivered': ok, 'error': ('' if ok else why)}
+    # 不是 agent 主动问的(比如内置演示,或历史遗留的问题)
+    running = job_state(job) == 'running'
+    emit(job, {'type': 'message', 'role': 'agent',
+               'text': ('好,按「%s」处理,继续。' % txt[:40]) if not running else
+                       ('已记下「%s」。这条不是 agent 当前在等的问题,它会在下次重跑或定向重做时带上。' % txt[:40])})
+    return {'ok': True, 'delivered': False}
 
 @app.post('/v1/jobs/{jid}/control')
 async def control(jid: str, req: Request):
+    """暂停 / 继续。
+
+    以前这里只是把 paused 标志位写进 任务.json,然后回一句「已暂停,随时继续」——
+    而**只有演示引擎读那个标志位**。真跑的时候 agent 一个字都不知道,照写不误:
+    界面说停了,它还在花钱、还在改文件(七条假承诺里的最后一条)。
+
+    真 agent 没有「挂起」这回事,能做到的是「停下来 + 记住 + 接着做」:
+    暂停 = 优雅中断当前这轮(半截产物完整落盘),继续 = 回原会话往下接。
+    做不到的情况(没有会话/外壳没起来)当面说清,不假装暂停成功。"""
     body = await req.json(); job = jpath(jid)
+    base = os.path.basename(jid)
+    want_pause = body.get('action') == 'pause'
     meta = read_json(os.path.join(job, '任务.json'), {})
-    meta['paused'] = body.get('action') == 'pause'
+    if not want_pause:                       # 继续 = 走「接着做」那条路
+        return await resume_job(jid)
+    sid = meta.get('oc_session')
+    if base in RUNNING and config_agent_cmd():
+        if not (sid and OC.get('base') and oc_interrupt(sid)):
+            emit(job, {'type': 'message', 'role': 'agent',
+                       'text': '⚠ 这一轮停不下来(没有可中断的会话,多半是兼容模式跑的)。'
+                               '它还在继续写 —— 要真停请用「停止」,那会结束整单。'})
+            return JSONResponse({'ok': False, 'error': '当前这轮不支持暂停'}, 400)
+        CANCEL.add(base)                     # 让 finish_job 知道这不是跑完了,别播完成
+    meta['paused'] = True
     write_json(os.path.join(job, '任务.json'), meta)
-    emit(job, {'type': 'message', 'role': 'agent', 'text': '已暂停,随时继续。' if meta['paused'] else '继续跑。'})
+    emit(job, {'type': 'message', 'role': 'agent',
+               'text': '已停下来。写到哪儿就停在哪儿,产物都在;点「继续做」它会回到原来的思路往下接。',
+               'actions': [{'act': 'resume', 'label': '继续做'}]})
+    halt(job, '已暂停')
     return {'ok': True}
 
 @app.get('/v1/jobs/{jid}/artifacts')

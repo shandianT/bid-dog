@@ -147,6 +147,11 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 /* ---- 输入区:大圆角浮起 ---- */
 .compose{flex:none;padding:10px 28px 14px;position:relative;display:none}
 .cbox{max-width:780px;margin:0 auto;display:flex;flex-direction:column;gap:9px}
+.ansbar{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:14px;
+  background:#fff8e6;border:1px solid #f0dcaa;font-size:12.5px;color:#7a5b12}
+.ansbar .adot{width:7px;height:7px;border-radius:50%;background:#e0a415;flex:none}
+.ansbar .aq{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ansbar .ax{cursor:pointer;color:#9a7a2a;text-decoration:underline;flex:none}
 .inbar{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line-d);border-radius:26px;
   padding:7px 8px 7px 10px;box-shadow:var(--sh-xs);transition:border-color var(--tr),box-shadow var(--tr)}
 .inbar:focus-within{border-color:#c6c6c4;box-shadow:var(--sh-sm)}
@@ -328,6 +333,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       <span class="iconbtn" id="pauseBtn" style="display:none" title="暂停/继续"></span>
       <span class="pill" id="stopBtn" style="display:none" onclick="stopJob()">停止</span>
       <span class="pill" id="redoBtn" style="display:none" onclick="openRedo()">定向重做</span>
+      <span class="pill on" id="resumeBtn" style="display:none" onclick="resumeJob()">继续做</span>
       <span class="pill" id="logBtn" onclick="openLog()">运行日志</span>
       <span class="pill on" id="startBtn" style="display:none" onclick="startStaged()">▶ 开始生成</span>
       <span class="pill" id="hAct" onclick="openCheck()">出件前检查</span>
@@ -339,6 +345,11 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
         <div class="plusmenu" id="plusMenu" style="display:none">
           <div onclick="pickRef()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span><b>加参考资料到当前任务</b><i>过往标书/模板,AI 写作时参考它的写法</i></span></div>
           <div onclick="pickFile()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg><span><b>新建任务</b><i>把这份招标文件作为新任务开始</i></span></div>
+        </div>
+        <!-- AI 在等你回答时才出现:让人一眼看出这一句发出去是「回答它」,而不是「再提个要求」 -->
+        <div class="ansbar" id="ansBar" style="display:none">
+          <span class="adot"></span><span id="ansQ" class="aq"></span>
+          <span class="ax" onclick="answerMode(false)">取消</span>
         </div>
         <div class="inbar">
           <span class="plus" onclick="togglePlus(event)" title="添加文件"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
@@ -610,11 +621,23 @@ const API_CANDIDATES = [localStorage.getItem('bid_api'), IS_WEB ? location.origi
 let API = API_CANDIDATES[0];
 const NEED_FEATURES = ['probe_models', 'agent_binding', 'attachments', 'artifact_open', 'job_folder_open'];
 const isWin = navigator.platform.startsWith('Win');
+const ASK_SELF = '我来输入';     // 界面自己的自救入口,渲染与点击两处都用它,别写死字面量
 let S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}, atts:{}, health:{}, chips:{}, worklog:{}, stageAvgs:null, es:null,
-          typing:{}, steps:{}, names:{}, paused:{}, openGrp:{0:true, 1:true, 2:false, 3:false} };
+          typing:{}, steps:{}, names:{}, paused:{}, answering:{}, openGrp:{0:true, 1:true, 2:false, 3:false} };
 document.getElementById('sbL').textContent = isWin ? '任务栏显示进度 · 完成后系统通知' : 'Dock 显示进度 · 完成后系统通知 · 托盘常驻';
 
-async function api(p, opt){ const r = await fetch(API + p, opt); if(!r.ok) throw new Error(p+' '+r.status); return r.json(); }
+/* 非 2xx 时把后端的说明一起带上来。以前只抛一个「/v1/... 400」,
+   引擎那句「原来的会话已经不在了,只能重跑本任务」就被丢在这儿了 ——
+   用户看到的是一串没用的状态码,而真正该看的话被我们自己吞掉。 */
+async function api(p, opt){
+  const r = await fetch(API + p, opt);
+  if(!r.ok){
+    let body = null; try{ body = await r.json(); }catch(_){}
+    const e = new Error((body && (body.error || body.detail)) || (p+' '+r.status));
+    e.status = r.status; e.body = body; throw e;
+  }
+  return r.json();
+}
 function el(id){ return document.getElementById(id); }
 function esc(s){ const d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; }
 function escA(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }  /* 属性里也安全 */
@@ -752,11 +775,12 @@ function jobState(j){
   const st = (S.prog[j.job_id]&&S.prog[j.job_id].stage) || j.stage || '';
   if(j.staged) return 'staged';                     // 旧引擎:尽量还原,别退回两档
   if(p>=100) return 'done';
+  if(/^已暂停/.test(st)) return 'paused';
   if(/^已停止/.test(st)) return 'stopped';
   return 'running';
 }
 function renderTasks(){
-  const g = {staged:[], running:[], stopped:[], unknown:[], done:[]};
+  const g = {staged:[], running:[], paused:[], stopped:[], unknown:[], done:[]};
   S.jobs.forEach(j=>{ (g[jobState(j)] || g.running).push(j); });
   const open = S.doneOpen !== undefined ? S.doneOpen : g.done.length <= 4;
   let h = '';
@@ -766,6 +790,7 @@ function renderTasks(){
   };
   h += grp('staged', '等你开始', false);
   h += grp('running', '进行中', false);
+  h += grp('paused', '已暂停,等你继续', false);
   h += grp('stopped', '已停止', false);
   h += grp('unknown', '状态不明', false);      // 引擎被杀/断电:如实说不知道,不装作在跑
   if(g.done.length){
@@ -833,7 +858,8 @@ function handle(id, e){
     if(S.active===id) renderWorklog();
   }
   if(e.type==='status'){ S.typing[id] = e.state==='thinking' && (Date.now()-ts2ms(e.ts) < 120000); }
-  if(e.type==='question_closed'){ const q = S.chips[id]; if(q && (!e.id || q.qid===e.id)) S.chips[id] = null; }
+  if(e.type==='question_closed'){ const q = S.chips[id];
+    if(q && (!e.id || q.qid===e.id)){ S.chips[id] = null; if(S.active===id) answerMode(false); } }
   if(e.type==='progress'){
     S.prog[id]=e;
     const k = e.step||0;
@@ -850,7 +876,13 @@ function handle(id, e){
     }
     if(e.pct>=100) notify('已出 Word · 待你确认');
   }
-  if(e.type==='question'){ S.chips[id]={qid:e.id, options:e.options}; (S.msgs[id]=S.msgs[id]||[]).push({role:'agent',text:e.text}); }
+  if(e.type==='question'){
+    S.chips[id]={qid:e.id, options:e.options||[], text:e.text};
+    (S.msgs[id]=S.msgs[id]||[]).push({role:'agent',text:e.text});
+    // 开放式提问(agent 没给选项):直接把输入框切到回答通道 ——
+    // 不然界面上一个可点的东西都没有,而 agent 就在那边等着,谁也不知道该干什么
+    if(S.active===id && !(e.options||[]).length) answerMode(true);
+  }
   if(e.type==='artifact'){
     const list = (S.arts[id]=S.arts[id]||[]);
     if(!list.some(a=>a.name===e.name)) list.push(e);
@@ -918,7 +950,10 @@ function renderHead(){
   /* done 只表示「跑到头了」;stopped/unknown 是另一类终态——它们也不该再显示成运行中,
      但结论卡、质检徽章那一套只对真正跑完的稿子有意义,所以分开判。 */
   const t = timing(S.active), done = (st === 'done');
+  // 「暂停」跟「停止」要分开说:停止是这一单结束了,暂停是它还在半路、等着被接着做
+  const paused = (st === 'paused');
   const halted = (st === 'stopped' || st === 'unknown');
+  if(paused) S.paused[S.active] = true;
   const v = verdict(S.active);
   el('hTitle').textContent = (j&&j.name) || S.active;
   const badge = el('hBadge');
@@ -926,6 +961,9 @@ function renderHead(){
     const label = {ok:'内容检查通过', warn:'待确认项待处理', bad:(v.fix?'内容异常,需修复':'有必办项,暂不可投'), none:'已完成,待体检'}[v.key];
     badge.style.display = 'inline-flex'; badge.className = 'badge ' + v.key;
     badge.innerHTML = '<span class="bdot"></span>' + label;
+  } else if(paused){
+    badge.style.display = 'inline-flex'; badge.className = 'badge warn';
+    badge.innerHTML = '<span class="bdot"></span>已暂停,点「继续做」接着写';
   } else if(halted){
     // 跑挂了不能装作没事:徽章直接把话说明白,再配合下面的「重跑 / 补出 Word」
     badge.style.display = 'inline-flex'; badge.className = 'badge bad';
@@ -939,12 +977,17 @@ function renderHead(){
      用户只能删掉整个任务或干等三小时超时。任务只要不是终态就该能停。 */
   el('stopBtn').style.display = (st==='running' && S.online) ? 'inline-block' : 'none';
   // 跑挂了也该能定向重做/重跑:已经写出来的章节不该跟着一起作废
-  el('redoBtn').style.display = ((done || halted) && S.online) ? 'inline-block' : 'none';
+  el('redoBtn').style.display = ((done || halted || paused) && S.online) ? 'inline-block' : 'none';
+  /* 「继续做」只在引擎说这一单能续时才出现(它留下了可用的会话)。
+     没有会话还画这颗按钮,点下去必然失败——那种按钮不如不要。 */
+  const rb = el('resumeBtn');
+  rb.onclick = resumeJob;
+  rb.style.display = (S.online && j && (j.can||[]).indexOf('resume') >= 0) ? 'inline-block' : 'none';
   const jj = (S.jobs||[]).find(j=>j.job_id===S.active);
   el('startBtn').style.display = (jj && jj.staged) ? '' : 'none';
   const pb = el('pauseBtn');
   pb.onclick = togglePause;
-  if(st==='running' && S.online && p.step){
+  if((st==='running' || paused) && S.online && p.step){
     pb.style.display='flex';
     pb.title = S.paused[S.active] ? '继续' : '暂停';
     pb.innerHTML = S.paused[S.active]
@@ -987,13 +1030,27 @@ el('quick').addEventListener('click', e=>{
   else if(k==='cmd:pause') togglePause();
   else if(k==='cmd:rerun') rerunJob();
 });
+/* 「继续做」= 回到原来那个会话往下接(它还记得读过什么、写到哪),
+   跟「重跑本任务」不是一回事 —— 重跑是另起一单从头来。
+   接不上时后端会明说,这里如实转达,不能吞掉当成功。 */
+async function resumeJob(){
+  if(!S.active || !S.online){ toast('本地引擎未连接'); return; }
+  try{
+    const r = await api('/v1/jobs/'+S.active+'/resume',{method:'POST'});
+    if(r && r.ok===false){ toast(r.error || '接不上原来的会话'); return; }
+    S.paused[S.active] = false; toast('接着上次的地方继续'); renderHead();
+  }catch(e){ toast((e && e.message) || '续做失败,请看运行日志'); }
+}
 async function togglePause(){
   if(!S.active || !S.online) return;
-  const to = !S.paused[S.active];
+  if(S.paused[S.active]) return resumeJob();
   try{
-    await api('/v1/jobs/'+S.active+'/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action: to?'pause':'resume'})});
-    S.paused[S.active] = to; renderHead();
-  }catch(e){ toast('操作失败'); }
+    const r = await api('/v1/jobs/'+S.active+'/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'pause'})});
+    /* 暂停不一定成得了(兼容模式没有可中断的会话)。后端说没成就别把界面画成已暂停,
+       否则又是一次「界面说停了、它还在写」。 */
+    if(r && r.ok===false){ toast(r.error || '当前这轮停不下来'); return; }
+    S.paused[S.active] = true; renderHead();
+  }catch(e){ toast((e && e.message) || '操作失败'); }
 }
 async function stopJob(){
   if(!S.active || !await askConfirm('停止这个任务?', '会终止正在跑的生成进程;已生成的产物全部保留,之后可以重跑或定向重做。', true)) return;
@@ -1079,7 +1136,10 @@ function renderChat(){
       + (u ? esc(m.text) : mdHtml(m.text)) + acts + '</div><div class="m">'+meta+'</div></div>';
   }).join('');
   const q = S.chips[S.active];
-  if(q) h += '<div class="chips">'+q.options.map((o,i)=>'<span class="chip'+(i?' gy':'')+'" data-opt="'+escA(o)+'">'+esc(o)+'</span>').join('')+'</div>';
+  // 有选项时,末尾永远补一颗「我来输入」——它是界面自己的自救入口,不依赖后端记得拼。
+  // 没有选项的开放题不补:那种情况已经自动切进回答模式了,再来一颗按钮是多余的。
+  if(q){ const os = (q.options||[]).slice(); if(os.length) os.push(ASK_SELF);
+    h += '<div class="chips">'+os.map((o,i)=>'<span class="chip'+(i?' gy':'')+'" data-opt="'+escA(o)+'">'+esc(o)+'</span>').join('')+'</div>'; }
   if(S.typing[S.active]) h += '<div class="typing"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span><span>中标狗 正在回复…</span></div>';
   wrap.innerHTML = h;
   if(nearBottom) box.scrollTop = box.scrollHeight;
@@ -1105,6 +1165,7 @@ async function errAction(act, file, param){
     }catch(e){ toast('定向重做启动失败:任务可能正在运行'); }
     return;
   }
+  if(act==='resume'){ resumeJob(); return; }
   if(act==='open_redo'){ openRedo(); return; }
   if(act==='repair'){ openCheck(); repairJob(); return; }
   if(act==='open_artifact'){ openArtifact(file); return; }
@@ -1449,7 +1510,12 @@ el('hero').addEventListener('click', e=>{
 });
 
 /* ================= 对话 ================= */
-function send(){ const v = el('draft').value.trim(); if(v){ el('draft').value=''; say(v); } }
+function send(){
+  const v = el('draft').value.trim(); if(!v) return;
+  el('draft').value='';
+  // AI 正等着你回答时,打的字走回答通道;否则才是「补要求」排进队列
+  if(S.active && S.answering[S.active]) answer(v); else say(v);
+}
 async function say(text){
   if(!S.active){ toast('先拖一份招标文件建任务,我们再聊'); return; }
   const id = S.active;
@@ -1464,10 +1530,24 @@ async function say(text){
   }
   else { addLocal('user',text); setTimeout(()=>addLocal('agent','(演示)收到:「'+text+'」。已纳入当前章节,继续推进。'),500); }
 }
+/* 点了「我来输入」不是把「我来输入」四个字当答案发出去 —— 那样 agent 收到的是一句废话。
+   它要做的是把输入框切到「回答」通道:接下来打的字走 /answers 回到 agent 的上下文,
+   而不是走 /messages 排进队列。开放式提问(agent 没给选项)也走同一条路,
+   否则那种问题在界面上根本无从回答,agent 会一直等到天荒地老。 */
+function answerMode(on){
+  const id = S.active; if(!id) return;
+  S.answering[id] = on ? (S.chips[id]||{}).qid : null;
+  const q = S.chips[id];
+  el('ansBar').style.display = (on && q) ? 'flex' : 'none';
+  if(on && q) el('ansQ').textContent = q.text || '回答 AI 的提问';
+  el('draft').placeholder = on ? '把答案打在这里,发出去就回到 AI 那边' : '问问进度、提要求,或把文件拖进来';
+  if(on) el('draft').focus();
+}
 async function answer(choice){
-  const q = S.chips[S.active]; S.chips[S.active]=null;
+  if(choice === ASK_SELF){ answerMode(true); return; }      // 切通道,不是交答案
+  const id = S.active, q = S.chips[id];
+  S.chips[id]=null; answerMode(false);
   if(S.online){
-    const id = S.active;
     (S.msgs[id]=S.msgs[id]||[]).push({role:'user', text:choice, _local:1}); renderChat();
     try{ await api('/v1/jobs/'+id+'/answers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question_id:q&&q.qid,choice})}); }
     catch(e){ toast('发送失败'); }
