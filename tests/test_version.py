@@ -55,8 +55,17 @@ def test_release_assets_are_explicit_and_published_releases_are_immutable(engine
     assert "fail_on_unmatched_files: true" in workflow
     assert "releases are immutable" in workflow
     assert "same commit" in workflow
+    assert 'releases?per_page=100' in workflow
+    assert "Draft release desktop-v0.19.0 belongs to another commit" in workflow
     assert "verify staged release assets" in workflow
-    assert "--draft=false" in workflow
+    # A newly-created draft tag is briefly not discoverable through the
+    # /releases/tags/{tag} endpoint. Verify and publish by the action's stable
+    # numeric release id so a successful upload cannot be stranded as a draft.
+    assert "id: stage_release" in workflow
+    assert 'release_id="${{ steps.stage_release.outputs.id }}"' in workflow
+    assert 'releases/$release_id' in workflow
+    assert "-F draft=false" in workflow
+    assert "-f make_latest=true" in workflow
     assert 'state == "uploaded"' in workflow
     assert "size > 0" in workflow
     assert "files: |" in workflow

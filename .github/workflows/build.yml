@@ -399,6 +399,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="desktop-v0.19.0"
+          release_rows=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == "desktop-v0.19.0") | [.id, .draft, .target_commitish] | @tsv')
+          release_count=$(printf '%s\n' "$release_rows" | sed '/^$/d' | wc -l | tr -d ' ')
+          if [ "$release_count" -gt 1 ]; then
+            echo "Multiple releases exist for $tag; refusing an ambiguous update."
+            exit 1
+          fi
+          if [ -n "$release_rows" ]; then
+            IFS=$'\t' read -r existing_release_id release_draft release_target <<< "$release_rows"
+            if [ "$release_draft" != "true" ]; then
+              echo "Release $tag is already published; published releases are immutable."
+              exit 1
+            fi
+            if [ "$release_target" != "$GITHUB_SHA" ]; then
+              echo "Draft release desktop-v0.19.0 belongs to another commit; refusing to mix assets."
+              exit 1
+            fi
+            echo "Found an unfinished draft for the same commit; resuming its asset upload safely."
+          fi
           tag_rows=$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
           if [ -n "$tag_rows" ]; then
             git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
@@ -414,7 +433,6 @@ jobs:
                 exit 1
               fi
             fi
-            echo "Found an unfinished draft for the same commit; resuming its asset upload safely."
           fi
       - uses: actions/download-artifact@v4
         with:
@@ -432,7 +450,8 @@ jobs:
           test "$(find out -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
           (cd out && sha256sum bid-dog_0.19.0_aarch64.dmg bid-dog_0.19.0_x64-setup.exe > SHA256SUMS)
           ls -la out
-      - uses: softprops/action-gh-release@v2
+      - id: stage_release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: desktop-v0.19.0
           name: 中标狗桌面版 v0.19.0
@@ -474,8 +493,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="desktop-v0.19.0"
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" > "$RUNNER_TEMP/release.json"
+          release_id="${{ steps.stage_release.outputs.id }}"
+          case "$release_id" in
+            ''|*[!0-9]*) echo "staged release id is missing or invalid"; exit 1 ;;
+          esac
+          # GitHub can take a few seconds to expose a new draft through the
+          # tag endpoint. The action output is the stable numeric id and is
+          # immediately readable, so verify and publish that exact draft.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/$release_id" > "$RUNNER_TEMP/release.json"
           python - "$RUNNER_TEMP/release.json" <<'PY'
           import json
           import sys
@@ -499,4 +524,15 @@ jobs:
               if not (state == "uploaded" and size > 0 and url.startswith("https://")):
                   raise SystemExit(f"release asset is not ready: {name}")
           PY
-          gh release edit "$tag" --draft=false --latest
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/$release_id" \
+            -F draft=false -f make_latest=true > "$RUNNER_TEMP/published-release.json"
+          python - "$RUNNER_TEMP/published-release.json" <<'PY'
+          import json
+          import sys
+
+          release = json.load(open(sys.argv[1], encoding="utf-8"))
+          if release.get("draft") is not False:
+              raise SystemExit("release was not published")
+          if release.get("tag_name") != "desktop-v0.19.0":
+              raise SystemExit("published release tag mismatch")
+          PY
