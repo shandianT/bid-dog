@@ -42,6 +42,24 @@ assert.ok(appRedirect.includes('/app/index.html?demo=1'), '在线体验入口必
 
 assert.ok(html.includes('https://github.com/shandianT'), '官网必须提供作者 GitHub 入口');
 assert.ok(html.indexOf('id="output"') > 0 && html.indexOf('id="output"') < html.indexOf('id="demo"'), '真实 Word 成品效果必须排在流程演示前');
+assert.match(html, /\.shots\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'Word 成品在桌面端必须是等宽 2×2 四宫格');
+assert.strictEqual((html.match(/class="sh rv"/g) || []).length, 4, 'Word 成品必须恰好有四张同级卡片');
+reject(/class="sh (?:featured|compact)/, 'Word 四张成品不能再拆成一张大图加三张小图');
+reject(/\.sh\.featured|\.sh\.compact/, 'Word 四宫格不能保留跨列或裁切特例');
+for (const image of ['word-cover.png', 'word-body.png', 'word-deviation.png', 'word-xinchuang.png']) {
+  const escapedImage = image.replace(/\./g, '\\.');
+  expect(new RegExp(`<a href="assets/${escapedImage}" target="_blank" rel="noopener"><img src="assets/${escapedImage}" alt="[^"]+"></a>`), `${image} 必须可点击打开高清原图并带 alt`);
+}
+const coverAt = html.indexOf('assets/word-cover.png');
+const bodyAt = html.indexOf('assets/word-body.png');
+const deviationAt = html.indexOf('assets/word-deviation.png');
+const chapterAt = html.indexOf('assets/word-xinchuang.png');
+const appResultAt = html.indexOf('assets/app-result-v019.png');
+assert.ok(coverAt < bodyAt && bodyAt < deviationAt && deviationAt < chapterAt, 'Word 四宫格顺序必须是封面、正文、偏离表、章节页');
+assert.ok(chapterAt < appResultAt && appResultAt < html.indexOf('id="demo"'), '应先完整展示 Word 四宫格，再展示交付结果页和使用流程');
+assert.ok(html.indexOf('id="gate"') < html.indexOf('id="feat"'), '出件质检必须排在扩展能力前，先回答结果是否可靠');
+assert.ok(html.indexOf('我的标书和素材会上传到哪里吗?') < html.indexOf('macOS 提示「已损坏,无法打开」?'), 'FAQ 应先回答隐私，再展示安装拦截问题');
+reject(/<details\s+open><summary>macOS 提示/, 'macOS 安装拦截问题不应默认展开占据第一视觉');
 reject(/\.rv\s*\{[^}]*opacity\s*:\s*0/, '官网正文不能依赖滚动观察器才显示，截图和弱性能设备也必须清晰可见');
 expect(/\.win\s*\{[^}]*transform\s*:\s*none/s, '流程演示不能用 3D 旋转导致文字栅格化发虚');
 expect(/打开全尺寸(?:在线)?体验/, '缩略流程旁必须提供清晰的全尺寸体验入口');
