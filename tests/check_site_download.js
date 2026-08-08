@@ -40,6 +40,13 @@ expect(/不上传到中标狗自有服务器[^<]{0,120}模型服务/, '官网必
 reject(/质检不过就不出 Word/, '官网不能把“检查失败不宣告完成”误写成不会生成 Word');
 assert.ok(appRedirect.includes('/app/index.html?demo=1'), '在线体验入口必须直接进入 demo=1，不能等待公网后端探测');
 
+assert.ok(html.includes('https://github.com/shandianT'), '官网必须提供作者 GitHub 入口');
+assert.ok(html.indexOf('id="output"') > 0 && html.indexOf('id="output"') < html.indexOf('id="demo"'), '真实 Word 成品效果必须排在流程演示前');
+reject(/\.rv\s*\{[^}]*opacity\s*:\s*0/, '官网正文不能依赖滚动观察器才显示，截图和弱性能设备也必须清晰可见');
+expect(/\.win\s*\{[^}]*transform\s*:\s*none/s, '流程演示不能用 3D 旋转导致文字栅格化发虚');
+expect(/打开全尺寸(?:在线)?体验/, '缩略流程旁必须提供清晰的全尺寸体验入口');
+expect(/copyMacFix/, 'macOS 未公证期间必须提供一键复制首次放行命令');
+
 expect(/发放的\s*Key[^<]{0,140}(?:完整生成|生成标书)/, 'FAQ 应说明发放 Key 可用于完整生成');
 expect(/内置\s*OpenCode[^<]{0,120}(?:不用|无需)[^<]{0,40}(?:Node\.js|登录)/, 'FAQ 应说明内置 OpenCode 无需 Node.js/账号登录');
 reject(/生成标书本体走你绑定的\s*CLI\s*订阅额度/, '官网仍在错误宣称生成必须走用户 CLI 订阅');

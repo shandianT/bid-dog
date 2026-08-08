@@ -72,3 +72,7 @@ def test_commercial_macos_signing_imports_identity_before_building_the_engine(en
     assert 'codesign_args=(--codesign-identity "$APPLE_SIGNING_IDENTITY")' in workflow
     assert '"${codesign_args[@]}"' in workflow
     assert "github.ref == 'refs/heads/main' && secrets.APPLE_CERTIFICATE" in workflow
+    build_step = workflow[workflow.index("- name: build installers"):workflow.index("- name: verify macOS DMG")]
+    assert "MAC_APPLE_ID_SECRET:" in build_step
+    assert "unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID" in build_step
+    assert "\n          APPLE_ID:" not in build_step

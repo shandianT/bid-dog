@@ -44,7 +44,9 @@ nav .nl:hover{color:var(--ink)}
 .cta.p:hover{transform:translateY(-1px);box-shadow:0 12px 34px -8px rgba(77,157,255,.75)}
 .cta.g{border:1px solid var(--line2);color:var(--ink);background:rgba(255,255,255,.04)}
 .cta.g:hover{background:rgba(255,255,255,.08)}
-nav .cta{margin-left:auto;padding:9px 16px}
+nav .repo{margin-left:auto;color:var(--sub);font-size:14px;border:1px solid var(--line);border-radius:9px;padding:7px 11px}
+nav .repo:hover{color:var(--ink);background:rgba(255,255,255,.06)}
+nav .cta{margin-left:0;padding:9px 16px}
 
 /* ---------- Hero ---------- */
 .hero{padding:74px 0 0;text-align:center}
@@ -69,19 +71,24 @@ h1 .gr{background:linear-gradient(100deg,var(--brand) 10%,var(--brand2) 55%,#c9b
 .download-meta b{color:var(--sub);font-weight:600}
 
 /* ---------- 演示窗口 ---------- */
-.stage{margin-top:52px;position:relative}
+.stage{padding:68px 0 34px;position:relative}
+.stage .wrap{max-width:1240px}
+.stage-head{max-width:1120px;margin:0 auto 24px;display:flex;align-items:end;justify-content:space-between;gap:24px}
+.stage-head h2{margin-bottom:0}.stage-head .lead{margin-top:8px}
+.demo-full{flex:none;border:1px solid var(--line2);border-radius:11px;padding:10px 15px;color:var(--ink);font-size:13px;font-weight:600;background:var(--card)}
+.demo-full:hover{background:rgba(255,255,255,.08)}
 .stage::before{content:"";position:absolute;inset:-6% 8% 40%;background:radial-gradient(closest-side,rgba(77,157,255,.30),transparent);
   filter:blur(58px);z-index:-1}
-.win{max-width:1000px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;
+.win{max-width:1120px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;
   border:1px solid rgba(255,255,255,.14);box-shadow:0 40px 90px -22px rgba(0,0,0,.75),0 0 0 1px rgba(0,0,0,.4);
-  transform:perspective(1600px) rotateX(3deg);transform-origin:top center}
+  transform:none;transform-origin:top center}
 .tb{height:34px;background:#f2f2f0;border-bottom:1px solid #e3e3e1;display:flex;align-items:center;padding:0 12px;gap:7px}
 .tb i{width:10px;height:10px;border-radius:50%}
 .tb .t{flex:1;text-align:center;font-size:11.5px;color:#8b8b8b;font-weight:500}
 /* 迷你 App:三栏 */
-.mini{display:grid;grid-template-columns:154px 1fr 178px;height:392px;background:#fff;color:#0d0d0d;
-  font-size:11px;line-height:1.5;text-align:left}
-.mini.empty{grid-template-columns:154px 1fr}
+.mini{display:grid;grid-template-columns:184px 1fr 218px;height:500px;background:#fff;color:#0d0d0d;
+  font-size:12px;line-height:1.5;text-align:left}
+.mini.empty{grid-template-columns:184px 1fr}
 .ms{background:#f9f9f8;border-right:1px solid #ececea;padding:11px 9px;display:flex;flex-direction:column;gap:9px}
 .ms .lg{display:flex;align-items:center;gap:6px;font-weight:650;font-size:11.5px;padding:2px}
 .ms .lg b{width:6px;height:6px;border-radius:50%;background:var(--ok);display:block}
@@ -205,7 +212,7 @@ section{padding:96px 0}
 h2{font-size:clamp(25px,3.4vw,38px);letter-spacing:-.028em;line-height:1.22;margin:12px 0 14px;font-weight:680}
 .lead{color:var(--sub);max-width:48em;font-size:15.5px}
 .center{text-align:center}.center .lead{margin:0 auto}
-.rv{opacity:0;transform:translateY(22px);transition:opacity .7s cubic-bezier(.2,.7,.3,1),transform .7s cubic-bezier(.2,.7,.3,1)}
+.rv{opacity:1;transform:none;transition:opacity .7s cubic-bezier(.2,.7,.3,1),transform .7s cubic-bezier(.2,.7,.3,1)}
 .rv.in{opacity:1;transform:none}
 
 /* 数字条 */
@@ -239,9 +246,13 @@ h2{font-size:clamp(25px,3.4vw,38px);letter-spacing:-.028em;line-height:1.22;marg
 .eg b{display:block;font-weight:600}
 .eg span{font-size:11.5px;color:var(--dim)}
 /* 真实截图 */
-.shots{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:40px}
+.output-proof{padding:72px 0 58px}
+.app-shot{display:block;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#fff;margin-top:36px;box-shadow:0 26px 70px -34px rgba(77,157,255,.55)}
+.app-shot img{width:100%;display:block}.app-shot .cap{padding:13px 16px;color:var(--sub);background:#0b0d10;border-top:1px solid var(--line);font-size:12.5px}
+.shots{display:grid;grid-template-columns:repeat(6,1fr);gap:16px;margin-top:24px}
 .sh{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#0b0d10}
-.sh img{width:100%;display:block}
+.sh.featured{grid-column:span 6}.sh.compact{grid-column:span 2}
+.sh a{display:block}.sh img{width:100%;display:block}.sh.featured img{height:620px;object-fit:cover;object-position:top}
 .sh .cap{padding:13px 16px;font-size:12.5px;color:var(--sub);border-top:1px solid var(--line)}
 /* FAQ */
 .faq{max-width:780px;margin-top:36px}
@@ -252,20 +263,29 @@ summary::after{content:"+";color:var(--dim);font-size:19px;font-weight:300;line-
 details[open] summary::after{content:"−"}
 details p{color:var(--sub);font-size:14px;margin-top:11px;max-width:46em}
 details code{background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12.5px}
+.mac-fix{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.copy-fix{border:1px solid var(--line2);background:rgba(255,255,255,.06);color:var(--ink);border-radius:9px;padding:8px 12px;cursor:pointer;font:600 12.5px/1 inherit}
+.copy-fix:hover{background:rgba(255,255,255,.1)}
 /* 尾部 CTA */
 .final{text-align:center;border:1px solid var(--line);border-radius:22px;padding:64px 30px;background:
   radial-gradient(700px 260px at 50% 0%,rgba(77,157,255,.16),transparent 70%),var(--card)}
 footer{border-top:1px solid var(--line);padding:30px 0;color:var(--dim);font-size:13px}
 footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 @media (max-width:900px){
-  .mini{grid-template-columns:120px 1fr;height:340px}
+  .mini{grid-template-columns:140px 1fr;height:430px}
   .mr{display:none}
   .bento{grid-template-columns:1fr}
   .bx.w3,.bx.w2,.bx.w6{grid-column:span 1}
   .stats{grid-template-columns:repeat(2,1fr)}
-  .shots{grid-template-columns:1fr}
+  .shots{grid-template-columns:1fr}.sh.featured,.sh.compact{grid-column:1}.sh.featured img{height:auto}
   nav .nl{display:none}
-  .win{transform:none}
+  .stage-head{align-items:flex-start;flex-direction:column}.demo-full{align-self:stretch;text-align:center}
+}
+@media (max-width:600px){
+  .wrap{padding:0 16px}.hero{padding-top:48px}.stage{padding-top:52px}
+  .mini{grid-template-columns:1fr;height:430px}.ms,.mr{display:none}.win{border-radius:12px}
+  .tb{height:30px}.mh{padding-left:13px;padding-right:13px}.mb{padding:12px 13px}.mi{padding-left:13px;padding-right:13px}
+  nav .repo{font-size:0;padding:8px 10px}nav .repo::after{content:"GitHub";font-size:12px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -275,11 +295,12 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 
 <nav><div class="wrap">
   <a class="brand" href="#"><img src="assets/icon.png" alt="">中标狗</a>
-  <a class="nl" href="demo.html?demo=1">在线体验</a>
-  <a class="nl" href="#demo">看流程</a>
+  <a class="nl" href="#output">成品效果</a>
+  <a class="nl" href="#demo">真实界面</a>
   <a class="nl" href="#feat">能做什么</a>
   <a class="nl" href="#gate">出件质检</a>
   <a class="nl" href="#faq">常见问题</a>
+  <a class="repo" href="https://github.com/shandianT" target="_blank" rel="noopener">GitHub · shandianT ↗</a>
   <a class="cta p" href="#get">免费下载</a>
 </div></nav>
 
@@ -291,15 +312,36 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   <div class="hbtns" id="get">
     <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片（M 系列）· dmg</em></a>
     <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_x64-setup.exe">下载 Windows 版<em class="dls">Windows 10 / 11 x64 · exe</em></a>
-    <a class="cta g big" href="demo.html?demo=1">在线体验(不用装)</a>
+    <a class="cta g big" href="app/index.html?demo=1">在线体验(不用装)</a>
   </div>
   <div class="download-meta" id="releaseMeta"><b>兼容性：</b>Intel Mac 暂不支持、暂无安装包；Windows ARM 暂不支持。安装包目前未完成商业签名，首次打开可能需要按系统提示放行。</div>
   <div class="trust">不填配置也能先跑一遍内置演示 ·
-    <a href="https://github.com/shandianT/bid-dog/releases" target="_blank" rel="noopener" style="color:inherit">全部版本</a></div>
+    <a href="https://github.com/shandianT/bid-dog/releases" target="_blank" rel="noopener" style="color:inherit">全部版本</a> ·
+    <a href="https://github.com/shandianT" target="_blank" rel="noopener" style="color:inherit">作者 GitHub</a></div>
 </div></div>
+
+<!-- 先给用户看最终拿到的东西，再解释生成过程 -->
+<section class="output-proof" id="output"><div class="wrap">
+  <div class="rv center"><div class="kick">真实交付效果</div><h2>先看成品：生成后拿到的是可继续修改的 Word</h2>
+    <p class="lead">以下页面由实际 docx 直接渲染，不是设计稿。封面、正文配图、偏离表和章节版式都会一起交付。</p></div>
+  <a class="app-shot rv" href="app/index.html?demo=1" aria-label="打开全尺寸交付结果体验">
+    <img src="assets/app-result-v019.png" alt="中标狗交付结果页真实界面">
+    <div class="cap">当前产品的交付结果页：主 Word、偏离表、内容检查和继续修改入口集中在一屏。点击进入全尺寸体验。</div>
+  </a>
+  <div class="shots">
+    <div class="sh featured rv"><a href="assets/word-body.png" target="_blank" rel="noopener"><img src="assets/word-body.png" alt="Word 图文正文页"></a><div class="cap">正文页：配图自动落到对应章节，连续编号图注，页眉和页码分节 · 点击查看高清原图</div></div>
+    <div class="sh compact rv"><a href="assets/word-cover.png" target="_blank" rel="noopener"><img src="assets/word-cover.png" alt="Word 封面页"></a><div class="cap">封面页：项目名、文件性质与投标人落款 · 点击放大</div></div>
+    <div class="sh compact rv"><a href="assets/word-deviation.png" target="_blank" rel="noopener"><img src="assets/word-deviation.png" alt="Word 技术偏离表页"></a><div class="cap">技术偏离表：招标要求与我方应答逐条对应 · 点击放大</div></div>
+    <div class="sh compact rv"><a href="assets/word-xinchuang.png" target="_blank" rel="noopener"><img src="assets/word-xinchuang.png" alt="Word 章节图文页"></a><div class="cap">章节页：标题、段落、表格与素材图片统一排版 · 点击放大</div></div>
+  </div>
+</div></section>
 
 <!-- ============ 自动播放的产品演示 ============ -->
 <div class="stage" id="demo"><div class="wrap">
+  <div class="stage-head">
+    <div><div class="kick">真实交互界面</div><h2>从上传招标文件，到拿到 Word</h2><p class="lead">下面按真实产品比例播放关键过程；想亲自操作，可直接打开全尺寸在线体验。</p></div>
+    <a class="demo-full" href="app/index.html?demo=1">打开全尺寸在线体验 ↗</a>
+  </div>
   <div class="win">
     <div class="tb"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">中标狗</span><span style="width:46px"></span></div>
     <div class="mini" id="mini">
@@ -361,7 +403,7 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
     <span class="cb" data-i="2">③ 拿不准就问你<span class="fill"></span></span>
     <span class="cb" data-i="3">④ 出件前把关<span class="fill"></span></span>
   </div>
-  <div class="replay">这是产品真实界面与流程的动画还原 · <b id="replay">重新播放</b></div>
+  <div class="replay">产品真实界面与流程动画 · <b id="replay">重新播放</b> · <a href="app/index.html?demo=1">打开全尺寸体验</a></div>
 </div></div>
 
 <section><div class="wrap rv">
@@ -380,7 +422,7 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   <div class="bento">
     <div class="bx w3 rv"><span class="tag">素材库</span><h3>老标书拆成素材</h3><p>上传历史标书,自动拆章节模板、抽图片、归类资质业绩;AI 识图打标,写新标书时按锚点配图。</p></div>
     <div class="bx w3 rv"><span class="tag">不编造</span><h3>缺什么,明说</h3><p>资质、案例、报价缺失时不瞎编,统一标〔需补充〕并列进补料清单。</p></div>
-    <div class="bx w2 rv"><span class="tag">对话即遥控</span><h3>说人话就能指挥</h3><p>「暂停一下」「继续」直接生效;「重写第三章」「整册重跑」先给确认按钮,点了才动手。</p></div>
+    <div class="bx w2 rv"><span class="tag">对话即遥控</span><h3>说人话就能指挥</h3><p>「暂停一下」「继续」直接生效；「修改第三章」「整册重新生成」先给确认按钮，点了才动手。</p></div>
     <div class="bx w2 rv"><span class="tag">版式引擎</span><h3>Word 排版自动兜底</h3><p>14 列宽表自动转横排、固定列宽、表头跨页重复;逐字打散、样板重复能检测能修复。</p></div>
     <div class="bx w2 rv"><span class="tag">本地优先</span><h3>数据留在本机</h3><p>文件都在「文稿/中标狗」,打开就能看;删掉应用,文件还在。也可部署到自己的服务器。</p></div>
     <div class="bx w6 rv"><span class="tag">生成引擎</span><h3>拿 Key 即用,或接你已有的 AI 订阅</h3>
@@ -406,20 +448,10 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   </div>
 </div></section>
 
-<section><div class="wrap">
-  <div class="rv"><div class="kick">真实界面</div><h2>出的 Word,就长这样</h2></div>
-  <div class="shots">
-    <div class="sh rv"><img src="assets/word-cover.png" alt="Word 封面页"><div class="cap">封面页:项目名+文件性质+投标人落款,黑体标题居中。图是成品 docx 直接渲染的</div></div>
-    <div class="sh rv"><img src="assets/word-body.png" alt="Word 图文正文页"><div class="cap">正文页:产品截图自动插到对应章节、连续编号图注,页眉带项目名、页码分节,段落首行缩进两字符</div></div>
-    <div class="sh rv"><img src="assets/word-deviation.png" alt="Word 技术偏离表页"><div class="cap">技术应答偏离表:招标要求→我方应答→满足情况→说明,逐条应答、表头跨页重复</div></div>
-    <div class="sh rv"><img src="assets/word-xinchuang.png" alt="Word 章节图文页"><div class="cap">章节页:标题分层级,段落写满,配图按素材库的落位锚点插进对应章节</div></div>
-  </div>
-</div></section>
-
 <section id="faq"><div class="wrap">
   <div class="rv"><div class="kick">常见问题</div><h2>装之前想知道的</h2></div>
   <div class="faq rv">
-    <details open><summary>macOS 提示「已损坏,无法打开」?</summary><p>不是文件坏了,是系统对未签名应用的默认拦截。拖入「应用程序」后,终端执行 <code>xattr -cr /Applications/中标狗.app</code>;或在「系统设置 → 隐私与安全性」点「仍要打开」。</p></details>
+    <details open><summary>macOS 提示「已损坏,无法打开」?</summary><p>文件并没有损坏。当前安装包尚未使用 Apple Developer ID 完成公证，macOS 会对每次新下载或覆盖安装重新加隔离标记；在商业证书配置完成前，代码本身无法冒充系统公证。更新前先从托盘退出旧版，把新版拖入「应用程序」并替换、推出 DMG 后执行下面命令；也可到「系统设置 → 隐私与安全性」点「仍要打开」。</p><div class="mac-fix"><code>xattr -dr com.apple.quarantine "/Applications/中标狗.app"</code><button class="copy-fix" id="copyMacFix" type="button">复制首次放行命令</button></div></details>
     <details><summary>我的标书和素材会上传到哪里吗?</summary><p>原始文件和产物存在你电脑的「文稿/中标狗」文件夹，不上传到中标狗自有服务器。生成时所需的文本或图片会发送给你主动绑定的模型服务，请同时遵守该服务的数据规则。</p></details>
     <details><summary>不填写 Key 能用吗?</summary><p>能先用内置演示完整走通流程；产真实标书时填写发放的 Key，即可完成完整生成。</p></details>
     <details><summary>生成用的是谁的额度?</summary><p>使用发放的 Key 时，生成、追问与识图都走对应套餐；应用会自动使用内置 OpenCode，无需另装 Node.js，也无需登录 OpenCode 账号。你也可以在高级设置里改用自己的 SoWork、Claude Code 或 Codex 订阅。</p></details>
@@ -433,14 +465,14 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   <div class="hbtns">
     <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片（M 系列）· dmg</em></a>
     <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_x64-setup.exe">下载 Windows 版<em class="dls">Windows 10 / 11 x64 · exe</em></a>
-    <a class="cta g big" href="demo.html?demo=1">在线体验</a>
+    <a class="cta g big" href="app/index.html?demo=1">在线体验</a>
   </div>
 </div></div></section>
 </main>
 
 <footer><div class="wrap">
   <span>中标狗 © 2026 · 作者:FDE-家涛</span>
-  <span>本地运行 · 保留所有权利</span>
+  <span><a href="https://github.com/shandianT" target="_blank" rel="noopener">GitHub · shandianT ↗</a> · 本地运行 · 保留所有权利</span>
 </div></footer>
 
 <script>
@@ -612,7 +644,7 @@ function playWith(sched){
     [11700,() => { const c=$('chips'); if(c) c.remove(); user('等我上传新证'); }],
     [12400,() => agent('好,按「等我上传新证」处理,继续。')],
     [13400,() => { step(7); sys('第 7/12 步 · 分章撰写'); }],
-    [14200,() => agent('六章已分给子 agent 并行写,写完逐章汇报。')],
+    [14200,() => agent('六个章节正在并行撰写，完成后逐章汇报。')],
     [14700,() => markChapter(3)],
     [14900,() => { step(9); sys('第 9/12 步 · 汇总成册'); file('第三章_技术方案.md'); }],
     [15700,() => { step(11); sys('第 11/12 步 · 自查体检'); file('投标文件自检报告.md'); }],
@@ -649,6 +681,19 @@ const dio = new IntersectionObserver(es => es.forEach(e => {
   if(e.isIntersecting && !window.__started){ window.__started = true; markChapter(0); playWith(mkSched(0)); }
 }), {threshold:.25});
 dio.observe($('mini'));
+
+const macFixBtn = $('copyMacFix');
+if(macFixBtn) macFixBtn.onclick = async () => {
+  const command = 'xattr -dr com.apple.quarantine "/Applications/中标狗.app"';
+  try{
+    if(navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(command);
+    else{
+      const input=document.createElement('textarea');input.value=command;input.style.position='fixed';input.style.opacity='0';
+      document.body.appendChild(input);input.select();document.execCommand('copy');input.remove();
+    }
+    macFixBtn.textContent='已复制';setTimeout(()=>macFixBtn.textContent='复制首次放行命令',1800);
+  }catch(_){ macFixBtn.textContent='请手动复制左侧命令'; }
+};
 </script>
 </body>
 </html>

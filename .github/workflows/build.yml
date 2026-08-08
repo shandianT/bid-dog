@@ -229,18 +229,24 @@ jobs:
         working-directory: app
         shell: bash
         env:
-          APPLE_SIGNING_IDENTITY: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_TEAM_ID || '' }}
+          # Do not expose empty APPLE_* names to Tauri: their mere presence enables notarization.
+          MAC_SIGNING_IDENTITY_SECRET: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          MAC_APPLE_ID_SECRET: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_ID || '' }}
+          MAC_APPLE_PASSWORD_SECRET: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_PASSWORD || '' }}
+          MAC_TEAM_ID_SECRET: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_TEAM_ID || '' }}
         run: |
           # 没有商业证书时，macOS 也必须做 ad-hoc 签名：既保证整个 .app 资源封装有效，
           # 也会重签 npm 上游自带无效 linker signature 的 OpenCode sidecar。
           # 这不是 Apple Developer 签名/公证，用户仍需按 README 首次放行。
           if [ "$RUNNER_OS" = "macOS" ] && [ "$MAC_SIGNING_READY" != "true" ]; then
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
             export APPLE_SIGNING_IDENTITY="-"
           fi
           if [ "$RUNNER_OS" = "macOS" ] && [ "$MAC_SIGNING_READY" = "true" ]; then
+            export APPLE_SIGNING_IDENTITY="$MAC_SIGNING_IDENTITY_SECRET"
+            export APPLE_ID="$MAC_APPLE_ID_SECRET"
+            export APPLE_PASSWORD="$MAC_APPLE_PASSWORD_SECRET"
+            export APPLE_TEAM_ID="$MAC_TEAM_ID_SECRET"
             npm run build ${{ matrix.build_args }} --config src-tauri/tauri.macos-signing.conf.json
           elif [ "$RUNNER_OS" = "Windows" ] && [ "$WINDOWS_SIGNING_READY" = "true" ]; then
             npm run build ${{ matrix.build_args }} --config "$TAURI_WINDOWS_SIGNING_CONFIG"
@@ -272,6 +278,10 @@ jobs:
           if [ "$MAC_SIGNING_READY" = "true" ]; then
             spctl --assess --type execute --verbose=2 "$app_path"
             xcrun stapler validate "$app_path"
+          else
+            signature=$(codesign -dv --verbose=4 "$app_path" 2>&1)
+            printf '%s\n' "$signature" | grep -q 'Signature=adhoc'
+            printf '%s\n' "$signature" | grep -q 'TeamIdentifier=not set'
           fi
           engine_data="$RUNNER_TEMP/bid-engine-smoke"
           engine_log="$RUNNER_TEMP/bid-engine-smoke.log"
@@ -443,8 +453,8 @@ jobs:
             - 校验文件: `SHA256SUMS`
             - 需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可。
 
-            **macOS 提示「已损坏,无法打开」?** 不是文件坏了,是系统对未签名应用的拦截。把应用拖入「应用程序」后,终端执行:
-            `xattr -cr /Applications/中标狗.app` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。详见仓库 docs/Mac安装说明.md。
+            **macOS 提示「已损坏,无法打开」?** 不是文件坏了,是系统对未公证应用的拦截。更新前先从托盘退出旧版，把新版拖入「应用程序」并替换、推出 DMG 后执行:
+            `xattr -dr com.apple.quarantine "/Applications/中标狗.app"` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。每个新下载版本都可能再次需要放行。详见 README。
             Windows SmartScreen 提示时点「更多信息 → 仍要运行」。
 
             v0.19.0（完整说明见仓库更新日志）:
