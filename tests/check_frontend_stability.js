@@ -50,12 +50,248 @@ let pure = null;
 if (start >= 0 && end > start) {
   const block = html.slice(start + startMark.length, end);
   const sandbox = {};
-  vm.runInNewContext(`${block}\nthis.__pure = { isBodyWordArtifact, wordPresence, completionGate, activeClock, eventStreamUrl, withDiagnosticAction, healthUpdateInfo, modeFromModel, modeSwitchBlocked };`, sandbox);
+  vm.runInNewContext(`${block}\nthis.__pure = {
+    isBodyWordArtifact, wordPresence, completionGate, activeClock, eventStreamUrl,
+    withDiagnosticAction, healthUpdateInfo, modeFromModel, modeSwitchBlocked,
+    publicTaskState: typeof publicTaskState === 'function' ? publicTaskState : null,
+    taskGroupOpen: typeof taskGroupOpen === 'function' ? taskGroupOpen : null,
+    taskPresentation: typeof taskPresentation === 'function' ? taskPresentation : null,
+    taskCapabilities: typeof taskCapabilities === 'function' ? taskCapabilities : null,
+    friendlyRuntimeNotice: typeof friendlyRuntimeNotice === 'function' ? friendlyRuntimeNotice : null,
+    deliveryViewModel: typeof deliveryViewModel === 'function' ? deliveryViewModel : null,
+    diagnosticCheckView: typeof diagnosticCheckView === 'function' ? diagnosticCheckView : null,
+  };`, sandbox);
   pure = sandbox.__pure;
 }
 
 test('稳定性纯函数块存在并可由 Node 直接执行', () => {
   assert.ok(pure, '缺少 FRONTEND_STABILITY_PURE 标记或函数');
+});
+
+test('内部状态严格收敛为五种用户状态，状态不明只可显示为未完成', () => {
+  assert.strictEqual(typeof pure.publicTaskState, 'function', '缺少 publicTaskState');
+  const cases = [
+    [{state:'staged'}, 'preparing'],
+    [{state:'running'}, 'generating'],
+    [{state:'running', presentation:{needs_attention:true}}, 'needs_input'],
+    [{state:'paused'}, 'needs_input'],
+    [{state:'done', has_word:true, delivery:{state:'ready'}}, 'completed'],
+    [{state:'done', has_word:true, delivery:{state:'needs_attention'}}, 'needs_input'],
+    [{state:'stopped'}, 'failed'],
+    [{state:'unknown'}, 'failed'],
+    [{state:'done', has_word:false}, 'failed'],
+  ];
+  for(const [job, expected] of cases) assert.strictEqual(pure.publicTaskState(job), expected, JSON.stringify(job));
+  const labels = cases.map(([job]) => pure.taskPresentation(job, Date.parse('2026-08-08T12:00:00Z')).label);
+  assert.deepStrictEqual([...new Set(labels)].sort(), ['准备中','已完成','未完成','生成中','需要你确认'].sort());
+  assert.ok(!labels.some(label => /状态不明|执行外壳|OpenCode|CLI/i.test(label)));
+});
+
+test('任务分组首次打开高关注三组，完成和未完成折叠，用户选择跨轮询保持', () => {
+  assert.strictEqual(typeof pure.taskGroupOpen,'function');
+  for(const key of ['preparing','generating','needs_input']) assert.strictEqual(pure.taskGroupOpen(key,{},false),true,key);
+  for(const key of ['completed','failed']) assert.strictEqual(pure.taskGroupOpen(key,{},false),false,key);
+  assert.strictEqual(pure.taskGroupOpen('generating',{generating:false},false),false);
+  assert.strictEqual(pure.taskGroupOpen('completed',{completed:true},false),true);
+  assert.strictEqual(pure.taskGroupOpen('failed',{failed:false},true),true);
+});
+
+test('任务呈现包含当前动作、最后活动与 ETA，兼容新旧后端字段', () => {
+  assert.strictEqual(typeof pure.taskPresentation, 'function', '缺少 taskPresentation');
+  const now = Date.parse('2026-08-08T12:00:00Z');
+  const modern = pure.taskPresentation({
+    state:'running', stage:'分章撰写',
+    presentation:{display_state:'generating', current_action:'正在撰写技术方案', last_activity_at:'2026-08-08T11:58:00Z', eta_seconds:600}
+  }, now);
+  assert.strictEqual(modern.label, '生成中');
+  assert.match(modern.currentAction, /撰写技术方案/);
+  assert.match(modern.lastActivity, /2 分钟前/);
+  assert.match(modern.eta, /约 10 分钟/);
+  const legacy = pure.taskPresentation({state:'unknown', stage:'已停止（连接中断）', created_at:'2026-08-08T11:00:00Z'}, now);
+  assert.strictEqual(legacy.label, '未完成');
+  assert.ok(!/状态不明|执行外壳|OpenCode|CLI/i.test([legacy.currentAction, legacy.lastActivity, legacy.eta].join(' ')));
+  const contract = pure.taskPresentation({
+    state:'running', presentation:{code:'generating',label:'生成中'}, status:'active',
+    current_action:'正在核对评分条款', last_activity_at:'2026-08-08T11:59:00Z', eta:180
+  }, now);
+  assert.strictEqual(contract.state, 'generating');
+  assert.match(contract.currentAction, /评分条款/);
+  assert.match(contract.lastActivity, /1 分钟前/);
+  assert.match(contract.eta, /3 分钟/);
+});
+
+test('稳定模式能力会关闭暂停并给出用户说明', () => {
+  assert.strictEqual(typeof pure.taskCapabilities, 'function', '缺少 taskCapabilities');
+  const modern = pure.taskCapabilities({capabilities:{pause:false, live_instruction:false}, presentation:{mode:'stable'}});
+  assert.strictEqual(modern.pause, false);
+  assert.match(modern.pauseReason, /稳定模式|暂不支持暂停/);
+  const legacy = pure.taskCapabilities({state:'running', can:['pause','stop']});
+  assert.strictEqual(legacy.pause, true);
+  const contract = pure.taskCapabilities({state:'running', runtime:{mode:'compatibility',capabilities:{
+    pause:{enabled:false,reason:'稳定模式需保持本轮连续运行'}
+  }}});
+  assert.strictEqual(contract.pause, false);
+  assert.match(contract.pauseReason, /稳定模式|连续运行/);
+});
+
+test('运行方式回落只显示友好文案，技术原因留在诊断详情', () => {
+  assert.strictEqual(typeof pure.friendlyRuntimeNotice, 'function', '缺少 friendlyRuntimeNotice');
+  const notice = pure.friendlyRuntimeNotice({
+    type:'message', text:'⚠ 执行外壳起来了但链路没通(执行外壳探活 90 秒没有完整回复),这一单改用兼容模式跑。'
+  });
+  assert.strictEqual(notice.text, '连接响应较慢，已自动切换稳定模式，任务正在继续。');
+  assert.match(notice.technicalDetail, /90 秒/);
+  assert.ok(!/执行外壳|OpenCode|CLI|探活|兼容模式/i.test(notice.text));
+  assert.strictEqual(notice.action.label, '查看原因');
+});
+
+test('一键诊断按 status 正确显示通过、提醒和失败', () => {
+  assert.strictEqual(pure.diagnosticCheckView({status:'pass'}).symbol,'✓');
+  assert.strictEqual(pure.diagnosticCheckView({status:'warning'}).symbol,'△');
+  assert.strictEqual(pure.diagnosticCheckView({status:'fail'}).symbol,'✗');
+  assert.strictEqual(pure.diagnosticCheckView({ok:false}).symbol,'✗');
+});
+
+test('交付视图以主 Word 和三项检查为核心，并对缺失数据使用未知而非伪通过', () => {
+  assert.strictEqual(typeof pure.deliveryViewModel, 'function', '缺少 deliveryViewModel');
+  const vm = pure.deliveryViewModel({delivery:{
+    primary_word:{name:'投标文件_技术标.docx', size_kb:2048},
+    checks:{toc:{state:'pass'}, deviations:{state:'warn', deviation_rows:72, score_rows:95}, quality:{state:'pass'}}
+  }}, []);
+  assert.strictEqual(vm.primary.name, '投标文件_技术标.docx');
+  assert.strictEqual(vm.toc.state, 'pass');
+  assert.match(vm.deviations.detail, /72\/95/);
+  assert.strictEqual(vm.quality.state, 'pass');
+  const unknown = pure.deliveryViewModel({has_word:true}, [{name:'投标文件_技术标.docx', size_kb:10}]);
+  assert.strictEqual(unknown.toc.state, 'unknown');
+  assert.strictEqual(unknown.deviations.state, 'unknown');
+  assert.strictEqual(unknown.quality.state, 'unknown');
+  const contract = pure.deliveryViewModel({delivery:{
+    word:{present:true,name:'响应文件.docx',url:'/download/word'}, ready:true,
+    toc:{status:'pass'}, deviations:{status:'warn',technical:{present:true,rows:72},business:{present:false,rows:0},total_rows:72},
+    checks:{status:'pass',level:'green',summary:'格式与内容检查通过'}
+  }}, []);
+  assert.strictEqual(contract.primary.name, '响应文件.docx');
+  assert.strictEqual(contract.toc.state, 'pass');
+  assert.match(contract.deviations.detail, /技术表 已检测 · 72 条/);
+  assert.match(contract.deviations.detail, /商务表 缺失/);
+  assert.doesNotMatch(contract.deviations.detail, /\[object Object\]/);
+  assert.strictEqual(contract.quality.state, 'pass');
+});
+
+test('已完成或待确认任务有交付优先主视图，过程与诊断退居二级', () => {
+  expectHtml(/id="resultView"/);
+  expectHtml(/id="resultWord"/);
+  expectHtml(/id="resultChecks"/);
+  expectHtml(/id="resultOpen"[^>]*>打开</);
+  expectHtml(/id="resultDownload"[^>]*>下载|id="resultDownload"[^>]*>另存为/);
+  expectHtml(/id="resultModify"[^>]*>继续修改</);
+  expectHtml(/id="resultUsage"/);
+  expectHtml(/交付结果/);
+  expectHtml(/过程与诊断/);
+  const main = section('function renderMain()', '/* ================= 任务列表');
+  assert.ok(/resultView/.test(main), 'renderMain 没有按任务状态切换交付结果视图');
+  assert.ok(/publicTaskState/.test(main), '结果视图切换没有使用五态模型');
+});
+
+test('首次使用只呈现 Key、测试连接、上传文件三步', () => {
+  const onboarding = section('<!-- FIRST_RUN_START -->', '<!-- FIRST_RUN_END -->');
+  for(const label of ['填写 Key','测试连接','上传文件']) assert.match(onboarding, new RegExp(label));
+  for(const technical of ['Base URL','OpenCode','Codex','执行外壳','模型 ID'])
+    assert.doesNotMatch(onboarding, new RegExp(technical, 'i'));
+  assert.doesNotMatch(onboarding, /\bCLI\b/i);
+  expectHtml(/id="onboarding"/);
+  expectHtml(/id="obKey"/);
+  expectHtml(/function showOnboarding\(/);
+  expectHtml(/function onboardingConnect\(/);
+  expectHtml(/api\('\/v1\/setup'\)/);
+  expectHtml(/\/v1\/setup\/connect/);
+  expectHtml(/\/v1\/setup\/complete/);
+  const setup = section('async function showOnboarding(force)', '/* ================= 视图切换');
+  assert.match(setup, /setup_complete|completed|needs_setup|status/);
+});
+
+test('新建任务 V2 采用主件、模板项目、素材确认三步并折叠补充要求', () => {
+  const newJob = section('<div class="sheet" id="newjob"', '<div class="sheet" id="redo"');
+  for(const label of ['主件','模板与项目','素材确认']) assert.match(newJob, new RegExp(label));
+  assert.match(newJob, /id="njTemplate"/);
+  assert.match(newJob, /政府采购/);
+  assert.match(newJob, /工程施工/);
+  assert.match(newJob, /服务类投标/);
+  assert.match(newJob, /id="njProject"/);
+  assert.match(newJob, /<details[^>]*id="njExtra"/);
+  expectHtml(/template_id/);
+  expectHtml(/project_id/);
+});
+
+test('批量管理以归档、重跑、导出、项目为主，删除只在更多操作里', () => {
+  const tasks = section('function taskRow(j, compact)', '/* ================= 选择任务 + SSE');
+  for(const action of ['archive','rerun','export','project'])
+    assert.match(tasks, new RegExp('data-task-bulk-action=["\\\']'+action));
+  assert.match(tasks, /更多操作/);
+  assert.match(tasks, /data-task-more/);
+  assert.doesNotMatch(tasks, /class="del"[^>]*title="删除任务"/, '任务行不应继续直接暴露删除叉号');
+  expectHtml(/function archiveJob\(/);
+  expectHtml(/function runBulkTaskAction\(/);
+});
+
+test('归档是完整视图：可查看、恢复和批量恢复', () => {
+  expectHtml(/id="taskScope"/);
+  expectHtml(/data-task-scope="active"/);
+  expectHtml(/data-task-scope="archived"/);
+  expectHtml(/\/v1\/jobs\?scope=archived/);
+  expectHtml(/function restoreJob\(/);
+  const tasks = section('function taskRow(j, compact)', '/* ================= 选择任务 + SSE');
+  assert.match(tasks, /data-restore/);
+  assert.match(tasks, /action==='restore'/);
+  assert.match(tasks, /data-task-bulk-action="restore"/);
+});
+
+test('任务侧栏支持项目筛选并在任务行显示项目标签', () => {
+  expectHtml(/id="taskProjectFilter"/);
+  expectHtml(/function setTaskProjectFilter\(/);
+  expectHtml(/S\.projectFilter/);
+  const tasks = section('function taskRow(j, compact)', '/* ================= 选择任务 + SSE');
+  assert.match(tasks, /project-tag/);
+});
+
+test('自定义模板可保存和删除，内置模板不可删', () => {
+  expectHtml(/id="njTemplateName"/);
+  expectHtml(/id="njTemplateDelete"/);
+  expectHtml(/function saveCurrentTemplate\(/);
+  expectHtml(/function deleteSelectedTemplate\(/);
+  expectHtml(/method:'POST'[\s\S]{0,220}\/v1\/templates|\/v1\/templates[\s\S]{0,220}method:'POST'/);
+  expectHtml(/method:'DELETE'/);
+  const templateFns = section('async function loadJobTemplates()', 'function njReset()');
+  assert.match(templateFns, /government|construction|service|auto/);
+});
+
+test('批量操作呈现成功/失败汇总，部分失败进入持久问题卡', () => {
+  const bulk = section('async function runBulkTaskAction(action)', 'function runTaskRowAction');
+  assert.match(bulk, /succeeded|success_count/);
+  assert.match(bulk, /failed|failure_count/);
+  assert.match(bulk, /presentProblem/);
+});
+
+test('归档、导出、项目、停止和修改失败不会只显示瞬时 toast', () => {
+  for(const [from,to] of [
+    ['async function archiveJob(id)', 'async function exportJobs(ids)'],
+    ['async function exportJobs(ids)', 'function openProjectMove(ids)'],
+    ['async function applyProjectMove()', 'async function runBulkTaskAction(action)'],
+    ['async function stopJob()', 'function openRevision()'],
+    ['async function doRedo()', 'async function openLog()'],
+  ]) assert.match(section(from,to), /presentProblem/, `${from} 缺少持久问题卡`);
+});
+
+test('关键错误使用持久操作卡，并提供一键诊断与查看原因', () => {
+  expectHtml(/id="problemHost"/);
+  expectHtml(/id="diagnosticSheet"/);
+  expectHtml(/function presentProblem\(/);
+  expectHtml(/function runDiagnostics\(/);
+  expectHtml(/show_detail/);
+  const handle = section('function handle(id, e)', 'async function refreshArts');
+  assert.match(handle, /friendlyRuntimeNotice/);
+  assert.match(handle, /presentProblem/);
 });
 
 test('桌面、在线体验与站点应用三个前端副本保持完全一致', () => {
@@ -134,7 +370,7 @@ test('所有错误动作末尾都有且只有一个诊断包入口', () => {
 test('升级信息仅在确有新版本时出现', () => {
   assert.ok(pure);
   assert.strictEqual(pure.healthUpdateInfo({update: {status: 'pending'}}), null);
-  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.18.2'}}), null);
+  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.0'}}), null);
   const info = pure.healthUpdateInfo({update: {status: 'available', latest: '0.18.3', url: 'https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.18.3'}});
   assert.strictEqual(info.version, '0.18.3');
   assert.match(info.url, /^https:\/\/github\.com\/shandianT\/bid-dog\/releases\//);
@@ -172,12 +408,12 @@ test('现有 OpenCode 与 Codex 回退入口没有被 v56 覆盖', () => {
 
 test('桌面版只连接当前版本专属引擎，不复用旧版驻留进程', () => {
   const connection = section('const IS_WEB', 'let S =');
-  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.18\.2'/.test(connection), '桌面端没有钉住当前引擎版本');
-  assert.ok(/DESKTOP_ENGINE\s*=\s*'http:\/\/127\.0\.0\.1:18802'/.test(connection), '桌面端没有使用版本专属端口');
+  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.19\.0'/.test(connection), '桌面端没有钉住当前引擎版本');
+  assert.ok(/DESKTOP_ENGINE\s*=\s*'http:\/\/127\.0\.0\.1:18900'/.test(connection), '桌面端没有使用版本专属端口');
   assert.ok(/IS_WEB\s*\?\s*\[location\.origin\]\s*:\s*\[DESKTOP_ENGINE\]/.test(connection), '桌面端仍会探测历史端口');
   assert.ok(!/8849|8848|8080/.test(connection), '连接候选仍含历史引擎端口');
   assert.ok(/h\.version\s*===\s*BUNDLED_ENGINE_VERSION/.test(html), '健康检查没有拒绝错误版本');
-  assert.ok(/const ENGINE_PORT:\s*u16\s*=\s*18802;/.test(rustMain), 'Tauri 启动端口与前端不一致');
+  assert.ok(/const ENGINE_PORT:\s*u16\s*=\s*18900;/.test(rustMain), 'Tauri 启动端口与前端不一致');
 });
 
 test('覆盖安装时 WebView 不复用旧前端缓存或历史引擎地址', () => {
@@ -185,8 +421,8 @@ test('覆盖安装时 WebView 不复用旧前端缓存或历史引擎地址', ()
   const launchUrl = String(mainWindow.url || '');
   const failures = [];
   if(mainWindow.incognito !== true) failures.push('主窗口必须启用 incognito=true 隔离旧 WebView 缓存');
-  if(!/0\.18\.2/.test(launchUrl) || !/18802/.test(launchUrl))
-    failures.push('主窗口 URL 必须同时包含版本 0.18.2 与专属端口 18802 作为缓存版本戳');
+  if(!/0\.19\.0/.test(launchUrl) || !/18900/.test(launchUrl))
+    failures.push('主窗口 URL 必须同时包含版本 0.19.0 与专属端口 18900 作为缓存版本戳');
   if(!/localStorage\.removeItem\(\s*['"]bid_api['"]\s*\)/.test(html))
     failures.push('新前端启动时必须清除历史 localStorage.bid_api');
   if(/localStorage\.getItem\(\s*['"]bid_api['"]\s*\)/.test(html))
@@ -200,7 +436,14 @@ test('桌面壳先迁移旧品牌数据目录，并把同一路径显式交给�
   assert.ok(/cmd\.env\("BID_HOME",\s*&?data\)/.test(rustMain), '内置引擎没有显式复用壳层选定的数据目录');
 });
 
-test('状态不明与已完成任务组默认真折叠，整条标题切换且轮询重渲染不丢状态', () => {
+test('桌面通知只由原生壳发送，网页体验才使用 Web Notification', () => {
+  const notifySource = section('function notify(t)', '/* ================= 弹层');
+  assert.match(notifySource, /IS_WEB/);
+  const newJob = section('async function njStart(startNow)', 'async function startStaged');
+  assert.match(newJob, /IS_WEB\s*&&\s*!FORCE_DEMO/);
+});
+
+test('任务列表严格使用五种用户状态，完成与未完成组可折叠且重渲染不丢状态', () => {
   const taskSource = section('function renderTasks()', 'async function delJob');
   const tasks = {
     innerHTML: '',
@@ -208,16 +451,20 @@ test('状态不明与已完成任务组默认真折叠，整条标题切换且�
     addEventListener(type, handler) { this.handlers[type] = handler; }
   };
   const jobs = [];
-  for(let i=0;i<9;i++) jobs.push({job_id:`unknown-${i}`, name:`unknown ${i}`, state:'unknown'});
-  for(let i=0;i<5;i++) jobs.push({job_id:`done-${i}`, name:`done ${i}`, state:'done'});
+  for(let i=0;i<9;i++) jobs.push({job_id:`failed-${i}`, name:`failed ${i}`, state:'unknown'});
+  for(let i=0;i<5;i++) jobs.push({job_id:`done-${i}`, name:`done ${i}`, state:'done',has_word:true});
+  jobs.push({job_id:'running-0',name:'running',state:'running'});
   const sandbox = {
-    S: {jobs, active:'done-0', prog:{}, taskGrpOpen:{}},
+    S: {jobs, archivedJobs:[],taskScope:'active',projectFilter:'',active:'done-0', prog:{}, taskGrpOpen:{generating:true},taskBulkMode:false,taskBulkDeleting:false,taskBulkBusy:false,taskSelected:new Set(),taskMore:null},
     el: id => {
       assert.strictEqual(id, 'tasks');
       return tasks;
     },
-    jobState: job => job.state,
-    taskRow: job => `<div class="task" data-row-state="${job.state}" data-id="${job.job_id}"></div>`,
+    publicTaskState: pure.publicTaskState,
+    taskGroupOpen: pure.taskGroupOpen,
+    visibleTaskJobs: () => jobs,
+    renderTaskFilters() {},
+    taskRow: job => `<div class="task" data-row-state="${pure.publicTaskState(job)}" data-id="${job.job_id}"></div>`,
     esc: value => String(value == null ? '' : value),
     escA: value => String(value == null ? '' : value),
   };
@@ -236,24 +483,27 @@ test('状态不明与已完成任务组默认真折叠，整条标题切换且�
   const expect = (ok, message) => { if(!ok) failures.push(message); };
 
   sandbox.renderTasks();
-  expect(countRows('unknown') === 0, `9 个状态不明任务应默认折叠，实际渲染 ${countRows('unknown')} 行`);
-  expect(countRows('done') === 0, `5 个已完成任务应默认完全折叠（包括 active 行），实际渲染 ${countRows('done')} 行`);
-  expect(hasWholeHeader('unknown'), '状态不明整条标题缺少 data-task-group/aria-expanded 切换语义');
-  expect(hasWholeHeader('done'), '已完成整条标题缺少 data-task-group/aria-expanded 切换语义');
+  expect(countRows('failed') === 0, `9 个未完成任务应默认折叠，实际渲染 ${countRows('failed')} 行`);
+  expect(countRows('completed') === 0, `5 个已完成任务应默认完全折叠，实际渲染 ${countRows('completed')} 行`);
+  expect(countRows('generating') === 1, '生成中任务应默认可见');
+  expect(hasWholeHeader('failed'), '未完成整条标题缺少 data-task-group/aria-expanded 切换语义');
+  expect(hasWholeHeader('completed'), '已完成整条标题缺少 data-task-group/aria-expanded 切换语义');
+  for(const raw of ['unknown','stopped','paused','running','done'])
+    expect(!hasWholeHeader(raw), `不得暴露内部状态分组 ${raw}`);
 
-  clickGroup('unknown');
-  expect(countRows('unknown') === 9, `点击状态不明标题后应展开 9 行，实际 ${countRows('unknown')} 行`);
+  clickGroup('failed');
+  expect(countRows('failed') === 9, `点击未完成标题后应展开 9 行，实际 ${countRows('failed')} 行`);
   sandbox.renderTasks();
-  expect(countRows('unknown') === 9, '轮询式 renderTasks 重渲染后不应丢失状态不明组的展开状态');
-  clickGroup('unknown');
-  expect(countRows('unknown') === 0, `再次点击状态不明标题后应完全折叠，实际 ${countRows('unknown')} 行`);
+  expect(countRows('failed') === 9, '轮询式 renderTasks 重渲染后不应丢失未完成组的展开状态');
+  clickGroup('failed');
+  expect(countRows('failed') === 0, `再次点击未完成标题后应完全折叠，实际 ${countRows('failed')} 行`);
 
-  clickGroup('done');
-  expect(countRows('done') === 5, `点击已完成标题后应展开 5 行，实际 ${countRows('done')} 行`);
+  clickGroup('completed');
+  expect(countRows('completed') === 5, `点击已完成标题后应展开 5 行，实际 ${countRows('completed')} 行`);
   sandbox.renderTasks();
-  expect(countRows('done') === 5, '轮询式 renderTasks 重渲染后不应丢失已完成组的展开状态');
-  clickGroup('done');
-  expect(countRows('done') === 0, `再次点击已完成标题后应完全折叠且不保留 active 行，实际 ${countRows('done')} 行`);
+  expect(countRows('completed') === 5, '轮询式 renderTasks 重渲染后不应丢失已完成组的展开状态');
+  clickGroup('completed');
+  expect(countRows('completed') === 0, `再次点击已完成标题后应完全折叠，实际 ${countRows('completed')} 行`);
 
   assert.strictEqual(failures.length, 0, failures.join('；'));
 });
@@ -330,8 +580,9 @@ function taskBulkRuntime(options) {
     S: {
       online: opts.online !== false,
       jobs: opts.jobs || [], active: null, prog: {}, arts: {}, artsLoaded: {}, health: {}, es: null,
-      taskGrpOpen: {staged:true, running:true, paused:true, stopped:true, unknown:true, done:true},
-      taskBulkMode: false, taskBulkDeleting: false, taskSelected: new Set(),
+      archivedJobs:[],taskScope:'active',projectFilter:'',
+      taskGrpOpen: {preparing:true, generating:true, needs_input:true, completed:true, failed:true},
+      taskBulkMode: false, taskBulkDeleting: false, taskBulkBusy:false, taskBulkMore:false, taskSelected: new Set(),taskMore:null,
     },
     FORCE_DEMO: !!opts.forceDemo,
     el(id) {
@@ -340,6 +591,12 @@ function taskBulkRuntime(options) {
     },
     completionGate: pure.completionGate,
     wordPresence: pure.wordPresence,
+    publicTaskState: pure.publicTaskState,
+    taskPresentation: pure.taskPresentation,
+    taskCapabilities: pure.taskCapabilities,
+    taskGroupOpen: pure.taskGroupOpen,
+    visibleTaskJobs: () => sandbox.S.jobs.filter(j=>!j.archived_at),
+    renderTaskFilters() {},
     verdict: () => ({color: 'var(--green)'}),
     esc: value => String(value == null ? '' : value),
     escA: value => String(value == null ? '' : value)
@@ -394,7 +651,7 @@ test('任务侧栏批量模式可进入退出、逐项选择并全选或取消�
   bulk.setTaskBulkMode(true);
   bulk.renderTasks();
   assert.strictEqual(checkboxTags(runtime.tasks.innerHTML).length, jobs.length, '批量模式下每条当前任务都必须显示复选框');
-  assert.strictEqual((runtime.tasks.innerHTML.match(/class="tbrow/g) || []).length, 2, '批量工具栏必须分成两行，避免窄侧栏溢出');
+  assert.ok((runtime.tasks.innerHTML.match(/class="tbrow/g) || []).length >= 3, '批量工具栏必须分行，避免窄侧栏溢出');
   assert.match(runtime.tasks.innerHTML, /退出批量|完成管理|取消批量/, '批量模式缺少明确的退出入口');
   assert.match(runtime.tasks.innerHTML, /全选/, '批量模式缺少全选当前任务列表入口');
 
@@ -599,7 +856,6 @@ asyncTest('批量删除处理中防止重复确认和重复请求', async () => 
   assert.strictEqual(confirmations, 1, '处理中再次触发不得覆盖确认框或重复确认');
   assert.strictEqual(runtime.sandbox.S.taskBulkDeleting, true, '确认与删除期间应保持 deleting 状态');
   assert.match(runtime.tasks.innerHTML, /处理中/);
-  assert.match(runtime.tasks.innerHTML, /data-task-bulk-delete="1"[^>]*disabled/);
   resolveConfirm(true);
   await Promise.all([first, second]);
 

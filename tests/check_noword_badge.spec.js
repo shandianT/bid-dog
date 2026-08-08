@@ -42,7 +42,7 @@ test('no Word is a red badge and its recovery action calls the engine', async ({
   await page.goto('/');
   await expect(page.locator('#conn')).toContainText('已连接', { timeout: 15_000 });
   await expect(page.locator('#hBadge')).toContainText('没出 Word，未完成');
-  await expect(page.locator('#hAct')).toHaveText('查看中断原因');
+  await expect(page.locator('#hAct')).toHaveText('查看未完成原因');
 
   await page.locator('#hAct').click();
   await expect(page.locator('#check')).toBeVisible();
@@ -73,7 +73,7 @@ test('batch toolbar and destructive confirmation stay inside a narrow viewport',
       renderMain();
     });
 
-    await expect(page.locator('.taskbulk .tbrow')).toHaveCount(2);
+    expect(await page.locator('.taskbulk .tbrow').count()).toBeGreaterThanOrEqual(3);
     const layout = await page.locator('.taskbulk').evaluate(toolbar => {
       const rect = element => {
         const r = element.getBoundingClientRect();
@@ -108,4 +108,62 @@ test('batch toolbar and destructive confirmation stay inside a narrow viewport',
     expect(confirmBox.x + confirmBox.width).toBeLessThanOrEqual(width);
     await page.evaluate(() => cfDone(false));
   }
+});
+
+test('completed task opens the delivery view first and keeps process diagnostics secondary', async ({ page }) => {
+  await page.goto('/?demo=1');
+  await page.evaluate(() => {
+    const id = 'delivery-contract';
+    S.jobs = [{
+      job_id:id, name:'智慧园区响应文件', state:'done', has_word:true,
+      presentation:{code:'completed',label:'已完成'}, status:'complete',
+      current_action:'交付文件已准备好', last_activity_at:new Date().toISOString(), elapsed_seconds:735,
+      usage:{calls:18,input_tokens:12000,output_tokens:8600,total_tokens:20600,estimated_cost:0.42,currency:'USD'},
+      runtime:{mode:'managed',capabilities:{pause:{enabled:false,reason:'任务已结束'}}},
+      delivery:{
+        word:{present:true,name:'智慧园区_投标文件.docx',url:''}, ready:true,
+        toc:{status:'pass',summary:'目录完整'},
+        deviations:{status:'warn',technical:72,business:23,total_rows:95},
+        checks:{status:'pass',summary:'内容与格式检查通过'},
+      },
+    }];
+    S.arts[id]=[{name:'智慧园区_投标文件.docx',size_kb:2048}];S.artsLoaded[id]=true;S.active=id;S.processView[id]=false;
+    renderTasks();renderMain();
+  });
+
+  await expect(page.locator('#resultView')).toBeVisible();
+  await expect(page.locator('#resultWordName')).toHaveText('智慧园区_投标文件.docx');
+  await expect(page.locator('#resultChecks')).toContainText('目录完整性');
+  await expect(page.locator('#resultChecks')).toContainText('共 95 条');
+  await expect(page.locator('#resultUsage')).toContainText('20,600 tokens');
+
+  await page.getByRole('button', {name:'过程与诊断'}).click();
+  await expect(page.locator('#chat')).toBeVisible();
+  await expect(page.locator('#resultTabBtn')).toBeVisible();
+  await page.locator('#resultTabBtn').click();
+  await expect(page.locator('#resultView')).toBeVisible();
+});
+
+test('stable mode explains disabled pause and runtime fallback keeps technical text in diagnostics', async ({ page }) => {
+  await page.goto('/?demo=1');
+  await page.evaluate(() => {
+    const id='stable-job';
+    S.online=true;
+    S.jobs=[{job_id:id,name:'稳定生成任务',state:'running',presentation:{code:'generating'},current_action:'正在撰写技术方案',
+      runtime:{mode:'compatibility',capabilities:{pause:{enabled:false,reason:'稳定模式需保持本轮连续运行'}}}}];
+    S.active=id;S.prog[id]={pct:35,step:4,total:12,stage:'正在撰写技术方案'};S.processView[id]=true;
+    renderTasks();renderMain();renderHead();
+  });
+  await expect(page.locator('#pauseBtn')).toBeVisible();
+  await expect(page.locator('#pauseBtn')).toHaveAttribute('aria-disabled','true');
+  await expect(page.locator('#pauseBtn')).toHaveAttribute('title',/稳定模式|连续运行/);
+
+  await page.evaluate(() => handle('stable-job', {
+    type:'message',role:'agent',text:'⚠ 执行外壳起来了但链路没通(执行外壳探活 90 秒没有完整回复),这一单改用兼容模式跑。'
+  }));
+  await expect(page.locator('#problemHost')).toContainText('连接响应较慢，已自动切换稳定模式，任务正在继续。');
+  await expect(page.locator('#problemHost')).not.toContainText('执行外壳');
+  await page.locator('#problemHost').getByRole('button',{name:'查看原因'}).click();
+  await expect(page.locator('#diagnosticSheet')).toBeVisible();
+  await expect(page.locator('#diagnosticDetail')).toContainText('90 秒');
 });

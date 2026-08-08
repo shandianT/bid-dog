@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>中标狗 — 招标文件丢进去,出一份能直接交的 Word 标书</title>
-<meta name="description" content="中标狗:装在自己电脑上的投标文件生成工具。拖入招标文件,拆出评分点和废标项,分章写完出 Word,出件前过一道质检。文件不上传。">
+<meta name="description" content="中标狗:装在自己电脑上的投标文件生成工具。原始文件和产物存放本机；生成所需内容仅发送给你绑定的模型服务。">
 <link rel="icon" href="assets/icon.png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -65,6 +65,8 @@ h1 .gr{background:linear-gradient(100deg,var(--brand) 10%,var(--brand2) 55%,#c9b
 .cta.p .dls{opacity:.85}
 .trust{margin-top:16px;font-size:12.5px;color:var(--dim)}
 .trust a{text-decoration:underline;text-underline-offset:2px}
+.download-meta{margin:14px auto 0;max-width:760px;color:var(--dim);font-size:12px;line-height:1.7}
+.download-meta b{color:var(--sub);font-weight:600}
 
 /* ---------- 演示窗口 ---------- */
 .stage{margin-top:52px;position:relative}
@@ -285,12 +287,13 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 <div class="hero"><div class="wrap">
   <div class="badge"><i></i><span id="relVer">v0.18.2</span> · macOS / Windows · 数据留本机 · 粘一串 Key 就能用</div>
   <h1>招标文件丢进去,<br>出一份能直接交的 <span class="gr">Word 标书</span></h1>
-  <p class="hsub">中标狗装在自己电脑上,macOS / Windows 都能装,<b style="color:var(--ink)">文件不上传</b>。拆出评分点和废标项,分章写完正文和偏离表应答,出 Word 前先过一道出件质检。</p>
+  <p class="hsub">中标狗装在自己电脑上,macOS / Windows 都能装,<b style="color:var(--ink)">原始文件和产物存放本机</b>。生成所需文本或图片会发送给你绑定的模型服务，不经过中标狗自有服务器。</p>
   <div class="hbtns" id="get">
-    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片 · dmg</em></a>
-    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_x64-setup.exe">下载 Windows 版<em class="dls">64 位 · exe</em></a>
+    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片（M 系列）· dmg</em></a>
+    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_x64-setup.exe">下载 Windows 版<em class="dls">Windows 10 / 11 x64 · exe</em></a>
     <a class="cta g big" href="demo.html?demo=1">在线体验(不用装)</a>
   </div>
+  <div class="download-meta" id="releaseMeta"><b>兼容性：</b>Intel Mac 暂不支持、暂无安装包；Windows ARM 暂不支持。安装包目前未完成商业签名，首次打开可能需要按系统提示放行。</div>
   <div class="trust">不填配置也能先跑一遍内置演示 ·
     <a href="https://github.com/shandianT/bid-dog/releases" target="_blank" rel="noopener" style="color:inherit">全部版本</a></div>
 </div></div>
@@ -304,10 +307,10 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
       <div class="ms">
         <div class="lg"><b></b>中标狗</div>
         <div class="nb">＋<div>新建任务<span>选择或拖入招标文件</span></div></div>
-        <div class="gl" id="glTitle" style="opacity:0">进行中 · 1</div>
+        <div class="gl" id="glTitle" style="opacity:0">生成中 · 1</div>
         <div class="ti" id="task1">
           <div class="tn"><i></i><span>滨江智慧管网项目</span></div>
-          <div class="tm" id="tStage">启动中 · 0%</div>
+          <div class="tm" id="tStage">准备中 · 0%</div>
           <div class="bar"><b id="tBar"></b></div>
         </div>
         <div class="btm"><span>📁 素材库</span><span>⚙ 设置 · 模型接入</span></div>
@@ -365,8 +368,8 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   <div class="stats">
     <div class="st"><b>12 阶段</b><span>流水线,每步落盘验收</span></div>
     <div class="st"><b>36+ 项</b><span>出件前格式与内容质检</span></div>
-    <div class="st"><b>162 项</b><span>自动化回归,每版全跑</span></div>
-    <div class="st"><b>0 上传</b><span>文件全程留在你电脑</span></div>
+    <div class="st"><b>200+ 项</b><span>自动化回归,每版全跑</span></div>
+    <div class="st"><b>本机存储</b><span>原始文件和产物留在电脑</span></div>
   </div>
 </div></section>
 
@@ -394,8 +397,8 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 
 <section id="gate"><div class="wrap">
   <div class="rv"><div class="kick">出件质检</div>
-  <h2>质检不过就不出 Word</h2>
-  <p class="lead">每一册出 Word 前都要过格式和内容两道检查。结论三种颜色,红的直接拦住不让出件。</p></div>
+  <h2>没出正文 Word，或关键检查没过，就不算可交付</h2>
+  <p class="lead">Word 可以先生成供你检查；目录、偏离表或关键质检未通过时，任务不会宣告“已完成”。</p></div>
   <div class="gates rv" style="max-width:760px">
     <div class="gt"><i style="background:var(--bad)"></i><b>暂不可投</b><span>投标人名称/报价未填 · 资质缺失 · 内容异常</span></div>
     <div class="gt"><i style="background:var(--warn)"></i><b>待你确认</b><span>证书临期 · 业绩差一份佐证</span></div>
@@ -417,9 +420,9 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   <div class="rv"><div class="kick">常见问题</div><h2>装之前想知道的</h2></div>
   <div class="faq rv">
     <details open><summary>macOS 提示「已损坏,无法打开」?</summary><p>不是文件坏了,是系统对未签名应用的默认拦截。拖入「应用程序」后,终端执行 <code>xattr -cr /Applications/中标狗.app</code>;或在「系统设置 → 隐私与安全性」点「仍要打开」。</p></details>
-    <details><summary>我的标书和素材会上传到哪里吗?</summary><p>不会。所有文件存在你电脑的「文稿/中标狗」文件夹,程序本地运行。只有你主动绑定的生成引擎/模型网关会按你的配置被调用。</p></details>
-    <details><summary>不绑定任何 AI 能用吗?</summary><p>能。内置演示模式完整走通建任务、12 阶段、对话、产出、出件检查全流程。产真实标书时再绑定 SoWork / Claude Code / Codex 任一引擎。</p></details>
-    <details><summary>生成用的是谁的额度?</summary><p>生成标书本体走你绑定的 CLI 订阅额度;「模型接入」里的 API Key 只用于对话追问与图片打标,两个额度分开算,用完会提示。</p></details>
+    <details><summary>我的标书和素材会上传到哪里吗?</summary><p>原始文件和产物存在你电脑的「文稿/中标狗」文件夹，不上传到中标狗自有服务器。生成时所需的文本或图片会发送给你主动绑定的模型服务，请同时遵守该服务的数据规则。</p></details>
+    <details><summary>不填写 Key 能用吗?</summary><p>能先用内置演示完整走通流程；产真实标书时填写发放的 Key，即可完成完整生成。</p></details>
+    <details><summary>生成用的是谁的额度?</summary><p>使用发放的 Key 时，生成、追问与识图都走对应套餐；应用会自动使用内置 OpenCode，无需另装 Node.js，也无需登录 OpenCode 账号。你也可以在高级设置里改用自己的 SoWork、Claude Code 或 Codex 订阅。</p></details>
     <details><summary>怎么更新版本?</summary><p>下载新安装包覆盖安装即可,数据与配置自动保留,老版本数据目录会自动迁移,任务与素材一个不丢。</p></details>
   </div>
 </div></section>
@@ -428,8 +431,8 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   <h2 style="margin-top:0">拿一份招标文件试一遍</h2>
   <p class="lead center" style="margin:0 auto 26px">不填配置也能跑一遍内置演示。要出真件,粘一串 Key 就行,不用注册 AI 账号,也能接自己已有的 Claude Code / Codex 订阅。</p>
   <div class="hbtns">
-    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片 · dmg</em></a>
-    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_x64-setup.exe">下载 Windows 版<em class="dls">64 位 · exe</em></a>
+    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片（M 系列）· dmg</em></a>
+    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.18.2/bid-dog_0.18.2_x64-setup.exe">下载 Windows 版<em class="dls">Windows 10 / 11 x64 · exe</em></a>
     <a class="cta g big" href="demo.html?demo=1">在线体验</a>
   </div>
 </div></div></section>
@@ -462,16 +465,31 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   fetch('https://api.github.com/repos/shandianT/bid-dog/releases?per_page=5')
     .then(r => r.ok ? r.json() : Promise.reject())
     .then(list => {
-      const rel = (list || []).find(x => x && !x.draft && !x.prerelease && (x.assets || []).length);
+      const rel = (list || []).find(x => {
+        if(!x || x.draft || x.prerelease || !/^desktop-v\d+\.\d+\.\d+$/.test(x.tag_name || '')) return false;
+        const assets = x.assets || [];
+        const names = new Set(assets.map(a => a && a.name));
+        const ver = (x.tag_name || '').replace(/^desktop-v/, '');
+        const ready = name => assets.some(a => a && a.name === name
+          && a.state === 'uploaded' && Number(a.size) > 0
+          && String(a.browser_download_url || '').startsWith('https://'));
+        return names.has('bid-dog_' + ver + '_aarch64.dmg')
+          && names.has('bid-dog_' + ver + '_x64-setup.exe')
+          && names.has('SHA256SUMS')
+          && ready('bid-dog_' + ver + '_aarch64.dmg')
+          && ready('bid-dog_' + ver + '_x64-setup.exe')
+          && ready('SHA256SUMS');
+      });
       if(!rel) return;
-      const pick = re => (rel.assets.find(a => re.test(a.name)) || {}).browser_download_url;
+      const pick = re => rel.assets.find(a => re.test(a.name)) || null;
       const dmg = pick(/_aarch64\.dmg$/i), exe = pick(/_x64-setup\.exe$/i);
       const ver = (rel.tag_name || '').replace(/^desktop-v?/, '');
-      document.querySelectorAll('.dl-mac').forEach(a => { if(dmg) a.href = dmg; });
-      document.querySelectorAll('.dl-win').forEach(a => { if(exe) a.href = exe; });
+      document.querySelectorAll('.dl-mac').forEach(a => { if(dmg) a.href = dmg.browser_download_url; });
+      document.querySelectorAll('.dl-win').forEach(a => { if(exe) a.href = exe.browser_download_url; });
       if(ver){
-        document.querySelectorAll('.dl-mac .dls').forEach(e => e.textContent = 'Apple 芯片 · dmg · v' + ver);
-        document.querySelectorAll('.dl-win .dls').forEach(e => e.textContent = '64 位 · exe · v' + ver);
+        const size = asset => asset && asset.size ? ' · ' + (asset.size / 1048576).toFixed(1) + ' MB' : '';
+        document.querySelectorAll('.dl-mac .dls').forEach(e => e.textContent = 'Apple 芯片（M 系列）· dmg · v' + ver + size(dmg));
+        document.querySelectorAll('.dl-win .dls').forEach(e => e.textContent = 'Windows 10 / 11 x64 · exe · v' + ver + size(exe));
         const vb = document.getElementById('relVer'); if(vb) vb.textContent = 'v' + ver;
       }
     })
@@ -600,9 +618,9 @@ function playWith(sched){
     [15700,() => { step(11); sys('第 11/12 步 · 自查体检'); file('投标文件自检报告.md'); }],
     [16600,() => { step(12); sys('第 12/12 步 · 出Word质检'); file('投标文件_技术标.docx'); }],
     [17600,() => { $('spin').style.display='none'; $('ticks').innerHTML=ticksHtml(13,true);
-                   $('curStep').textContent='已完成 · 有必办项'; $('stepN').textContent='12/12';
+                   $('curStep').textContent='需要你确认 · 有 3 项必办'; $('stepN').textContent='12/12';
                    $('eta').textContent='共 4 分 22 秒'; $('hSub').textContent='全部 12 步完成 · 用时 4 分 22 秒';
-                   $('tStage').textContent='完成 · 100%'; $('tBar').style.width='100%';
+                   $('tStage').textContent='需要你确认 · 已生成 Word'; $('tBar').style.width='100%';
                    $('task1').querySelector('.tn i').style.background='#b7791f';
                    $('bdg').classList.add('s'); $('pill').classList.add('on'); $('pill').textContent='看必办清单';
                    $('wT').textContent='出件前需要你 3 项';

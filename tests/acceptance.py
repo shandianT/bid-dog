@@ -217,7 +217,7 @@ def assess(client, job_id, state):
 
 def write_report(path, mode, model, rows):
     lines = [
-        "# v0.18.2 人工出件验收",
+        "# v0.19.0 人工出件验收",
         "",
         "- 模式：%s" % mode,
         "- 模型：%s" % model,
@@ -277,8 +277,8 @@ def main(argv=None):
         health = client.get("/v1/health")
         health.raise_for_status()
         version = str(health.json().get("version") or "")
-        if version != "0.18.2":
-            raise RuntimeError("acceptance requires engine v0.18.2, got %s" % (version or "unknown"))
+        if version != "0.19.0":
+            raise RuntimeError("acceptance requires engine v0.19.0, got %s" % (version or "unknown"))
         configure(client, args.upstream, key, model, not args.insecure)
         try:
             probe_agent(client)

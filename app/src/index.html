@@ -237,6 +237,70 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .attrow svg{color:var(--dim)}
 .attrow .as{margin-left:auto;color:var(--faint);font-size:11px}
 
+/* ============ 交付结果：完成后先给文件和结论，过程信息退到二级 ============ */
+.result-view{flex:1;min-height:0;display:none;overflow-y:auto;padding:28px 34px 42px;background:linear-gradient(180deg,#fbfcfe 0,#fff 180px)}
+.result-wrap{width:min(900px,100%);margin:0 auto;display:flex;flex-direction:column;gap:18px}
+.result-nav{display:flex;align-items:center;gap:8px;font:500 12px/1 inherit}
+.result-nav .tab{border:0;background:transparent;color:var(--dim);padding:8px 10px;border-radius:8px;cursor:pointer}
+.result-nav .tab.on{background:var(--blue-t);color:var(--blue)}
+.result-hero{display:flex;align-items:flex-start;gap:16px;padding:8px 2px 2px}
+.result-mark{width:42px;height:42px;border-radius:13px;display:flex;align-items:center;justify-content:center;background:var(--green-bg);color:var(--green);font:700 20px/1 inherit;flex:none}
+.result-mark.warn{background:var(--amber-bg);color:var(--amber)}
+.result-mark.bad{background:var(--red-bg);color:var(--red)}
+.result-title{flex:1;min-width:0}.result-title h2{font:650 22px/1.35 inherit;letter-spacing:-.02em}
+.result-title p{font:400 13px/1.7 inherit;color:var(--dim);margin-top:4px}
+.result-shell{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(260px,.8fr);gap:14px}
+.result-card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--sh-xs)}
+.result-word{display:flex;gap:14px;align-items:center;min-height:116px}
+.word-icon{width:48px;height:56px;border-radius:10px;background:var(--blue-t);color:var(--blue);display:flex;align-items:center;justify-content:center;font:700 12px/1 inherit;flex:none}
+.word-copy{min-width:0;flex:1}.word-copy b{display:block;font:600 15px/1.45 inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.word-copy span{display:block;color:var(--dim);font:400 12px/1.55 inherit;margin-top:4px}
+.result-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:15px}
+.result-actions button{border:1px solid var(--line-d);background:#fff;color:var(--ink);border-radius:9px;padding:9px 14px;font:550 12.5px/1 inherit;cursor:pointer}
+.result-actions button:hover{background:var(--hover)}
+.result-actions button.primary{background:var(--blue);border-color:var(--blue);color:#fff}.result-actions button.primary:hover{background:var(--blue-d)}
+.result-actions button:disabled{opacity:.45;cursor:not-allowed}
+.result-checks{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.result-check{display:grid;grid-template-columns:18px 92px 1fr;align-items:center;gap:7px;padding:10px 11px;border-radius:10px;background:var(--panel);font:400 12px/1.5 inherit}
+.result-check .ci{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:700 10px/1 inherit}
+.result-check.pass .ci{background:var(--green-bg);color:var(--green)}.result-check.warn .ci{background:var(--amber-bg);color:var(--amber)}
+.result-check.fail .ci{background:var(--red-bg);color:var(--red)}.result-check.unknown .ci{background:var(--hover);color:var(--dim)}
+.result-check strong{font-weight:550}.result-check span:last-child{color:var(--dim)}
+.usage-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+.usage-item{background:var(--panel);border-radius:10px;padding:10px}.usage-item b{display:block;font:600 14px/1.25 inherit}
+.usage-item span{display:block;font:400 10.5px/1.4 inherit;color:var(--faint);margin-top:3px}
+.result-note{font:400 11.5px/1.65 inherit;color:var(--dim);margin-top:11px}
+
+/* 持久问题卡：不会像 toast 一闪而过 */
+.problem-host{display:none;position:absolute;z-index:60;top:10px;left:50%;transform:translateX(-50%);width:min(780px,calc(100% - 28px));pointer-events:none}
+.problem-card{pointer-events:auto;border:1px solid #efc9c5;background:#fffafa;border-radius:13px;padding:12px 14px;box-shadow:var(--sh-sm);display:flex;align-items:flex-start;gap:11px}
+.problem-card.info{border-color:#cddff4;background:#f8fbff}.problem-card.warn{border-color:#ecd8b2;background:#fffaf0}
+.problem-card .pi{width:23px;height:23px;border-radius:50%;background:var(--red-bg);color:var(--red);display:flex;align-items:center;justify-content:center;font-weight:700;flex:none}
+.problem-card.info .pi{background:var(--blue-t);color:var(--blue)}.problem-card.warn .pi{background:var(--amber-bg);color:var(--amber)}
+.problem-copy{flex:1;min-width:0}.problem-copy b{display:block;font:600 13px/1.4 inherit}.problem-copy span{display:block;font:400 12px/1.55 inherit;color:var(--sub);margin-top:2px}
+.problem-actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.problem-actions button{border:0;background:transparent;color:var(--blue);padding:4px 5px;font:550 11.5px/1 inherit;cursor:pointer}
+.problem-close{border:0;background:transparent;color:var(--faint);cursor:pointer;font-size:16px;padding:1px 2px}
+
+.diag-status{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--panel);font:400 12.5px/1.75 inherit;color:var(--sub);white-space:pre-wrap}
+.diag-detail{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#151515;color:#ddd;font:400 11px/1.65 "SF Mono",Menlo,monospace;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto}
+
+/* 首次使用与三步新建 */
+.onboarding{width:520px!important;gap:18px!important}.ob-progress,.wizard-steps{display:flex;align-items:center;gap:6px}
+.ob-step,.wizard-step{flex:1;padding:8px 6px;border-radius:8px;background:var(--panel);color:var(--faint);font:500 11px/1.3 inherit;text-align:center}
+.ob-step.on,.wizard-step.on{background:var(--blue-t);color:var(--blue)}.ob-step.done,.wizard-step.done{background:var(--green-bg);color:var(--green)}
+.ob-pane,.wizard-pane{display:none;flex-direction:column;gap:12px}.ob-pane.on,.wizard-pane.on{display:flex}
+.ob-big{font:650 19px/1.4 inherit}.ob-help{font:400 12.5px/1.75 inherit;color:var(--sub)}
+.wizard-file{border:1.5px dashed var(--line-d);border-radius:13px;padding:16px;background:var(--panel)}
+.wizard-file b{font:600 13px/1.45 inherit}.wizard-file p{font:400 11.5px/1.55 inherit;color:var(--dim);margin-top:4px}
+.task-menu{margin:4px 0 0 13px;border:1px solid var(--line);border-radius:9px;background:#fff;box-shadow:var(--sh-sm);padding:4px;display:grid;grid-template-columns:repeat(2,1fr);gap:2px;position:relative;z-index:4}
+.task-menu button{border:0;background:transparent;color:var(--sub);border-radius:6px;padding:7px 8px;font:500 11px/1 inherit;text-align:left;cursor:pointer}.task-menu button:hover{background:var(--hover);color:var(--ink)}.task-menu button.danger{color:var(--red)}
+.task-more,.task-archive{border:0;background:transparent;color:var(--dim);padding:2px 3px;border-radius:5px;cursor:pointer;font:600 12px/1 inherit}.task-more:hover,.task-archive:hover{background:var(--hover);color:var(--blue)}
+.task-scope{display:flex;flex-direction:column;gap:7px}.scope-tabs{display:flex;padding:3px;background:var(--hover);border-radius:9px}
+.scope-tabs button{flex:1;border:0;background:transparent;color:var(--dim);border-radius:7px;padding:7px 4px;font:500 11.5px/1 inherit;cursor:pointer}.scope-tabs button.on{background:#fff;color:var(--ink);box-shadow:var(--sh-xs)}
+.project-filter{width:100%;border:1px solid var(--line);background:#fff;color:var(--sub);border-radius:8px;padding:7px 9px;font:400 11.5px/1 inherit}
+.project-tag{display:inline-block;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--blue);background:var(--blue-t);border-radius:5px;padding:2px 5px;font:500 9.5px/1.25 inherit;margin-right:4px;vertical-align:middle}
+.template-tools{display:flex;gap:7px;align-items:center}.template-tools input{min-width:0;flex:1}.template-tools .btn{padding:8px 10px;font-size:11.5px;white-space:nowrap}
+
 /* ============ 通用弹层 ============ */
 .statusbar{flex:none;height:28px;display:flex;align-items:center;gap:12px;padding:0 18px;border-top:1px solid var(--line);
   font:400 11px/1 inherit;color:var(--faint);background:var(--panel)}
@@ -270,7 +334,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 
 /* ============ 拖放遮罩 / 提示 ============ */
 .demo-tag{position:fixed;top:14px;left:50%;transform:translateX(-50%);background:var(--amber-bg);border:1px solid #f0e0b8;color:var(--amber);
-  border-radius:var(--r-full);padding:8px 16px;font:500 12px/1 inherit;z-index:35;display:none;box-shadow:var(--sh-sm)}
+  border-radius:var(--r-full);padding:8px 16px;font:500 12px/1 inherit;z-index:35;display:none;box-shadow:var(--sh-sm);pointer-events:none}
 #dropzone{position:fixed;inset:0;background:rgba(255,255,255,.92);backdrop-filter:blur(2px);z-index:50;display:none;
   align-items:center;justify-content:center;gap:18px}
 #dropzone .dz{width:270px;border:1.5px dashed var(--line-d);border-radius:var(--r-l);padding:30px 24px;text-align:center;
@@ -311,11 +375,13 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   #hero{padding:20px 12px}
   .sheet{padding:22px 18px}
   .drawer{left:0;right:0;width:100%!important;max-width:100vw;padding:24px 18px}
+  .result-view{padding:22px 14px 34px}.result-shell{grid-template-columns:1fr}.result-hero{padding-top:4px}
+  .problem-host{top:6px}.usage-grid{grid-template-columns:repeat(2,1fr)}
 }
 </style>
 </head>
 <body>
-<div id="demoTag" class="demo-tag">演示模式 · 未连接本地引擎</div>
+<div id="demoTag" class="demo-tag">演示模式 · 未连接本地服务</div>
 
 <div id="app">
   <aside>
@@ -323,6 +389,10 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
     <div class="newbtn" onclick="pickFile()">
       <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       <div class="nb-t"><b>新建任务</b><i>选择或拖入招标文件</i></div>
+    </div>
+    <div class="task-scope" id="taskScope">
+      <div class="scope-tabs"><button class="on" type="button" data-task-scope="active">当前任务</button><button type="button" data-task-scope="archived">已归档</button></div>
+      <select class="project-filter" id="taskProjectFilter" aria-label="按项目筛选" onchange="setTaskProjectFilter(this.value)"><option value="">全部项目</option></select>
     </div>
     <div style="flex:none"><div id="tasks" style="display:flex;flex-direction:column;gap:2px"></div></div>
     <div class="side-links">
@@ -334,6 +404,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   </aside>
 
   <main>
+    <div class="problem-host" id="problemHost" aria-live="assertive"></div>
     <!-- 空状态:居中欢迎 -->
     <div id="hero">
       <h2>准备好了,随时开始</h2>
@@ -344,8 +415,43 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       </div>
       <div class="sugs">
         <div class="sug" data-act="assets"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>上传过往标书,自动整理成可复用素材<span class="sgr">素材库</span></div>
-        <div class="sug" data-act="providers"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 2.5"/></svg>接入你的模型与生成引擎<span class="sgr">设置</span></div>
+        <div class="sug" data-act="providers"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 2.5"/></svg>接入你的生成服务<span class="sgr">设置</span></div>
         <div class="sug" data-act="demo"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>先看一遍 12 阶段演示流程<span class="sgr">约 30 秒</span></div>
+      </div>
+    </div>
+
+    <!-- 完成态:交付结果是主视图；聊天、阶段和日志统一放在“过程与诊断”里 -->
+    <div class="result-view" id="resultView">
+      <div class="result-wrap">
+        <div class="result-nav"><button class="tab on" type="button">交付结果</button><button class="tab" type="button" onclick="showTaskProcess()">过程与诊断</button></div>
+        <div class="result-hero">
+          <div class="result-mark" id="resultMark">✓</div>
+          <div class="result-title"><h2 id="resultTitle">交付文件已准备好</h2><p id="resultSub">请先打开 Word 复核，再处理待确认项。</p></div>
+        </div>
+        <div class="result-shell">
+          <section class="result-card">
+            <div class="lbl" style="padding-left:0">主交付文件</div>
+            <div class="result-word" id="resultWord">
+              <div class="word-icon">WORD</div>
+              <div class="word-copy"><b id="resultWordName">正在核对文件…</b><span id="resultWordMeta">生成完成后可直接打开或下载</span></div>
+            </div>
+            <div class="result-actions">
+              <button class="primary" id="resultOpen" type="button" onclick="openResultWord()">打开</button>
+              <button id="resultDownload" type="button" onclick="downloadResultWord()">下载</button>
+              <button id="resultModify" type="button" onclick="openRevision()">继续修改</button>
+            </div>
+            <div class="result-note">提交前仍请人工确认投标人名称、报价、资质有效期和签章。</div>
+          </section>
+          <section class="result-card">
+            <div class="lbl" style="padding-left:0">交付检查</div>
+            <div class="result-checks" id="resultChecks"></div>
+            <div class="result-actions"><button type="button" onclick="openCheck()">查看待确认项</button><button type="button" onclick="showTaskProcess()">查看过程</button></div>
+          </section>
+        </div>
+        <section class="result-card">
+          <div class="lbl" style="padding-left:0">本次用量</div>
+          <div class="usage-grid" id="resultUsage"></div>
+        </section>
       </div>
     </div>
 
@@ -359,9 +465,10 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       <span class="badge" id="hBadge" style="display:none"></span>
       <span class="iconbtn" id="pauseBtn" style="display:none" title="暂停/继续"></span>
       <span class="pill" id="stopBtn" style="display:none" onclick="stopJob()">停止</span>
-      <span class="pill" id="redoBtn" style="display:none" onclick="openRedo()">定向重做</span>
+      <span class="pill" id="redoBtn" style="display:none" onclick="openRedo()">继续修改</span>
       <span class="pill on" id="resumeBtn" style="display:none" onclick="resumeJob()">继续做</span>
       <span class="pill" id="logBtn" onclick="openLog()">运行日志</span>
+      <span class="pill primary" id="resultTabBtn" style="display:none" onclick="showTaskResult()">交付结果</span>
       <span class="pill on" id="startBtn" style="display:none" onclick="startStaged()">▶ 开始生成</span>
       <span class="pill" id="hAct" onclick="openCheck()">出件前检查</span>
     </div></div>
@@ -424,41 +531,93 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 
 <div class="ovl" id="ovl" onclick="closeAll()"></div>
 
+<!-- FIRST_RUN_START -->
+<div class="sheet onboarding" id="onboarding" style="z-index:54">
+  <div class="ob-progress">
+    <div class="ob-step on" data-ob-step="1">1 · 填写 Key</div>
+    <div class="ob-step" data-ob-step="2">2 · 测试连接</div>
+    <div class="ob-step" data-ob-step="3">3 · 上传文件</div>
+  </div>
+  <div class="ob-pane on" data-ob-pane="1">
+    <div><div class="ob-big">先连接你的生成服务</div><div class="ob-help">粘贴发放给你的 Key，推荐配置会自动完成。Key 只保存在这台电脑。</div></div>
+    <input class="f" id="obKey" type="password" autocomplete="off" placeholder="粘贴 sk-…">
+    <div class="ob-help">默认使用标准模式，适合正式标书；稍后可在设置里切换速度。</div>
+    <button class="btn" id="obConnect" type="button" onclick="onboardingConnect()">保存并测试</button>
+  </div>
+  <div class="ob-pane" data-ob-pane="2">
+    <div><div class="ob-big">正在测试连接</div><div class="ob-help" id="obTestText">通常十几秒完成，请保持窗口打开。</div></div>
+    <div class="diag-status" id="obStatus">等待开始…</div>
+    <button class="btn" id="obRetry" type="button" style="display:none" onclick="onboardingConnect()">重新测试</button>
+  </div>
+  <div class="ob-pane" data-ob-pane="3">
+    <div><div class="ob-big">已经可以开始了</div><div class="ob-help">上传招标文件，接着确认模板和项目，系统会自动整理成任务。</div></div>
+    <button class="btn" type="button" onclick="finishOnboarding()">上传文件</button>
+    <button class="btn gy" type="button" onclick="finishOnboarding(false)">稍后再传</button>
+  </div>
+</div>
+<!-- FIRST_RUN_END -->
+
 <div class="sheet" id="newjob" style="width:640px;gap:13px;z-index:52">
   <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2>新建任务</h2>
-    <div class="desc" style="margin-top:6px">确认招标文件,补充素材和要求(都可跳过),点「开始生成」。</div></div>
+    <div class="desc" style="margin-top:6px">三步确认即可开始，模板推荐可直接使用。</div></div>
     <span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
-  <div class="lbl">招标文件(主件)</div>
-  <select class="f" id="njTender" onchange="NJ.tenderIdx=+this.value"></select>
-  <div class="lbl" style="display:flex;align-items:center;gap:9px">参考素材(公司资料/资质/图片,可整个文件夹拖入)
-    <span style="flex:1"></span>
-    <button class="btn gy" style="padding:6px 12px;font-size:12px" onclick="el('filein').click()">+ 文件</button>
-    <button class="btn gy" style="padding:6px 12px;font-size:12px" onclick="el('foldin').click()">+ 文件夹</button></div>
-  <div id="njList" style="max-height:150px;overflow:auto;border:1px solid var(--line-d);border-radius:10px;padding:8px 10px;font:400 12.5px/1.7 inherit;color:var(--sub)"></div>
-  <div class="lbl" style="display:flex;align-items:baseline;gap:8px">
-    <span>你的要求(已预填一份专家提示词,可直接改)</span>
-    <span style="flex:1"></span>
-    <span class="lnk" onclick="njReqDefault()">恢复默认</span>
-    <span class="lnk" onclick="el('njReq').value='';el('njReq').focus()">清空</span>
+  <div class="wizard-steps">
+    <div class="wizard-step on" data-nj-step="1">1 · 主件</div>
+    <div class="wizard-step" data-nj-step="2">2 · 模板与项目</div>
+    <div class="wizard-step" data-nj-step="3">3 · 素材确认</div>
   </div>
-  <textarea id="njReq" class="f" rows="7" style="resize:vertical;min-height:110px;font:400 12.5px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="不填也能生成"></textarea>
-  <div style="font:400 11.5px/1.6 inherit;color:var(--dim)">这段会原样存成任务里的《你的要求.md》,agent 开工先读它,自检报告里逐条回执。想加什么直接在上面写,比如「重点展开数据安全章节」「报价部分留空」。</div>
+  <div class="wizard-pane on" data-nj-pane="1">
+    <div class="wizard-file"><b>确认招标文件主件</b><p>多选文件时，请指定系统首先读取的招标文件。</p></div>
+    <select class="f" id="njTender" onchange="NJ.tenderIdx=+this.value"></select>
+    <button class="btn gy" type="button" onclick="el('filein').click()">+ 继续添加文件</button>
+  </div>
+  <div class="wizard-pane" data-nj-pane="2">
+    <label class="lbl" for="njTemplate" style="padding-left:0">标书模板</label>
+    <select class="f" id="njTemplate" onchange="renderTemplateTools()">
+      <option value="auto">自动推荐（推荐）</option>
+      <option value="government">政府采购</option>
+      <option value="construction">工程施工</option>
+      <option value="service">服务类投标</option>
+    </select>
+    <div class="template-tools">
+      <input class="f" id="njTemplateName" placeholder="自定义模板名称">
+      <button class="btn gy" type="button" onclick="saveCurrentTemplate()">保存当前要求</button>
+      <button class="btn gy" id="njTemplateDelete" type="button" style="display:none;color:var(--red)" onclick="deleteSelectedTemplate()">删除模板</button>
+    </div>
+    <label class="lbl" for="njProject" style="padding-left:0">归入项目（可选）</label>
+    <input class="f" id="njProject" list="njProjects" placeholder="例如：滨江新区智慧管网">
+    <datalist id="njProjects"></datalist>
+  </div>
+  <div class="wizard-pane" data-nj-pane="3">
+    <div class="lbl" style="display:flex;align-items:center;gap:9px;padding-left:0">参考素材
+      <span style="flex:1"></span>
+      <button class="btn gy" type="button" style="padding:6px 12px;font-size:12px" onclick="el('filein').click()">+ 文件</button>
+      <button class="btn gy" type="button" style="padding:6px 12px;font-size:12px" onclick="el('foldin').click()">+ 文件夹</button></div>
+    <div id="njList" style="max-height:150px;overflow:auto;border:1px solid var(--line-d);border-radius:10px;padding:8px 10px;font:400 12.5px/1.7 inherit;color:var(--sub)"></div>
+    <details id="njExtra" style="border:1px solid var(--line);border-radius:11px;padding:4px 11px 11px">
+      <summary style="cursor:pointer;font:500 12.5px/2.2 inherit;color:var(--sub)">补充要求（选填）</summary>
+      <div style="display:flex;align-items:baseline;gap:8px;margin:4px 0 8px"><span class="desc">系统已准备专家规则，一般无需修改</span><span style="flex:1"></span><span class="lnk" onclick="njReqDefault()">恢复默认</span><span class="lnk" onclick="el('njReq').value='';el('njReq').focus()">清空</span></div>
+      <textarea id="njReq" class="f" rows="6" style="resize:vertical;min-height:96px;font:400 12px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace" placeholder="例如：重点展开数据安全章节"></textarea>
+    </details>
+  </div>
   <div id="njMsg" style="font:400 12.5px/1.6 inherit;color:var(--sub);display:none"></div>
   <div style="display:flex;gap:9px;justify-content:flex-end">
     <button class="btn gy" onclick="closeAll()">取消</button>
-    <button class="btn gy" id="njLater" onclick="njStart(false)">先存着,稍后开始</button>
-    <button class="btn" id="njGo" onclick="njStart(true)">开始生成</button>
+    <button class="btn gy" id="njPrev" onclick="njPrev()" style="display:none">上一步</button>
+    <button class="btn" id="njNext" onclick="njNext()">下一步</button>
+    <button class="btn gy" id="njLater" onclick="njStart(false)" style="display:none">先存着</button>
+    <button class="btn" id="njGo" onclick="njStart(true)" style="display:none">开始生成</button>
   </div>
 </div>
 
 <div class="sheet" id="redo" style="width:520px;gap:14px;z-index:52">
-  <h2 style="font-size:16px">定向重做</h2>
-  <div class="desc">只重做你指定的部分,其余产物保留;完成后会重新汇总并更新自检报告。例:<br>
-    「重写第三章技术方案,按评分表里的架构与安全性两项展开」「重做偏离表,逐条对齐招标文件第 5 章」</div>
-  <input class="f" id="redoTxt" placeholder="要重做哪一部分、按什么要求改?" onkeydown="if(event.key==='Enter'&&!event.isComposing)doRedo()">
+  <h2 style="font-size:16px">继续修改已有结果</h2>
+  <div class="desc">原结果会保留为上一版本，只修改你指定的部分并重新检查。例：<br>
+    「重写第三章技术方案，按评分表里的架构与安全性两项展开」「补齐偏离表，逐条对齐招标文件第 5 章」</div>
+  <input class="f" id="redoTxt" placeholder="想修改哪一部分、按什么要求改？" onkeydown="if(event.key==='Enter'&&!event.isComposing)doRedo()">
   <div style="display:flex;gap:9px;justify-content:flex-end">
     <button class="btn gy" onclick="closeAll()">取消</button>
-    <button class="btn" onclick="doRedo()">开始重做</button>
+    <button class="btn" onclick="doRedo()">生成新版本</button>
   </div>
 </div>
 
@@ -470,6 +629,22 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   </div>
   <div id="logBody" style="font:400 12px/1.7 'SF Mono',Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;
     background:var(--panel);border-radius:12px;padding:14px;max-height:56vh;overflow-y:auto;color:var(--sub)"></div>
+</div>
+
+<div class="sheet" id="diagnosticSheet" style="width:620px;gap:13px;z-index:53">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2 style="font-size:16px">连接诊断</h2><div class="desc" style="margin-top:6px">检查本地服务、生成连接和当前任务，不会修改任务内容。</div></div>
+    <span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
+  <div class="diag-status" id="diagnosticStatus">点击“开始诊断”获取当前状态。</div>
+  <details id="diagnosticDetailWrap" style="display:none"><summary style="cursor:pointer;color:var(--sub);font-size:12px">技术详情</summary><div class="diag-detail" id="diagnosticDetail" style="margin-top:8px"></div></details>
+  <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn gy" type="button" onclick="downloadDiagnosticBundle()">导出诊断包</button><button class="btn" id="diagnosticRun" type="button" onclick="runDiagnostics()">开始诊断</button></div>
+</div>
+
+<div class="sheet" id="projectSheet" style="width:440px;gap:13px;z-index:53">
+  <h2 style="font-size:16px">归入项目</h2>
+  <div class="desc">给所选任务填写同一个项目名称，后续更容易查找和批量交付。</div>
+  <input class="f" id="projectName" list="projectChoices" placeholder="项目名称">
+  <datalist id="projectChoices"></datalist>
+  <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn gy" onclick="closeAll()">取消</button><button class="btn" onclick="applyProjectMove()">保存</button></div>
 </div>
 
 <!-- 应用内确认框:桌面壳(Tauri)里 window.confirm 会静默返回 false,原生弹窗不可用 -->
@@ -486,7 +661,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   <div style="display:flex;justify-content:space-between;align-items:flex-start"><div>
     <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px"><span class="dot" id="ckDot" style="background:var(--amber);width:8px;height:8px"></span><span id="ckLv" style="font:500 12px/1 inherit;color:var(--amber);letter-spacing:.05em">等待出件</span></div>
     <h2 id="ckTitle">还没到出件阶段</h2></div><span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
-  <div class="desc">agent 出 Word 时生成三档结论与补料清单;投标人名称、报价、资质、签章必须人工确认后才可投。</div>
+  <div class="desc">系统生成 Word 时会同步给出结论与补料清单；投标人名称、报价、资质、签章必须人工确认后才可投。</div>
   <div id="ckList"></div>
   <div id="ckFix" style="display:none;flex-direction:column;gap:8px">
     <button class="btn" onclick="repairJob()">一键修复内容异常</button>
@@ -547,7 +722,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   </div>
   </details>
   <details id="engDet" style="border:1px solid var(--line-d);border-radius:11px;padding:2px 12px 10px">
-  <summary id="engSum" style="cursor:pointer;font:500 13px/2.4 inherit;color:var(--sub);user-select:none">生成引擎:加载中…(点开切换/高级设置)</summary>
+  <summary id="engSum" style="cursor:pointer;font:500 13px/2.4 inherit;color:var(--sub);user-select:none">生成方式:加载中…(点开切换/高级设置)</summary>
   <div style="display:flex;gap:9px;align-items:center;margin-top:6px">
     <select class="f" id="agKind" style="flex:1" onchange="onKindChange()">
       <option value="s2">自动(默认)</option>
@@ -562,7 +737,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   </div>
   <div id="agS2" style="display:none;flex-direction:column;gap:9px">
     <div style="font:400 11.5px/1.7 inherit;color:var(--sub);background:var(--soft);border-radius:9px;padding:9px 11px">
-      <b>填了 Key 就产真实标书,没填就跑内置演示流程</b>——不用你判断该选哪个。不需要 Claude/Codex 账号,也不需要登录任何东西,执行外壳已内置。<br>Key 由中标狗提供方发放,额度记在发放方的套餐上——没有的话找他要一串。
+      <b>填了 Key 就产真实标书,没填就跑内置演示流程</b>——不用你判断该选哪个。不需要 Claude/Codex 账号,也不需要登录其他服务,所需生成组件已内置。<br>Key 由中标狗提供方发放,额度记在发放方的套餐上——没有的话找他要一串。
     </div>
     <input class="f" id="agS2Key" type="password" placeholder="API Key(你收到的 sk-… ;留空=沿用已保存的,或借用上面「模型接入」里的 Key)">
     <div style="display:flex;gap:9px">
@@ -576,7 +751,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
     <div id="agS2Hint" style="font:400 11.5px/1.6 inherit;color:var(--dim);word-break:break-all"></div>
     <div id="agS2Shell" style="display:flex;align-items:center;gap:9px;font:400 11.5px/1.6 inherit;color:var(--dim)">
       <span id="agS2ShellSt" style="flex:1"></span>
-      <button class="btn gy" id="agS2Install" style="display:none" onclick="provisionShell()">一键安装执行外壳</button>
+      <button class="btn gy" id="agS2Install" style="display:none" onclick="provisionShell()">一键修复生成组件</button>
     </div>
   </div>
   <input class="f" id="agCmd" placeholder="命令模板,占位符 {tender} {out} {materials} {jobid} {skill}" style="display:none">
@@ -643,10 +818,10 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
-const BUNDLED_ENGINE_VERSION = '0.18.2';
+const BUNDLED_ENGINE_VERSION = '0.19.0';
 /* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后，旧 PyInstaller 进程可能仍驻留；
    若继续探测历史端口，就会把旧引擎误认成新版，甚至在可执行文件被替换后返回 500。 */
-const DESKTOP_ENGINE = 'http://127.0.0.1:18802';
+const DESKTOP_ENGINE = 'http://127.0.0.1:18900';
 const API_CANDIDATES = IS_WEB ? [location.origin] : [DESKTOP_ENGINE];
 /* 旧版曾把探测成功的端口写进 bid_api；新版不再读取，并在桌面启动时主动废弃它。 */
 if(!IS_WEB){ try{ localStorage.removeItem('bid_api'); }catch(_){} }
@@ -656,8 +831,9 @@ const isWin = navigator.platform.startsWith('Win');
 const ASK_SELF = '我来输入';     // 界面自己的自救入口,渲染与点击两处都用它,别写死字面量
 let S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}, atts:{}, health:{}, chips:{}, worklog:{}, stageAvgs:null, es:null,
           typing:{}, steps:{}, names:{}, paused:{}, answering:{}, openGrp:{0:true, 1:true, 2:false, 3:false},
-          taskGrpOpen:{staged:true, running:true, paused:false, stopped:false, unknown:false, done:false},
-          taskBulkMode:false, taskBulkDeleting:false, taskSelected:new Set(),
+          taskGrpOpen:{preparing:true, generating:true, needs_input:true, completed:false, failed:false},
+          taskBulkMode:false, taskBulkDeleting:false, taskBulkBusy:false, taskBulkMore:false, taskSelected:new Set(), taskMore:null,
+          taskScope:'active', archivedJobs:[], projectFilter:'', processView:{}, problems:{}, diagnostic:null, projectTargetIds:[], templates:[], setup:null, onboardingStep:1,
           artsLoaded:{}, eventTimes:{}, esOffsets:{}, wordNotified:{}, updateInfo:null, engineVersion:'' };
 document.getElementById('sbL').textContent = isWin ? '任务栏显示进度 · 完成后系统通知' : 'Dock 显示进度 · 完成后系统通知 · 托盘常驻';
 
@@ -721,6 +897,189 @@ function modeFromModel(model){
 function modeSwitchBlocked(jobs){
   return (jobs||[]).some(j=>j && (j.state === 'running' || j.state === 'paused'));
 }
+const PUBLIC_TASK_LABELS = {
+  preparing:'准备中', generating:'生成中', needs_input:'需要你确认', completed:'已完成', failed:'未完成'
+};
+function taskGroupOpen(key, stored, bulk){
+  if(bulk)return true;
+  const state=stored||{};
+  if(Object.prototype.hasOwnProperty.call(state,key))return state[key]===true;
+  return ['preparing','generating','needs_input'].indexOf(key)>=0;
+}
+function _displayStateCode(value){
+  const s = String(value||'').toLowerCase().replace(/[\s-]+/g,'_');
+  const map = {
+    preparing:'preparing', prepare:'preparing', staged:'preparing', waiting:'preparing',
+    generating:'generating', running:'generating', processing:'generating', checking:'generating', finalizing:'generating',
+    needs_input:'needs_input', needs_attention:'needs_input', attention:'needs_input', awaiting_input:'needs_input',
+    paused:'needs_input', review:'needs_input', needs_review:'needs_input',
+    completed:'completed', complete:'completed', done:'completed', success:'completed', ready:'completed', ready_to_deliver:'completed',
+    failed:'failed', failure:'failed', stopped:'failed', unknown:'failed', interrupted:'failed', incomplete:'failed'
+  };
+  if(map[s]) return map[s];
+  if(/准备|待开始/.test(value||'')) return 'preparing';
+  if(/生成|进行|检查中/.test(value||'')) return 'generating';
+  if(/确认|等待你|暂停/.test(value||'')) return 'needs_input';
+  if(/完成|可交付/.test(value||'')) return 'completed';
+  if(/失败|未完成|中断|停止|不明/.test(value||'')) return 'failed';
+  return '';
+}
+function publicTaskState(job){
+  const j = job || {}, p = j.presentation || {}, delivery = j.delivery || p.delivery || {};
+  const explicit = _displayStateCode(p.code || p.display_state || p.state || j.display_state || j.public_state || j.ui_state);
+  if(explicit) return explicit;
+  const pending = Number(p.pending_questions || p.attention_count || j.pending_questions || j.pending_question_count || 0);
+  if(p.needs_attention === true || p.awaiting_input === true || j.needs_attention === true || pending > 0) return 'needs_input';
+  const ds = _displayStateCode(delivery.state || delivery.status || delivery.result_state);
+  if(ds === 'needs_input' || ds === 'failed') return ds;
+  const st = _displayStateCode(j.state);
+  if(st === 'completed'){
+    if(j.has_word === false || delivery.has_word === false) return 'failed';
+    if(ds === 'generating') return 'generating';
+    return ds || 'completed';
+  }
+  return st || (j.staged ? 'preparing' : 'generating');
+}
+function _friendlyText(value){
+  let s = String(value||'').trim();
+  if(!s) return '';
+  if(/执行外壳起来了但链路没通|执行外壳探活/.test(s))
+    return '连接响应较慢，已自动切换稳定模式，任务正在继续。';
+  s = s.replace(/OpenCode(?:\s+Server)?|Codex\s*CLI|Claude\s*Code|CLI/gi, '生成服务')
+       .replace(/执行外壳/g, '生成服务').replace(/本地引擎/g, '本地服务')
+       .replace(/探活/g, '连接检查').replace(/兼容模式/g, '稳定模式')
+       .replace(/模型网关/g, '模型服务').replace(/中转层/g, '连接服务')
+       .replace(/生成引擎/g, '生成方式').replace(/重跑本任务|重跑/g, '重新生成')
+       .replace(/定向重做/g, '继续修改')
+       .replace(/\bagent\b/gi, '生成助手')
+       .replace(/状态不明[^，。·]*/g, '任务已中断');
+  return s;
+}
+function _friendlyActionLabel(value){
+  const s=String(value||'处理');
+  if(/^(重跑|重跑本任务)$/.test(s)) return '重新生成';
+  return s.replace(/定向重做不达标章节/g,'继续修改不达标章节')
+          .replace(/定向重做这一章|重做这一章/g,'修改这一章')
+          .replace(/定向重做/g,'继续修改')
+          .replace(/去修生成引擎设置/g,'检查生成设置')
+          .replace(/去换生成引擎/g,'切换生成方式');
+}
+function _shortDuration(seconds){
+  const n = Math.max(0, Number(seconds)||0);
+  if(!n) return '';
+  if(n < 60) return Math.max(1, Math.round(n))+' 秒';
+  if(n < 3600) return Math.max(1, Math.round(n/60))+' 分钟';
+  const h = Math.floor(n/3600), m = Math.round((n%3600)/60);
+  return h+' 小时'+(m ? ' '+m+' 分钟' : '');
+}
+function _relativeActivity(value, nowMs){
+  if(!value) return '暂无活动记录';
+  const ts = typeof value === 'number' ? value : Date.parse(String(value).replace(' ','T'));
+  if(!Number.isFinite(ts)) return '最近有活动';
+  const diff = Math.max(0, Number(nowMs||Date.now()) - ts);
+  if(diff < 45000) return '刚刚';
+  if(diff < 3600000) return Math.max(1,Math.round(diff/60000))+' 分钟前';
+  if(diff < 86400000) return Math.max(1,Math.round(diff/3600000))+' 小时前';
+  return Math.max(1,Math.round(diff/86400000))+' 天前';
+}
+function taskPresentation(job, nowMs){
+  const j = job || {}, p = j.presentation || {}, state = publicTaskState(j);
+  const defaults = {
+    preparing:'正在准备任务', generating:'正在生成标书', needs_input:'有事项需要你确认',
+    completed:'交付文件已准备好', failed:'任务未完成，已有内容已保存'
+  };
+  let action = _friendlyText(p.current_action || p.currentAction || j.current_action || j.stage || defaults[state]);
+  if(state==='failed' && (!action || /启动中/.test(action))) action = defaults.failed;
+  const activityAt = p.last_activity_at || p.lastActivityAt || j.last_activity_at || j.updated_at || j.last_event_at || j.created_at;
+  const etaSec = p.eta_seconds != null ? p.eta_seconds : (p.eta_s != null ? p.eta_s
+    : (j.eta_seconds != null ? j.eta_seconds : (j.eta != null ? j.eta : j.eta_s)));
+  let eta = '';
+  if(state==='preparing' || state==='generating') eta = Number(etaSec)>0 ? '约 '+_shortDuration(etaSec) : '正在估算';
+  else if(state==='needs_input') eta = '等待你的操作';
+  else if(state==='completed') eta = '已完成';
+  else eta = '—';
+  return {state, label:PUBLIC_TASK_LABELS[state], currentAction:action || defaults[state],
+          lastActivity:_relativeActivity(activityAt, nowMs), eta};
+}
+function taskCapabilities(job){
+  const j = job || {}, p = j.presentation || {}, runtime = j.runtime || p.runtime || {};
+  const raw = runtime.capabilities || j.capabilities || p.capabilities || j.can || [];
+  const capValue = name => {
+    if(Array.isArray(raw)) return raw.indexOf(name)>=0;
+    if(!raw || !Object.prototype.hasOwnProperty.call(raw,name)) return null;
+    const value = raw[name];
+    return value && typeof value==='object' ? value.enabled !== false : value !== false;
+  };
+  const has = name => capValue(name);
+  const pauseSpec = !Array.isArray(raw) && raw && raw.pause && typeof raw.pause==='object' ? raw.pause : {};
+  const mode = String(runtime.mode || p.mode || p.runtime_mode || j.runtime_mode || j.execution_mode || '').toLowerCase();
+  const stable = /stable|compat|fallback|cli/.test(mode);
+  let pause = has('pause'); if(pause == null) pause = publicTaskState(j)==='generating';
+  if(stable) pause = false;
+  return {pause:!!pause, stop:has('stop')!==false, resume:has('resume')===true,
+          archive:has('archive')!==false, rerun:has('rerun')!==false, export:has('export')!==false,
+          liveInstruction:!stable && has('live_instruction')!==false,
+          pauseReason:pause ? '' : (_friendlyText(pauseSpec.reason) || (stable ? '当前使用稳定模式，暂不支持暂停；任务会继续生成。' : '当前阶段暂不支持暂停。'))};
+}
+function friendlyRuntimeNotice(event){
+  const e = event || {}, raw = String(e.text || e.message || '');
+  const fallback = e.code==='stable_mode_enabled' || /执行外壳起来了但链路没通|执行外壳探活|改用兼容模式/.test(raw);
+  return {text:fallback ? '连接响应较慢，已自动切换稳定模式，任务正在继续。' : _friendlyText(raw),
+          technicalDetail:String(e.technical_detail || e.technicalDetail || e.detail || (fallback ? raw : '')),
+          action:{act:'show_detail', label:'查看原因'}};
+}
+function diagnosticCheckView(item){
+  const x=item||{};let status=String(x.status||x.state||'').toLowerCase();
+  if(!status&&x.ok===true)status='pass';if(!status&&x.ok===false)status='fail';
+  if(['pass','passed','ok','ready','success','green'].indexOf(status)>=0)return {state:'pass',symbol:'✓'};
+  if(['warning','warn','attention','yellow'].indexOf(status)>=0)return {state:'warn',symbol:'△'};
+  if(['fail','failed','error','red','missing'].indexOf(status)>=0)return {state:'fail',symbol:'✗'};
+  return {state:'unknown',symbol:'·'};
+}
+function _checkView(raw, fallbackDetail){
+  const r = raw || {};
+  let state = String(r.state || r.status || '').toLowerCase();
+  if(!state && r.ok === true) state='pass'; else if(!state && r.ok === false) state='fail';
+  if(['green','passed','ready','ok','success'].indexOf(state)>=0) state='pass';
+  if(['yellow','warning','attention','needs_attention'].indexOf(state)>=0) state='warn';
+  if(['red','failed','error','missing'].indexOf(state)>=0) state='fail';
+  if(['pass','warn','fail'].indexOf(state)<0) state='unknown';
+  return {state, detail:String(r.detail || r.summary || fallbackDetail || (state==='unknown'?'尚未检查':''))};
+}
+function _deviationPart(label, raw){
+  if(raw==null) return '';
+  if(typeof raw==='number') return label+'表 已检测 · '+raw+' 条';
+  if(typeof raw!=='object') return label+'表 '+String(raw);
+  const status=String(raw.status||raw.state||'').toLowerCase();
+  const present=raw.present===true||['pass','ok','ready','warn','warning'].indexOf(status)>=0;
+  const missing=raw.present===false||['missing','fail','failed','error'].indexOf(status)>=0;
+  const rows=raw.rows!=null?raw.rows:(raw.total_rows!=null?raw.total_rows:raw.count);
+  return label+'表 '+(missing?'缺失':present?'已检测':'待检查')+(rows!=null?' · '+rows+' 条':'');
+}
+function deliveryViewModel(job, artifacts){
+  const j = job || {}, p = j.presentation || {}, d = j.delivery || p.delivery || {}, checks = d.checks || {};
+  let primary = d.primary_word || d.primary || d.word || null;
+  if(typeof primary === 'string') primary = {name:primary};
+  if(primary && primary.present === false) primary = null;
+  if(!primary){ const hit=(artifacts||[]).find(isBodyWordArtifact); if(hit) primary=hit; }
+  const toc = _checkView(checks.toc || d.toc);
+  const dvRaw = checks.deviations || checks.deviation || d.deviations || d.deviation || {};
+  const have = dvRaw.deviation_rows != null ? dvRaw.deviation_rows : (dvRaw.rows != null ? dvRaw.rows : dvRaw.actual);
+  const want = dvRaw.score_rows != null ? dvRaw.score_rows : (dvRaw.expected_rows != null ? dvRaw.expected_rows : dvRaw.expected);
+  const total = dvRaw.total_rows != null ? dvRaw.total_rows : null;
+  const parts = [_deviationPart('技术',dvRaw.technical),_deviationPart('商务',dvRaw.business)].filter(Boolean);
+  if(total != null && !parts.some(x=>x.indexOf('· '+total+' 条')>=0)) parts.push('共 '+total+' 条');
+  const dvDetail = dvRaw.detail || (parts.length ? parts.join('、') : ((have!=null && want!=null) ? (have+'/'+want+' 条已覆盖') : '尚未检查'));
+  const deviations = _checkView(dvRaw, dvDetail);
+  if(deviations.state==='unknown'&&parts.length){
+    const missing=[dvRaw.technical,dvRaw.business].some(x=>x&&typeof x==='object'&&x.present===false);
+    deviations.state=missing?'warn':'pass';
+  }
+  deviations.detail = String(dvDetail);
+  const quality = _checkView(checks.quality || d.quality || (checks.status != null ? checks : null));
+  return {state:String(d.state||d.status||(d.ready===true?'ready':'unknown')), primary:primary||null, toc, deviations, quality,
+          blockingCount:Number(d.blocking_count || quality.blocking_count || 0), raw:d};
+}
 /* FRONTEND_STABILITY_PURE_END */
 
 /* 非 2xx 时把后端的说明一起带上来。以前只抛一个「/v1/... 400」,
@@ -781,6 +1140,63 @@ function toast(t){
   x.textContent = t; x.className = 'show';
   clearTimeout(x._t); x._t = setTimeout(()=>{ x.className=''; }, 2600);
 }
+function presentProblem(problem){
+  const p=problem||{}, key=p.job_id||S.active||'_global';
+  S.problems[key]={title:_friendlyText(p.title||'任务需要处理'),text:_friendlyText(p.text||p.message||'请查看详情后重试。'),
+    detail:String(p.detail||p.technical_detail||''),level:p.level||'error',actions:p.actions||[]};
+  renderProblem();
+}
+function renderProblem(){
+  const host=el('problemHost');if(!host)return;
+  const key=S.active||'_global',p=S.problems[key]||S.problems._global;
+  if(!p){host.style.display='none';host.innerHTML='';return;}
+  const acts=(p.actions&&p.actions.length?p.actions:[{act:'diagnose',label:'一键诊断'}]).slice();
+  if(p.detail&&!acts.some(a=>a.act==='show_detail'))acts.push({act:'show_detail',label:'查看原因'});
+  if(!acts.some(a=>a.act==='diagnose'))acts.push({act:'diagnose',label:'一键诊断'});
+  host.innerHTML='<div class="problem-card '+escA(p.level)+'"><span class="pi">'+(p.level==='info'?'i':p.level==='warn'?'!':'×')+'</span><div class="problem-copy"><b>'+esc(p.title)+'</b><span>'+esc(p.text)+'</span><div class="problem-actions">'
+    +acts.map(a=>'<button type="button" data-problem-action="'+escA(a.act)+'" data-param="'+escA(a.param||'')+'">'+esc(_friendlyActionLabel(a.label))+'</button>').join('')
+    +'</div></div><button class="problem-close" type="button" data-problem-action="dismiss" aria-label="关闭">×</button></div>';
+  host.style.display='block';host._detail=p.detail;
+}
+function clearProblem(){const key=S.active||'_global';delete S.problems[key];renderProblem();}
+function showDiagnosticDetail(detail){
+  el('ovl').style.display='block';el('diagnosticSheet').style.display='flex';
+  el('diagnosticDetailWrap').style.display=detail?'block':'none';el('diagnosticDetail').textContent=detail||'';
+}
+async function runDiagnostics(){
+  showDiagnosticDetail((el('problemHost')&&el('problemHost')._detail)||'');
+  const out=el('diagnosticStatus'),btn=el('diagnosticRun');out.textContent='正在检查连接与当前任务…';btn.disabled=true;
+  try{
+    const r=await api('/v1/diagnostics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:S.active||null})});
+    const checks=Array.isArray(r.checks)?r.checks:(Array.isArray(r.items)?r.items:[]);
+    const lines=checks.map(x=>{const v=diagnosticCheckView(x);return v.symbol+' '+(x.label||x.name||'检查项')+(x.summary||x.message?'：'+(x.summary||x.message):'');});
+    const headline=r.ok===false?'发现需要修复的问题，请按失败项处理。':'';
+    out.textContent=(headline?(headline+'\n'):'')+(lines.length?lines.join('\n'):(r.summary||r.message||(r.ok===false?'✗ 诊断未通过':'✓ 连接与任务状态正常')));
+    const detail=r.technical_detail||r.detail||JSON.stringify(r,null,2);el('diagnosticDetail').textContent=detail;el('diagnosticDetailWrap').style.display='block';
+  }catch(e){
+    try{const h=await api('/v1/health');out.textContent='✓ 本地服务已连接\n△ 完整诊断暂不可用，请更新应用后重试';el('diagnosticDetail').textContent=JSON.stringify(h,null,2);el('diagnosticDetailWrap').style.display='block';}
+    catch(_){out.textContent='✗ 本地服务没有响应\n请退出应用后重新打开；任务文件不会丢失。';}
+  }finally{btn.disabled=false;}
+}
+function problemAction(act,param){
+  const p=S.problems[S.active||'_global']||S.problems._global||{};
+  if(act==='dismiss'){clearProblem();return;}
+  if(act==='show_detail'){showDiagnosticDetail(p.detail||param||'暂无更多技术信息');return;}
+  if(act==='diagnose'){runDiagnostics();return;}
+  if(act==='continue_saved'||act==='open_revision'){openRevision();return;}
+  if(act==='complete_setup'){finishOnboarding(false);return;}
+  if(act==='reload_archived'){setTaskScope('archived');return;}
+  if(act==='retry_archive'){archiveJob(param);return;}
+  if(act==='retry_restore'){restoreJob(param);return;}
+  if(act==='retry_export'){exportJobs(S.lastExportIds||[]);return;}
+  if(act==='retry_project'){S.projectTargetIds=String(param||'').split(',').filter(Boolean);applyProjectMove();return;}
+  if(act==='retry_stop'){stopJob();return;}
+  if(act==='retry_revision'){openRevision();return;}
+  if(act==='retry_template_save'){saveCurrentTemplate();return;}
+  if(act==='retry_template_delete'){el('njTemplate').value=param;deleteSelectedTemplate();return;}
+  errAction(act,'',param);
+}
+el('problemHost').addEventListener('click',e=>{const b=e.target.closest('[data-problem-action]');if(b)problemAction(b.dataset.problemAction,b.dataset.param);});
 
 async function findEngine(){
   let stale = null;
@@ -832,10 +1248,10 @@ async function openUpdate(){
 }
 async function goOnline(h){
   S.online = true; S.engineVersion = h.version||'?';
-  el('conn').textContent = '本地引擎 v' + S.engineVersion + ' · 已连接'; el('demoTag').style.display='none';
+  el('conn').textContent = '本地服务已连接'; el('demoTag').style.display='none';
   el('brandDot').style.background = 'var(--green)';
   if(S.stale){
-    el('conn').textContent = '引擎版本过旧(' + S.stale + ')';
+    el('conn').textContent = '本地服务需要更新';
     el('brandDot').style.background = 'var(--amber)';
     el('demoTag').style.display='block';
     el('demoTag').textContent = '检测到旧版引擎占用端口 · 请退出旧版应用/旧引擎进程后重开本应用';
@@ -843,10 +1259,10 @@ async function goOnline(h){
   el('sbR').textContent = h.data_dir + (isWin?'\\jobs':'/jobs');
   applyHealthUpdate(h); setTimeout(()=>pollHealthUpdate(0), 1200);
   S.jobs = await api('/v1/jobs');
-  if(S.jobs.length){ select(S.jobs[0].job_id); }
-  setInterval(async()=>{ try{ S.jobs = await api('/v1/jobs'); renderTasks(); if(S.active){ renderHead(); renderRail(); } }catch(e){} }, 4000);
+  const firstJob=S.jobs.find(j=>!j.archived_at);if(firstJob){ select(firstJob.job_id); }
+  setInterval(async()=>{ try{ S.jobs = await api('/v1/jobs'); renderTasks(); if(S.active){ renderHead(); renderRail(); renderMain(); } }catch(e){} }, 4000);
   try{ const st = await api('/v1/stats/stages'); S.stageAvgs = st.stages || null; }catch(e){}
-  renderTasks(); renderMain();
+  renderTasks(); renderMain(); showOnboarding(false);
 }
 async function boot(){
   if(FORCE_DEMO){
@@ -863,46 +1279,188 @@ async function boot(){
   for(let i=0;i<4;i++){
     const h = await findEngine();
     if(h) return goOnline(h);
-    el('conn').textContent = '启动本地引擎中…';
+    el('conn').textContent = '正在启动本地服务…';
     await new Promise(r=>setTimeout(r,2000));
   }
-  S.online = false; el('conn').textContent = S.stale ? '检测到旧引擎 v'+S.stale : '未连接引擎(演示模式)'; el('demoTag').style.display='block';
+  S.online = false; el('conn').textContent = S.stale ? '本地服务需要更新' : '未连接本地服务（演示模式）'; el('demoTag').style.display='block';
   el('brandDot').style.background = 'var(--amber)';
   if(S.stale) el('demoTag').textContent = '旧版引擎缺少新版能力，已拒绝连接；请启动最新版中标狗';
   el('sbR').textContent = isWin ? 'C:\\Users\\me\\Documents\\中标狗\\jobs' : '~/Documents/中标狗/jobs';
-  el('heroSub').textContent = '当前是演示模式(未连接本地引擎),流程可完整体验,产出为样例';
+  el('heroSub').textContent = '当前是演示模式（未连接本地服务），流程可完整体验，产出为样例';
   renderTasks(); renderMain();
   const re = setInterval(async()=>{ if(await findEngine()){ clearInterval(re); location.reload(); } }, 5000);
+}
+function setOnboardingStep(step){
+  S.onboardingStep=step;
+  document.querySelectorAll('[data-ob-step]').forEach(n=>{const v=Number(n.dataset.obStep);n.classList.toggle('on',v===step);n.classList.toggle('done',v<step);});
+  document.querySelectorAll('[data-ob-pane]').forEach(n=>n.classList.toggle('on',Number(n.dataset.obPane)===step));
+}
+function setupStep(setup){
+  const s=setup||{},raw=String(s.step||s.status||'').toLowerCase();
+  if(Number(s.step)>=1&&Number(s.step)<=3)return Number(s.step);
+  if(/upload|ready|connected|complete_setup/.test(raw))return 3;
+  if(/test|testing|connect/.test(raw))return 2;
+  return 1;
+}
+async function showOnboarding(force){
+  if(FORCE_DEMO||!S.online)return;
+  let dismissed=false;try{dismissed=sessionStorage.getItem('bid_onboarding_dismissed')==='1';}catch(_){}
+  let step=1;
+  try{
+    const setup=await api('/v1/setup');S.setup=setup;
+    const status=String(setup.status||'').toLowerCase();
+    const completed=setup.completed===true||setup.setup_complete===true||setup.complete===true||setup.needs_setup===false||['complete','completed','ready'].indexOf(status)>=0;
+    if(completed){try{sessionStorage.setItem('bid_onboarding_dismissed','1');}catch(_){}return;}
+    step=setupStep(setup);
+    if(dismissed&&!force)return;
+  }catch(_){
+    /* 旧服务没有 setup 路由时才走兼容判断；新版一律以服务端持久状态为准。 */
+    if(!force){
+      try{const a=await api('/v1/agent');const configured=!!(a.s2_key_set||a.s2_borrowed||(a.kind&&['mock','s2'].indexOf(a.kind)<0));if(configured||S.jobs.length||dismissed)return;}
+      catch(_legacy){return;}
+    }
+  }
+  setOnboardingStep(step);el('obKey').value='';el('obStatus').textContent=step===2?'继续完成连接测试…':'等待开始…';el('obRetry').style.display='none';
+  el('ovl').style.display='block';el('onboarding').style.display='flex';setTimeout(()=>el('obKey').focus(),0);
+}
+async function onboardingConnect(){
+  const key=el('obKey').value.trim();
+  if(!/^sk-\S{8,}/i.test(key)){el('obKey').focus();toast('请粘贴完整 Key');return;}
+  setOnboardingStep(2);el('obStatus').textContent='正在保存推荐配置并测试…';el('obRetry').style.display='none';
+  try{
+    const r=await api('/v1/setup/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:key,key,mode:'quality'})});
+    if(r&&r.ok===false)throw new Error(r.error||r.message||'连接测试未通过');
+    el('obKey').value='';S.setup=r;
+    el('obStatus').textContent='✓ 连接成功\n✓ 推荐配置已保存\n✓ 可以开始生成真实标书';setTimeout(()=>setOnboardingStep(3),500);
+  }catch(e){
+    el('obStatus').textContent='连接没有通过：'+_friendlyText(e&&e.message||'请检查 Key 后重试');el('obRetry').style.display='';
+    presentProblem({level:'error',title:'连接测试没有通过',text:'请检查 Key 后重试；已填写内容仍在。',detail:e&&e.message||'',actions:[{act:'diagnose',label:'一键诊断'}]});
+  }
+}
+async function finishOnboarding(upload){
+  try{
+    await api('/v1/setup/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({completed:true})});
+    try{sessionStorage.setItem('bid_onboarding_dismissed','1');}catch(_){}
+    el('onboarding').style.display='none';el('ovl').style.display='none';if(upload!==false)pickFile();
+  }catch(e){presentProblem({level:'error',title:'初始化状态未能保存',text:'连接已配置，点击重试即可，不需要重新填写 Key。',detail:e&&e.message||'',actions:[{act:'complete_setup',label:'重试保存'}]});}
 }
 
 /* ================= 视图切换:空状态 / 任务态 ================= */
 function renderMain(){
   const has = !!S.active;
+  const job = has ? S.jobs.find(j=>j.job_id===S.active) : null;
+  const state = job ? publicTaskState(job) : '';
+  const delivery = job ? deliveryViewModel(job, S.arts[S.active]||[]) : {primary:null};
+  const deliverable = !!(job && delivery.primary && (state==='completed' || state==='needs_input'));
+  const showResult = deliverable && S.processView[S.active] !== true;
   el('hero').style.display = has ? 'none' : 'flex';
-  el('head').style.display = has ? 'block' : 'none';
-  el('chat').style.display = has ? 'block' : 'none';
-  el('composer').style.display = has ? 'block' : 'none';
-  el('rail').style.display = has ? 'flex' : 'none';   /* 空状态收起右栏,欢迎区真正居中 */
-  el('app').style.gridTemplateColumns = has ? '232px minmax(0,1fr) 302px' : '232px minmax(0,1fr)';
+  el('resultView').style.display = showResult ? 'block' : 'none';
+  el('head').style.display = (has && !showResult) ? 'block' : 'none';
+  el('chat').style.display = (has && !showResult) ? 'block' : 'none';
+  el('composer').style.display = (has && !showResult) ? 'block' : 'none';
+  el('rail').style.display = (has && !showResult) ? 'flex' : 'none';   /* 结果页和空状态都收起右栏 */
+  el('app').style.gridTemplateColumns = (has && !showResult) ? '232px minmax(0,1fr) 302px' : '232px minmax(0,1fr)';
+  if(showResult) renderResult(job);
+  const tab = el('resultTabBtn'); if(tab) tab.style.display = (deliverable && !showResult) ? 'inline-block' : 'none';
+  renderProblem();
+}
+function showTaskProcess(){ if(!S.active) return; S.processView[S.active]=true; renderMain(); renderHead(); renderRail(); }
+function showTaskResult(){ if(!S.active) return; S.processView[S.active]=false; renderMain(); }
+function checkRow(label, item){
+  const x = item || {state:'unknown',detail:'尚未检查'};
+  const icon = {pass:'✓',warn:'!',fail:'×',unknown:'?'}[x.state] || '?';
+  return '<div class="result-check '+escA(x.state||'unknown')+'"><span class="ci">'+icon+'</span><strong>'+esc(label)+'</strong><span>'+esc(x.detail||'尚未检查')+'</span></div>';
+}
+function usageValue(value, fallback){ return value==null || value==='' ? (fallback||'—') : value; }
+function renderResult(job){
+  if(!job || !S.active) return;
+  const vm = deliveryViewModel(job, S.arts[S.active]||[]), state = publicTaskState(job), p = taskPresentation(job);
+  const waiting = state==='needs_input';
+  el('resultMark').className = 'result-mark'+(waiting?' warn':''); el('resultMark').textContent = waiting ? '!' : '✓';
+  el('resultTitle').textContent = waiting ? '文件已生成，还有事项需要你确认' : '交付文件已准备好';
+  el('resultSub').textContent = p.currentAction+' · 最后活动 '+p.lastActivity;
+  const word = vm.primary;
+  el('resultWordName').textContent = word ? (word.name||'投标文件.docx') : '尚未找到可交付 Word';
+  const kb = word && (word.size_kb || (word.size ? Math.round(Number(word.size)/1024) : 0));
+  el('resultWordMeta').textContent = word ? ('Word 文档'+(kb ? ' · '+kb+' KB' : '')+' · 请人工复核后提交') : '请到过程与诊断查看中断原因';
+  ['resultOpen','resultDownload','resultModify'].forEach(id=>{ el(id).disabled = !word; });
+  el('resultChecks').innerHTML = checkRow('目录完整性', vm.toc)+checkRow('偏离表', vm.deviations)+checkRow('内容质量', vm.quality);
+  const u = job.usage || (job.presentation&&job.presentation.usage) || (job.delivery&&job.delivery.usage) || {};
+  const elapsed = job.elapsed_seconds != null ? job.elapsed_seconds : (job.elapsed != null ? job.elapsed : u.elapsed_seconds);
+  const calls = u.calls != null ? u.calls : (u.request_count != null ? u.request_count : u.requests);
+  const tokens = u.total_tokens != null ? u.total_tokens : ((Number(u.input_tokens)||0)+(Number(u.output_tokens)||0) || null);
+  const cost = u.estimated_cost != null ? u.estimated_cost : u.cost;
+  const currency = String(u.currency||'USD').toUpperCase();
+  const costText = cost==null ? '—' : ((currency==='CNY'||currency==='RMB'?'¥':'$')+Number(cost).toFixed(Number(cost)<1?3:2));
+  el('resultUsage').innerHTML = [
+    ['用时', elapsed!=null?_shortDuration(elapsed):'—'], ['调用次数', usageValue(calls)],
+    ['总用量', tokens!=null?Number(tokens).toLocaleString()+' tokens':'—'], ['预估费用', costText]
+  ].map(x=>'<div class="usage-item"><b>'+esc(x[1])+'</b><span>'+esc(x[0])+'</span></div>').join('');
+}
+function resultWord(){ const j=S.jobs.find(x=>x.job_id===S.active); return j&&deliveryViewModel(j,S.arts[S.active]||[]).primary; }
+function openResultWord(){ const w=resultWord(); if(w) openArtifact(w.name||'投标文件.docx',w.url||''); }
+async function downloadResultWord(){
+  const w=resultWord(); if(!w) return;
+  let url=w.url||''; if(!url){ const hit=(S.arts[S.active]||[]).find(a=>a.name===w.name); url=hit&&hit.url||''; }
+  if(!url){ openJobFolder(); return; }
+  try{
+    const r=await fetch(/^https?:/i.test(url)?url:API+url); if(!r.ok) throw new Error('download');
+    const blob=await r.blob(), objectUrl=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=objectUrl; a.download=w.name||'投标文件.docx'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(objectUrl),1500);
+  }catch(_){ toast('下载失败，已为你打开任务文件夹'); openJobFolder(); }
 }
 
 /* ================= 任务列表(事件委托,名字含引号也安全) ================= */
+function taskSourceJobs(){return S.taskScope==='archived'?(S.archivedJobs||[]):(S.jobs||[]).filter(j=>!j.archived_at);}
+function archivedOnly(result){const list=Array.isArray(result)?result:((result&&result.jobs)||[]);return list.filter(j=>!!j.archived_at);}
+function visibleTaskJobs(){
+  const project=String(S.projectFilter||'');
+  return taskSourceJobs().filter(j=>!project||String(j.project_id||'')===project);
+}
+function renderTaskFilters(){
+  if(typeof document==='undefined')return;
+  const all=(S.jobs||[]).concat(S.archivedJobs||[]),names=[...new Set(all.map(j=>j.project_id).filter(Boolean))].sort();
+  const select=el('taskProjectFilter');if(!select)return;const current=String(S.projectFilter||'');
+  select.innerHTML='<option value="">全部项目</option>'+names.map(n=>'<option value="'+escA(n)+'"'+(String(n)===current?' selected':'')+'>'+esc(n)+'</option>').join('');
+  document.querySelectorAll('[data-task-scope]').forEach(b=>b.classList.toggle('on',b.dataset.taskScope===S.taskScope));
+}
+async function setTaskScope(scope){
+  if(scope!=='active'&&scope!=='archived')return;
+  S.taskScope=scope;S.taskSelected.clear();S.taskBulkMode=false;S.taskMore=null;
+  if(scope==='archived'&&S.online&&!FORCE_DEMO){
+    try{const r=await api('/v1/jobs?scope=archived');S.archivedJobs=archivedOnly(r);}
+    catch(e){presentProblem({level:'error',title:'归档列表加载失败',text:'当前任务不受影响，可以重试。',detail:e&&e.message||'',actions:[{act:'reload_archived',label:'重试'}]});}
+  }
+  renderTaskFilters();renderTasks();
+}
+function setTaskProjectFilter(value){S.projectFilter=String(value||'');S.taskSelected.clear();renderTasks();}
+el('taskScope').addEventListener('click',e=>{const b=e.target.closest('[data-task-scope]');if(b)setTaskScope(b.dataset.taskScope);});
 function taskRow(j, compact){
   const on = j.job_id===S.active, p = (S.prog[j.job_id]&&S.prog[j.job_id].pct)!=null ? S.prog[j.job_id].pct : j.pct||0;
-  const stage = (S.prog[j.job_id]&&S.prog[j.job_id].stage) || j.stage || '';
-  const delivery = completionGate(jobState(j), p, wordPresence(S.arts[j.job_id], S.artsLoaded[j.job_id], j.has_word));
-  const dot = delivery.missingWord ? 'var(--red)' : (p>=100
-    ? (S.health[j.job_id] ? verdict(j.job_id).color : '#3a3a38') : 'var(--blue)');
+  const live = S.prog[j.job_id]||{}, view = Object.assign({},j);
+  if(!view.current_action && live.stage) view.current_action=live.stage;
+  const present = taskPresentation(view), color = {preparing:'var(--dim)',generating:'var(--blue)',needs_input:'var(--amber)',completed:'var(--green)',failed:'var(--red)'}[present.state];
   const checked = !!(S.taskSelected && S.taskSelected.has(j.job_id));
   const checkbox = S.taskBulkMode
     ? '<input class="task-check" type="checkbox" data-task-check="'+escA(j.job_id)+'" aria-label="选择任务 '+escA(j.name||j.job_id)+'"'+(checked?' checked':'')+'>'
     : '';
-  const delBtn = S.taskBulkMode ? '' : '<span class="del" title="删除任务" data-del="'+escA(j.job_id)+'"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:12px;height:12px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>';
-  const head = '<div class="nm">'+checkbox+'<span class="dot" style="background:'+dot+'"></span><span class="tn" title="'+escA(j.name||j.job_id)+'">'+esc(j.name||j.job_id)+'</span>'+delBtn+'</div>';
-  if(compact)   /* 已完成:单行,结论色圆点自己会说话 */
-    return '<div class="task dn'+(on?' on':'')+'" data-id="'+escA(j.job_id)+'">'+head+'</div>';
-  return '<div class="task'+(on?' on':'')+'" data-id="'+escA(j.job_id)+'">'+head
-    + '<div class="st">'+esc(stage)+' · '+p+'%</div><div class="bar"><b style="width:'+p+'%"></b></div></div>';
+  const archived=S.taskScope==='archived'||!!j.archived_at;
+  const actions = S.taskBulkMode ? '' : (archived
+    ? '<button class="task-archive" type="button" data-restore="'+escA(j.job_id)+'" title="恢复">恢复</button>'
+    : '<button class="task-archive" type="button" data-archive="'+escA(j.job_id)+'" title="归档">归档</button>')
+    +'<button class="task-more" type="button" data-task-more="'+escA(j.job_id)+'" aria-label="更多操作">•••</button>';
+  const head = '<div class="nm">'+checkbox+'<span class="dot" style="background:'+color+'"></span><span class="tn" title="'+escA(j.name||j.job_id)+'">'+esc(j.name||j.job_id)+'</span>'+actions+'</div>';
+  const project=j.project_id?'<span class="project-tag" title="'+escA(j.project_id)+'">'+esc(j.project_id)+'</span>':'';
+  const meta = '<div class="st">'+project+esc(present.currentAction)+' · '+esc(present.lastActivity)+(present.eta&&present.eta!=='—'?' · '+esc(present.eta):'')+'</div>';
+  const menu = (!S.taskBulkMode && S.taskMore===j.job_id) ? '<div class="task-menu">'
+    +'<button type="button" data-task-row-action="'+(archived?'restore':'archive')+'" data-job="'+escA(j.job_id)+'">'+(archived?'恢复到当前':'归档')+'</button>'
+    +'<button type="button" data-task-row-action="rerun" data-job="'+escA(j.job_id)+'">重新生成</button>'
+    +'<button type="button" data-task-row-action="export" data-job="'+escA(j.job_id)+'">导出</button>'
+    +'<button type="button" data-task-row-action="project" data-job="'+escA(j.job_id)+'">归入项目</button>'
+    +'<button type="button" class="danger" data-task-row-action="delete" data-job="'+escA(j.job_id)+'">删除任务</button></div>' : '';
+  return '<div class="task'+(compact?' dn':'')+(on?' on':'')+'" data-id="'+escA(j.job_id)+'">'+head+meta
+    +(compact?'':'<div class="bar"><b style="width:'+Math.max(0,Math.min(100,p))+'%"></b></div>')+menu+'</div>';
 }
 /* 状态由引擎给结论(list_jobs 的 state 字段),前端不再从进度百分比反推。
    以前只有 `pct>=100 ? 已完成 : 进行中` 两档,于是四种「已停止」终态(它们的 pct 都是 0)
@@ -918,82 +1476,208 @@ function jobState(j){
   return 'running';
 }
 function setTaskBulkMode(enabled){
-  if(S.taskBulkDeleting) return;
+  if(S.taskBulkDeleting || S.taskBulkBusy) return;
   S.taskBulkMode = !!enabled;
   if(!(S.taskSelected instanceof Set)) S.taskSelected = new Set();
   if(!S.taskBulkMode) S.taskSelected.clear();
   else{
-    const current = new Set(S.jobs.map(j=>j.job_id));
+    const current = new Set(visibleTaskJobs().map(j=>j.job_id));
     S.taskSelected.forEach(id=>{ if(!current.has(id)) S.taskSelected.delete(id); });
   }
   renderTasks();
 }
 function toggleTaskSelection(id, checked){
-  if(S.taskBulkDeleting) return;
+  if(S.taskBulkDeleting || S.taskBulkBusy) return;
   if(!(S.taskSelected instanceof Set)) S.taskSelected = new Set();
   if(checked) S.taskSelected.add(id); else S.taskSelected.delete(id);
   renderTasks();
 }
 function toggleAllTaskSelection(){
-  if(S.taskBulkDeleting) return;
+  if(S.taskBulkDeleting || S.taskBulkBusy) return;
   if(!(S.taskSelected instanceof Set)) S.taskSelected = new Set();
-  const ids = S.jobs.map(j=>j.job_id);
+  const ids = visibleTaskJobs().map(j=>j.job_id);
   const all = ids.length > 0 && ids.every(id=>S.taskSelected.has(id));
   if(all) ids.forEach(id=>S.taskSelected.delete(id));
   else ids.forEach(id=>S.taskSelected.add(id));
   renderTasks();
 }
 function renderTasks(){
-  const g = {staged:[], running:[], paused:[], stopped:[], unknown:[], done:[]};
-  S.jobs.forEach(j=>{ (g[jobState(j)] || g.running).push(j); });
+  const g = {preparing:[], generating:[], needs_input:[], completed:[], failed:[]};
+  visibleTaskJobs().forEach(j=>{ g[publicTaskState(j)].push(j); });
   let h = '';
-  if(S.jobs.length){
+  const visibleJobs = visibleTaskJobs();
+  if(visibleJobs.length){
     if(S.taskBulkMode){
-      const selected = S.jobs.filter(j=>S.taskSelected.has(j.job_id)).length;
-      const all = selected === S.jobs.length;
-      const busy = !!S.taskBulkDeleting;
-      h += '<div class="taskbulk"><div class="tbrow"><span class="tbsp">'+(busy?'正在处理 '+selected+' 项…':'已选 '+selected+' 项')+'</span>'
+      const selected = visibleJobs.filter(j=>S.taskSelected.has(j.job_id)).length;
+      const all = selected === visibleJobs.length;
+      const busy = !!(S.taskBulkDeleting||S.taskBulkBusy);
+      h += '<div class="taskbulk"><div class="tbrow"><span class="tbsp">'+(busy?'处理中 · '+selected+' 项…':'已选 '+selected+' 项')+'</span>'
         + '<button type="button" data-task-bulk-mode="0"'+(busy?' disabled':'')+'>退出批量</button></div>'
-        + '<div class="tbrow tbacts"><button type="button" data-task-bulk-all="1"'+(busy?' disabled':'')+'>'+(all?'取消全选':'全选')+'</button>'
-        + '<button type="button" class="danger" data-task-bulk-delete="1"'+((selected&&!busy)?'':' disabled')+'>'+(busy?'处理中…':'删除所选')+'</button></div></div>';
+        + (S.taskScope==='archived'
+          ? '<div class="tbrow tbacts"><button type="button" data-task-bulk-all="1"'+(busy?' disabled':'')+'>'+(all?'取消全选':'全选')+'</button><button type="button" data-task-bulk-action="restore"'+((selected&&!busy)?'':' disabled')+'>恢复</button></div>'
+          : '<div class="tbrow tbacts"><button type="button" data-task-bulk-all="1"'+(busy?' disabled':'')+'>'+(all?'取消全选':'全选')+'</button><button type="button" data-task-bulk-action="archive"'+((selected&&!busy)?'':' disabled')+'>归档</button><button type="button" data-task-bulk-action="rerun"'+((selected&&!busy)?'':' disabled')+'>重新生成</button></div>')
+        + '<div class="tbrow tbacts"><button type="button" data-task-bulk-action="export"'+((selected&&!busy)?'':' disabled')+'>导出</button><button type="button" data-task-bulk-action="project"'+((selected&&!busy)?'':' disabled')+'>归入项目</button><button type="button" data-task-bulk-more="1"'+(busy?' disabled':'')+'>更多操作</button></div>'
+        + (S.taskBulkMore?'<div class="tbrow"><span class="tbsp">谨慎操作</span><button type="button" class="danger" data-task-bulk-delete="1"'+((selected&&!busy)?'':' disabled')+'>'+(busy?'处理中…':'删除所选')+'</button></div>':'')+'</div>';
     }else{
       h += '<div class="taskbulk"><div class="tbrow"><span class="tbsp"></span><button type="button" data-task-bulk-mode="1">批量管理</button></div></div>';
     }
   }
   const grp = (key, label, compact)=>{
     const list = g[key]; if(!list.length) return '';
-    const open = S.taskBulkMode || S.taskGrpOpen[key] === true;
+    const open = taskGroupOpen(key,S.taskGrpOpen,S.taskBulkMode);
     return '<button type="button" class="tgrp" data-task-group="'+key+'" aria-expanded="'+open+'">'
       + '<span>'+label+' · '+list.length+'</span><span class="tgx">'+(open?'收起':'展开')+'</span></button>'
       + (open ? list.map(j=>taskRow(j,compact)).join('') : '');
   };
-  h += grp('staged', '等你开始', false);
-  h += grp('running', '进行中', false);
-  h += grp('paused', '已暂停,等你继续', false);
-  h += grp('stopped', '已停止', false);
-  h += grp('unknown', '状态不明', false);      // 引擎被杀/断电:如实说不知道,不装作在跑
-  h += grp('done', '已完成', true);
-  el('tasks').innerHTML = h || '<div class="empty-side">还没有任务</div>';
+  h += grp('preparing', '准备中', false);
+  h += grp('generating', '生成中', false);
+  h += grp('needs_input', '需要你确认', false);
+  h += grp('completed', '已完成', true);
+  h += grp('failed', '未完成', false);
+  el('tasks').innerHTML = h || '<div class="empty-side">'+(S.taskScope==='archived'?'归档里还没有任务':'还没有任务')+'</div>';
+  renderTaskFilters();
 }
 el('tasks').addEventListener('click', e=>{
   const bulkMode = e.target.closest('[data-task-bulk-mode]');
   if(bulkMode){ setTaskBulkMode(bulkMode.dataset.taskBulkMode==='1'); return; }
   const bulkAll = e.target.closest('[data-task-bulk-all]');
   if(bulkAll){ toggleAllTaskSelection(); return; }
+  const bulkAction = e.target.closest('[data-task-bulk-action]');
+  if(bulkAction){ runBulkTaskAction(bulkAction.dataset.taskBulkAction); return; }
+  const bulkMore = e.target.closest('[data-task-bulk-more]');
+  if(bulkMore){ S.taskBulkMore=!S.taskBulkMore; renderTasks(); return; }
   const bulkDelete = e.target.closest('[data-task-bulk-delete]');
   if(bulkDelete){ deleteSelectedJobs(); return; }
   const check = e.target.closest('[data-task-check]');
   if(check){ e.stopPropagation(); toggleTaskSelection(check.dataset.taskCheck, check.checked); return; }
   const tg = e.target.closest('[data-task-group]');
   if(tg){ if(!S.taskBulkMode){ const key=tg.dataset.taskGroup; S.taskGrpOpen[key]=!S.taskGrpOpen[key]; renderTasks(); } return; }
-  const del = e.target.closest('[data-del]');
-  if(del){ e.stopPropagation(); delJob(del.dataset.del); return; }
+  const archive = e.target.closest('[data-archive]');
+  if(archive){ e.stopPropagation(); archiveJob(archive.dataset.archive); return; }
+  const restore = e.target.closest('[data-restore]');
+  if(restore){ e.stopPropagation(); restoreJob(restore.dataset.restore); return; }
+  const more = e.target.closest('[data-task-more]');
+  if(more){ e.stopPropagation(); S.taskMore=S.taskMore===more.dataset.taskMore?null:more.dataset.taskMore; renderTasks(); return; }
+  const rowAction = e.target.closest('[data-task-row-action]');
+  if(rowAction){ e.stopPropagation(); runTaskRowAction(rowAction.dataset.taskRowAction,rowAction.dataset.job); return; }
   const t = e.target.closest('[data-id]');
   if(t){
     if(S.taskBulkMode) toggleTaskSelection(t.dataset.id, !S.taskSelected.has(t.dataset.id));
     else select(t.dataset.id);
   }
 });
+async function archiveJob(id){
+  if(!id) return;
+  try{
+    if(FORCE_DEMO || !S.online){ const j=S.jobs.find(x=>x.job_id===id); if(j) j.archived_at=new Date().toISOString(); }
+    else await api('/v1/jobs/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({archived:true})});
+    if(S.active===id){ S.active=null; if(S.es){S.es.close();S.es=null;} }
+    if(S.online&&!FORCE_DEMO) S.jobs=await api('/v1/jobs');
+    S.taskMore=null; renderTasks(); renderMain(); toast('已归档，可在项目数据中恢复');
+  }catch(e){
+    toast('归档失败：'+(e&&e.message||'请重试'));
+    presentProblem({level:'error',title:'任务归档失败',text:'任务仍在当前列表，内容没有变化。',detail:e&&e.message||'',actions:[{act:'retry_archive',label:'重试归档',param:id}]});
+  }
+}
+async function restoreJob(id){
+  if(!id)return;
+  try{
+    if(FORCE_DEMO||!S.online){const j=S.archivedJobs.find(x=>x.job_id===id);if(j)j.archived_at=null;S.jobs.push(...S.archivedJobs.filter(x=>x.job_id===id));S.archivedJobs=S.archivedJobs.filter(x=>x.job_id!==id);}
+    else{
+      await api('/v1/jobs/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({archived:false})});
+      const r=await api('/v1/jobs?scope=archived');S.archivedJobs=archivedOnly(r);S.jobs=await api('/v1/jobs');
+    }
+    if(S.active===id){S.active=null;if(S.es){S.es.close();S.es=null;}}
+    S.taskMore=null;renderTasks();renderMain();toast('已恢复到当前任务');
+  }catch(e){
+    toast('恢复失败：'+(e&&e.message||'请重试'));
+    presentProblem({level:'error',title:'任务恢复失败',text:'任务仍保留在归档中。',detail:e&&e.message||'',actions:[{act:'retry_restore',label:'重试恢复',param:id}]});
+  }
+}
+async function exportJobs(ids){
+  if(!ids.length) return {succeeded:[],failed:[]};
+  S.lastExportIds=ids.slice();
+  if(!S.online || FORCE_DEMO){ toast('演示模式不生成真实文件'); return {succeeded:[],failed:ids.slice()}; }
+  try{
+    const r=await fetch(API+'/v1/jobs/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,job_ids:ids})});
+    if(!r.ok) throw new Error('导出请求失败');
+    const type=r.headers.get('content-type')||'';
+    if(/json/i.test(type)){ const data=await r.json(); toast(data.message||(data.path?'导出文件已保存':'导出完成')); return data; }
+    const blob=await r.blob(), objectUrl=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=objectUrl;a.download='中标狗_任务导出.zip';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(objectUrl),1500);
+    toast('导出完成');return {succeeded:ids.slice(),failed:[]};
+  }catch(e){
+    toast('导出失败：'+(e&&e.message||'请重试'));
+    presentProblem({level:'error',title:'任务导出失败',text:'任务内容没有变化，可以直接重试。',detail:e&&e.message||'',actions:[{act:'retry_export',label:'重试导出'}]});
+    return {succeeded:[],failed:ids.slice()};
+  }
+}
+function openProjectMove(ids){
+  S.projectTargetIds=(ids||[]).slice(); el('projectName').value='';
+  const names=[...new Set(S.jobs.map(j=>j.project_id).filter(Boolean))];
+  el('projectChoices').innerHTML=names.map(n=>'<option value="'+escA(n)+'"></option>').join('');
+  el('ovl').style.display='block';el('projectSheet').style.display='flex';setTimeout(()=>el('projectName').focus(),0);
+}
+async function applyProjectMove(){
+  const name=el('projectName').value.trim(),ids=S.projectTargetIds.slice(); if(!name||!ids.length){toast('请填写项目名称');return;}
+  let succeeded=[],failed=[];
+  for(const id of ids){
+    try{await api('/v1/jobs/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({project_id:name})});succeeded.push(id);}
+    catch(e){failed.push({id,error:e&&e.message||'更新失败'});}
+  }
+  try{S.jobs=await api('/v1/jobs');if(S.taskScope==='archived'){const r=await api('/v1/jobs?scope=archived');S.archivedJobs=archivedOnly(r);}}catch(_){}
+  closeAll();renderTasks();toast('项目更新完成：成功 '+succeeded.length+'，失败 '+failed.length);
+  if(failed.length)presentProblem({level:'error',title:'部分任务未能归入项目',text:'成功 '+succeeded.length+' 个，失败 '+failed.length+' 个；失败项仍在原项目。',detail:failed.map(x=>x.id+'：'+x.error).join('\n'),actions:[{act:'retry_project',label:'重试失败项',param:failed.map(x=>x.id).join(',')}]});
+}
+async function runBulkTaskAction(action){
+  if(S.taskBulkBusy||S.taskBulkDeleting) return;
+  const ids=visibleTaskJobs().filter(j=>S.taskSelected.has(j.job_id)).map(j=>j.job_id);
+  if(!ids.length){toast('请先选择任务');return;}
+  if(action==='project'){openProjectMove(ids);return;}
+  if(action==='export'){S.taskBulkBusy=true;renderTasks();try{await exportJobs(ids);}finally{S.taskBulkBusy=false;renderTasks();}return;}
+  if(['archive','restore','rerun'].indexOf(action)<0) return;
+  S.taskBulkBusy=true;renderTasks();
+  let succeeded=[],failed=[];
+  try{
+    if(FORCE_DEMO||!S.online){
+      if(action==='archive'){S.jobs.forEach(j=>{if(ids.indexOf(j.job_id)>=0)j.archived_at=new Date().toISOString();});succeeded=ids.slice();}
+      else if(action==='restore'){
+        const restored=S.archivedJobs.filter(j=>ids.indexOf(j.job_id)>=0).map(j=>Object.assign({},j,{archived_at:null}));S.jobs.push(...restored);S.archivedJobs=S.archivedJobs.filter(j=>ids.indexOf(j.job_id)<0);succeeded=ids.slice();
+      }else failed=ids.map(id=>({id,error:'演示模式暂不支持批量重新生成'}));
+    }else{
+      const result=(await api('/v1/jobs/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,ids,job_ids:ids})}))||{};
+      const idOf=x=>typeof x==='string'?x:(x&&String(x.job_id||x.id||''));
+      succeeded=(result.succeeded||result.success_ids||[]).map(idOf).filter(Boolean);
+      failed=(result.failed||result.failures||[]).map(x=>typeof x==='string'?{id:x,error:'操作失败'}:{id:idOf(x),error:x.error||x.message||'操作失败'});
+      const success_count=Number(result.success_count!=null?result.success_count:result.succeeded_count);
+      const failure_count=Number(result.failure_count!=null?result.failure_count:result.failed_count);
+      if(!succeeded.length&&!failed.length&&result.ok!==false){succeeded=ids.slice();}
+      else if(!succeeded.length&&Number.isFinite(success_count)&&success_count>0)succeeded=ids.slice(0,success_count);
+      if(!failed.length&&Number.isFinite(failure_count)&&failure_count>0){const okSet=new Set(succeeded);failed=ids.filter(id=>!okSet.has(id)).slice(0,failure_count).map(id=>({id,error:'操作失败'}));}
+      S.jobs=await api('/v1/jobs');
+      if(S.taskScope==='archived'||action==='archive'||action==='restore'){const r=await api('/v1/jobs?scope=archived');S.archivedJobs=archivedOnly(r);}
+    }
+    S.taskSelected.clear();failed.forEach(x=>S.taskSelected.add(x.id));S.taskBulkMode=failed.length>0;
+    toast('批量操作完成：成功 '+succeeded.length+'，失败 '+failed.length);
+    if(failed.length)presentProblem({level:'error',title:'部分任务处理失败',text:'成功 '+succeeded.length+' 个，失败 '+failed.length+' 个；失败项已保留选中。',detail:failed.map(x=>x.id+'：'+x.error).join('\n'),actions:[{act:'diagnose',label:'一键诊断'}]});
+  }catch(e){
+    failed=ids.map(id=>({id,error:e&&e.message||'请求失败'}));
+    toast('批量操作失败：成功 0，失败 '+failed.length);
+    presentProblem({level:'error',title:'批量操作没有完成',text:'所选任务没有被统一标记为成功，请检查后重试。',detail:e&&e.message||'',actions:[{act:'diagnose',label:'一键诊断'}]});
+  }
+  finally{S.taskBulkBusy=false;renderTasks();if(S.active)renderMain();}
+}
+function runTaskRowAction(action,id){
+  S.taskMore=null;
+  if(action==='archive'){archiveJob(id);return;}
+  if(action==='restore'){restoreJob(id);return;}
+  if(action==='export'){exportJobs([id]);return;}
+  if(action==='project'){openProjectMove([id]);return;}
+  if(action==='delete'){delJob(id);return;}
+  if(action==='rerun'){
+    const old=S.active;S.active=id;rerunJob(true).finally(()=>{if(S.active===id&&old&&old!==id)S.active=old;});
+  }
+}
 async function delJob(id){
   const j = S.jobs.find(x=>x.job_id===id);
   if(!await askConfirm('删除任务「'+((j&&j.name)||id)+'」?', '该任务的招标文件与生成的产出会一并删除,不可恢复;正在生成的会先停止。', true)) return;
@@ -1007,7 +1691,7 @@ async function delJob(id){
 async function deleteSelectedJobs(){
   if(S.taskBulkDeleting) return;
   if(!(S.taskSelected instanceof Set)) S.taskSelected = new Set();
-  const ids = [...new Set(S.jobs.map(j=>j.job_id).filter(id=>id!=null && S.taskSelected.has(id)))];
+  const ids = [...new Set(visibleTaskJobs().map(j=>j.job_id).filter(id=>id!=null && S.taskSelected.has(id)))];
   if(!ids.length){ toast('请先选择要删除的任务'); return; }
   S.taskBulkDeleting = true;
   renderTasks();
@@ -1034,10 +1718,12 @@ async function deleteSelectedJobs(){
     if(succeeded.length){
       const removed = new Set(succeeded);
       S.jobs = S.jobs.filter(j=>!removed.has(j.job_id));
+      S.archivedJobs = (S.archivedJobs||[]).filter(j=>!removed.has(j.job_id));
     }
     if(!localOnly){
       try{
-        const fresh = await api('/v1/jobs');
+        const result = await api(S.taskScope==='archived'?'/v1/jobs?scope=archived':'/v1/jobs');
+        const fresh = S.taskScope==='archived'?archivedOnly(result):(Array.isArray(result)?result:(result.jobs||[]));
         const stillThere = new Set(fresh.map(j=>j.job_id));
         const stuck = succeeded.filter(id=>stillThere.has(id));
         if(stuck.length){
@@ -1045,7 +1731,7 @@ async function deleteSelectedJobs(){
           succeeded = succeeded.filter(id=>!stuckSet.has(id));
           failed += stuck.length;
         }
-        S.jobs = fresh;
+        if(S.taskScope==='archived') S.archivedJobs=fresh; else S.jobs = fresh;
       }catch(_){ refreshFailed = true; }
     }
 
@@ -1072,15 +1758,16 @@ function select(id){
     S.esOffsets[id] = 0; S.msgs[id] = []; S.chips[id] = null;
     S.worklog[id] = []; S.eventTimes[id] = []; S.steps[id] = {}; S.names[id] = {};
   }
+  if(S.processView[id]==null) S.processView[id]=false;
   S.active = id; renderMain(); renderTasks(); renderChat(); renderHead(); renderRail(); loadAtts(id);
   if(S.online){
     attachES(id, false);
-    refreshArts(id).then(()=>{ if(S.active===id){ renderHead(); renderRail(); renderTasks(); } });
+    refreshArts(id).then(()=>{ if(S.active===id){ renderHead(); renderRail(); renderTasks(); renderMain(); } });
   }
 }
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState !== 'visible' || !S.online) return;
-  api('/v1/jobs').then(j=>{ S.jobs=j; renderTasks(); renderHead(); }).catch(()=>{});
+  api('/v1/jobs').then(j=>{ S.jobs=j; renderTasks(); renderHead(); renderMain(); }).catch(()=>{});
   if(S.active && (!S.es || S.es.readyState === 2)) attachES(S.active, true);   // 流被浏览器挂起就续传
 });
 function attachES(id, reconnecting){
@@ -1089,7 +1776,7 @@ function attachES(id, reconnecting){
   const es = new EventSource(eventStreamUrl(API, id, offset)); S.es = es;
   es.onopen = () => {
     if(S.es === es && S.active === id)
-      el('conn').textContent = '本地引擎 v' + (S.engineVersion||'?') + ' · 已连接';
+      el('conn').textContent = '本地服务已连接';
   };
   es.onmessage = ev => {
     if(S.es !== es) return;
@@ -1100,13 +1787,24 @@ function attachES(id, reconnecting){
     es.close();
     if(S.es === es){
       S.es = null; S.typing[id] = false;
-      if(S.active===id) el('conn').textContent = '实时连接中断 · 正在从第 '+(S.esOffsets[id]||0)+' 条继续';
+      if(S.active===id) el('conn').textContent = '连接暂时中断 · 正在自动继续';
       setTimeout(()=>{ if(S.active===id && S.online && !S.es) attachES(id, true); }, reconnecting ? 4000 : 3000);
     }
   };
 }
 function eventIsRecent(e){ const t=ts2ms(e&&e.ts); return !!t && Math.abs(Date.now()-t) < 30000; }
 function handle(id, e){
+  const rawEventText=String((e&&e.text)||'');
+  const runtimeNotice=friendlyRuntimeNotice(e);
+  if(e && e.type==='message' && runtimeNotice.text && runtimeNotice.text!==rawEventText){
+    e=Object.assign({},e,{text:runtimeNotice.text,actions:(e.actions||[]).concat([runtimeNotice.action])});
+    if(runtimeNotice.technicalDetail){
+      S.diagnostic=runtimeNotice.technicalDetail;
+      if(runtimeNotice.text==='连接响应较慢，已自动切换稳定模式，任务正在继续。')
+        presentProblem({job_id:id,level:'info',title:'已自动保持任务继续',text:runtimeNotice.text,detail:runtimeNotice.technicalDetail,
+          actions:[{act:'show_detail',label:'查看原因'},{act:'diagnose',label:'一键诊断'}]});
+    }
+  }
   const etm = ts2ms(e&&e.ts);
   if(etm){
     const times = (S.eventTimes[id]=S.eventTimes[id]||[]);
@@ -1118,37 +1816,43 @@ function handle(id, e){
       const i = list.findIndex(x=>x._local && !x._fail && x.text===e.text);   // 服务端回声与本地即显合并,不出双气泡
       if(i>=0) list[i] = {role:'user', text:e.text}; else list.push(e);
     } else {
-      list.push(e); S.typing[id] = false;
-      if(e.role==='agent' && eventIsRecent(e)) notify(e.text);
+      const shown=Object.assign({},e,{text:_friendlyText(e.text)});
+      list.push(shown); S.typing[id] = false;
+      if(e.role==='agent' && eventIsRecent(e)) notify(shown.text);
     }
   }
   if(e.type==='worklog'){
     const wl = (S.worklog[id]=S.worklog[id]||[]);
-    for(const ln of (e.lines||[])) wl.push(ln);
+    for(const ln of (e.lines||[])) wl.push(_friendlyText(ln));
     if(wl.length > 400) wl.splice(0, wl.length - 400);
     if(S.active===id) renderWorklog();
   }
   if(e.type==='status'){ S.typing[id] = e.state==='thinking' && (Date.now()-ts2ms(e.ts) < 120000); }
   if(e.type==='question_closed'){ const q = S.chips[id];
-    if(q && (!e.id || q.qid===e.id)){ S.chips[id] = null; if(S.active===id) answerMode(false); } }
+    if(q && (!e.id || q.qid===e.id)){ S.chips[id] = null; const jj=S.jobs.find(x=>x.job_id===id);if(jj)jj.needs_attention=false;if(S.active===id) answerMode(false); } }
   if(e.type==='progress'){
-    S.prog[id]=e;
+    const stage=_friendlyText(e.stage);
+    S.prog[id]=Object.assign({},e,{stage});
+    const jj=S.jobs.find(x=>x.job_id===id);
+    if(jj){jj.pct=e.pct;jj.stage=stage;jj.current_action=stage;jj.last_activity_at=e.ts||new Date().toISOString();if(Number(e.pct)>=100)jj.state='done';else if(!jj.state||['done','stopped','unknown'].indexOf(jj.state)>=0)jj.state='running';}
     const k = e.step||0;
     if(k){
       const st = (S.steps[id]=S.steps[id]||{});
       if(!st[k]){
-        (S.msgs[id]=S.msgs[id]||[]).push({role:'sys', text:'第 '+k+'/'+(e.total||12)+' 步 · '+(e.stage||'')});
+        (S.msgs[id]=S.msgs[id]||[]).push({role:'sys', text:'第 '+k+'/'+(e.total||12)+' 步 · '+stage});
         st[k] = ts2ms(e.ts) || Date.now();
       } else if(ts2ms(e.ts)) st[k] = Math.min(st[k], ts2ms(e.ts));
-      (S.names[id]=S.names[id]||{})[k] = e.stage||'';
+      (S.names[id]=S.names[id]||{})[k] = stage;
       const wl = (S.worklog[id]=S.worklog[id]||[]);
-      const dv = '── 第 '+k+' 步 · '+(e.stage||'')+' ──';
+      const dv = '── 第 '+k+' 步 · '+stage+' ──';
       if(wl[wl.length-1] !== dv) wl.push(dv);
     }
   }
   if(e.type==='question'){
-    S.chips[id]={qid:e.id, options:e.options||[], text:e.text};
-    (S.msgs[id]=S.msgs[id]||[]).push({role:'agent',text:e.text});
+    const question=_friendlyText(e.text);
+    S.chips[id]={qid:e.id, options:e.options||[], text:question};
+    const jj=S.jobs.find(x=>x.job_id===id);if(jj)jj.needs_attention=true;
+    (S.msgs[id]=S.msgs[id]||[]).push({role:'agent',text:question});
     // 开放式提问(agent 没给选项):直接把输入框切到回答通道 ——
     // 不然界面上一个可点的东西都没有,而 agent 就在那边等着,谁也不知道该干什么
     if(S.active===id && !(e.options||[]).length) answerMode(true);
@@ -1157,6 +1861,7 @@ function handle(id, e){
     const list = (S.arts[id]=S.arts[id]||[]);
     if(!list.some(a=>a.name===e.name)) list.push(e);
     const recentBodyWord = isBodyWordArtifact(e) && eventIsRecent(e);
+    if(isBodyWordArtifact(e)){const jj=S.jobs.find(x=>x.job_id===id);if(jj)jj.has_word=true;}
     refreshArts(id).then(()=>{
       if(recentBodyWord && wordPresence(S.arts[id], S.artsLoaded[id]) === 'ready' && !S.wordNotified[id]){
         S.wordNotified[id] = true; notify('已出 Word · 待你确认');
@@ -1164,12 +1869,18 @@ function handle(id, e){
       if(id===S.active){ renderHead(); renderRail(); renderTasks(); }
     });
   }
-  if(e.type==='health'){ S.health[id]=e; }
+  if(e.type==='health'){
+    S.health[id]=Object.assign({},e,{summary:_friendlyText(e.summary),gaps:(e.gaps||[]).map(g=>Object.assign({},g,{title:_friendlyText(g.title),detail:_friendlyText(g.detail)}))});
+  }
   if(e.type==='error'){
-    (S.msgs[id]=S.msgs[id]||[]).push({role:'agent', text:'⚠ '+e.text, actions:withDiagnosticAction(e.actions)});
+    const friendly=friendlyRuntimeNotice(e), visible=friendly.text||'任务遇到问题，已有内容已保存。';
+    const actions=withDiagnosticAction(e.actions);
+    (S.msgs[id]=S.msgs[id]||[]).push({role:'agent', text:'⚠ '+visible, actions});
+    presentProblem({job_id:id,level:'error',title:'任务没有按预期继续',text:visible,
+      detail:friendly.technicalDetail||rawEventText,actions:[{act:'diagnose',label:'一键诊断'}].concat(actions.slice(0,2))});
     S.typing[id]=false;
   }
-  if(id===S.active){ renderChat(); renderHead(); renderRail(); renderTasks(); }
+  if(id===S.active){ renderChat(); renderHead(); renderRail(); renderTasks(); renderMain(); }
 }
 async function refreshArts(id){
   if(!S.online) return;
@@ -1237,97 +1948,59 @@ function renderHead(){
   if(!S.active) return;
   const p = S.prog[S.active]||{};
   const j = S.jobs.find(x=>x.job_id===S.active);
-  const st = j ? jobState(j) : (p.pct>=100 ? 'done' : 'running');
-  /* done 只表示「跑到头了」;stopped/unknown 是另一类终态——它们也不该再显示成运行中,
-     但结论卡、质检徽章那一套只对真正跑完的稿子有意义,所以分开判。 */
-  const t = timing(S.active), stateDone = (st === 'done');
-  // 「暂停」跟「停止」要分开说:停止是这一单结束了,暂停是它还在半路、等着被接着做
-  const paused = (st === 'paused');
-  const halted = (st === 'stopped' || st === 'unknown');
+  const st = j ? jobState(j) : (p.pct>=100 ? 'done' : 'running'), t = timing(S.active);
+  const state = j ? publicTaskState(j) : (p.pct>=100?'completed':'generating');
+  const present = taskPresentation(Object.assign({},j||{},(!j||!j.current_action)&&p.stage?{current_action:p.stage}:{}));
+  const caps = taskCapabilities(j||{state:st,can:['pause','stop']});
   const word = wordPresence(S.arts[S.active], S.artsLoaded[S.active], j&&j.has_word);
   const delivery = completionGate(st, p.pct, word);
   const done = delivery.complete;
-  const missingWord = delivery.missingWord || (halted && word === 'missing');
-  if(paused) S.paused[S.active] = true;
+  const missingWord = delivery.missingWord || (state==='failed' && word === 'missing');
+  if(st==='paused') S.paused[S.active] = true;
   const v = verdict(S.active);
   el('hTitle').textContent = (j&&j.name) || S.active;
   const badge = el('hBadge');
   if(missingWord){
     badge.style.display = 'inline-flex'; badge.className = 'badge bad';
     badge.innerHTML = '<span class="bdot"></span>没出 Word，未完成';
-  } else if(done){
-    const label = {ok:'内容检查通过', warn:'待确认项待处理', bad:(v.fix?'内容异常,需修复':'有必办项,暂不可投'), none:'已完成,待体检'}[v.key];
-    badge.style.display = 'inline-flex'; badge.className = 'badge ' + v.key;
-    badge.innerHTML = '<span class="bdot"></span>' + label;
-  } else if(delivery.checkingWord){
-    badge.style.display = 'inline-flex'; badge.className = 'badge warn';
-    badge.innerHTML = '<span class="bdot"></span>正在核对 Word 交付物';
-  } else if(paused){
-    badge.style.display = 'inline-flex'; badge.className = 'badge warn';
-    badge.innerHTML = '<span class="bdot"></span>已暂停,点「继续做」接着写';
-  } else if(halted){
-    // 跑挂了不能装作没事:徽章直接把话说明白,再配合下面的「重跑 / 补出 Word」
-    badge.style.display = 'inline-flex'; badge.className = 'badge bad';
-    badge.innerHTML = '<span class="bdot"></span>' + (st==='unknown' ? '状态不明,可能被中断' : '已停止,未跑完');
-  } else badge.style.display = 'none';
+  }else{
+    const cls={preparing:'none',generating:'none',needs_input:'warn',completed:'ok',failed:'bad'}[state]||'none';
+    badge.style.display='inline-flex';badge.className='badge '+cls;
+    badge.innerHTML='<span class="bdot"></span>'+esc(PUBLIC_TASK_LABELS[state]||'未完成');
+  }
   const act = el('hAct');
-  act.className = 'pill' + ((done||missingWord) ? ' primary' : '');
-  act.textContent = missingWord ? '查看中断原因' : (done ? (v.key==='bad' ? (v.fix?'去修复内容异常':'看必办清单') : '出件前检查') : '出件前检查');
-  /* 不再依赖 p.step:那等于「agent 自己汇报了第一条进度才给停止按钮」,
-     而真实 agent 读招标文件那几分钟到几十分钟是不吭声的——选错了文件想停,
-     用户只能删掉整个任务或干等三小时超时。任务只要不是终态就该能停。 */
-  el('stopBtn').style.display = (st==='running' && S.online) ? 'inline-block' : 'none';
-  // 跑挂了也该能定向重做/重跑:已经写出来的章节不该跟着一起作废
-  el('redoBtn').style.display = ((stateDone || halted || paused) && S.online) ? 'inline-block' : 'none';
-  /* 「继续做」只在引擎说这一单能续时才出现(它留下了可用的会话)。
-     没有会话还画这颗按钮,点下去必然失败——那种按钮不如不要。 */
+  act.className='pill'+((state==='completed'||state==='failed'||state==='needs_input')?' primary':'');
+  act.textContent=missingWord?'查看未完成原因':(state==='completed'||state==='needs_input'?'查看待确认项':'出件前检查');
+  el('stopBtn').style.display=(state==='generating'&&S.online&&caps.stop)?'inline-block':'none';
+  el('redoBtn').style.display=((state==='completed'||state==='failed'||state==='needs_input')&&S.online)?'inline-block':'none';
   const rb = el('resumeBtn');
   rb.onclick = resumeJob;
-  rb.style.display = (S.online && j && (j.can||[]).indexOf('resume') >= 0) ? 'inline-block' : 'none';
-  const jj = (S.jobs||[]).find(j=>j.job_id===S.active);
-  el('startBtn').style.display = (jj && jj.staged) ? '' : 'none';
+  rb.style.display = (S.online&&caps.resume)?'inline-block':'none';
+  el('startBtn').style.display=(j&&(j.staged||state==='preparing'))?'':'none';
   const pb = el('pauseBtn');
-  pb.onclick = togglePause;
-  if((st==='running' || paused) && S.online && p.step){
+  if(state==='generating'&&S.online){
     pb.style.display='flex';
-    pb.title = S.paused[S.active] ? '继续' : '暂停';
+    pb.setAttribute('aria-disabled',caps.pause?'false':'true');pb.style.opacity=caps.pause?'':'0.45';
+    pb.onclick=caps.pause?togglePause:()=>toast(caps.pauseReason);
+    pb.title=caps.pause?(S.paused[S.active]?'继续':'暂停'):caps.pauseReason;
     pb.innerHTML = S.paused[S.active]
       ? '<svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px"><polygon points="6 3 20 12 6 21 6 3"/></svg>'
       : '<svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px"><rect x="5" y="4" width="4.5" height="16" rx="1"/><rect x="14.5" y="4" width="4.5" height="16" rx="1"/></svg>';
-  } else pb.style.display='none';
-  const parts = [];
-  if(done){ parts.push('全部 '+t.total+' 步完成'); if(t.elapsed) parts.push('实际用时 '+fmtDur(t.elapsed)); }
-  else if(missingWord){
-    parts.push('生成已结束'); parts.push('没有可交付的 Word');
-    if(p.step && p.step<t.total) parts.push('停在第 '+p.step+'/'+t.total+' 步');
-    if(t.elapsed) parts.push('实际用时 '+fmtDur(t.elapsed));
-  }
-  else if(delivery.checkingWord){ parts.push('生成已结束'); parts.push('正在核对交付文件'); }
-  else if(halted){
-    // 停在第几步、已经写了多久,是用户决定「重跑还是接着改」的依据,不能只说一句"已停止"
-    parts.push(p.stage || '已停止');
-    if(p.step) parts.push('停在第 '+p.step+'/'+t.total+' 步');
-    if(t.elapsed) parts.push('实际已跑 '+fmtDur(t.elapsed));
-    parts.push('已生成的产物都保留着');
-  }
-  else{
-    parts.push(p.stage ? '正在:'+p.stage : '任务启动中');
-    parts.push('第 '+(p.step||1)+'/'+t.total+' 步');
-    if(t.elapsed) parts.push('实际已用 '+fmtDur(t.elapsed));
-    if(t.eta) parts.push((t.rough?'预计还剩约 ':'预计还剩 ')+fmtDur(t.eta));
-    if(S.paused[S.active]) parts.push('已暂停');
-  }
-  if(t.idle) parts.push('中途停顿 '+fmtDur(t.idle)+' 未计入');
-  el('hSub').textContent = parts.join(' · ');
+  }else{pb.style.display='none';pb.style.opacity='';}
+  const parts=[present.currentAction,'最后活动 '+present.lastActivity];
+  if(present.eta&&present.eta!=='—')parts.push(present.eta);
+  if(t.elapsed&&j&&j.elapsed_seconds==null&&j.elapsed==null)parts.push('已用 '+fmtDur(t.elapsed));
+  el('hSub').textContent=parts.join(' · ');
   el('hBar').style.width = (missingWord||delivery.checkingWord ? Math.min(Number(p.pct)||0,99) : (p.pct||0))+'%';
-  renderQuick(stateDone || halted || paused);
+  renderQuick(state==='completed'||state==='failed',caps);
 }
-function renderQuick(done){
+function renderQuick(done,caps){
   const q = el('quick');
   if(!S.active){ q.innerHTML=''; return; }
-  const items = done
-    ? [['q','出件前我还差哪几项?'],['q','各章分别写了多少字?'],['cmd:rerun','重跑本任务']]
+  let items = done
+    ? [['q','出件前我还差哪几项?'],['q','各章分别写了多少字?'],['cmd:rerun','重新生成']]
     : [['q','现在到哪了?'],['q','有哪些废标风险?'],['cmd:pause', S.paused[S.active]?'继续生成':'暂停一下']];
+  if(!done&&caps&&caps.pause===false)items=items.filter(x=>x[0]!=='cmd:pause').concat([['q','为什么当前不能暂停?']]);
   q.innerHTML = items.map(([k,label])=>'<span data-k="'+escA(k)+'" data-v="'+escA(label)+'">'+esc(label)+'</span>').join('');
 }
 el('quick').addEventListener('click', e=>{
@@ -1341,7 +2014,7 @@ el('quick').addEventListener('click', e=>{
    跟「重跑本任务」不是一回事 —— 重跑是另起一单从头来。
    接不上时后端会明说,这里如实转达,不能吞掉当成功。 */
 async function resumeJob(){
-  if(!S.active || !S.online){ toast('本地引擎未连接'); return; }
+  if(!S.active || !S.online){ toast('本地服务未连接'); return; }
   try{
     const r = await api('/v1/jobs/'+S.active+'/resume',{method:'POST'});
     if(r && r.ok===false){ toast(r.error || '接不上原来的会话'); return; }
@@ -1350,6 +2023,8 @@ async function resumeJob(){
 }
 async function togglePause(){
   if(!S.active || !S.online) return;
+  const job=S.jobs.find(j=>j.job_id===S.active),caps=taskCapabilities(job||{});
+  if(!caps.pause){toast(caps.pauseReason);return;}
   if(S.paused[S.active]) return resumeJob();
   try{
     const r = await api('/v1/jobs/'+S.active+'/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'pause'})});
@@ -1360,22 +2035,31 @@ async function togglePause(){
   }catch(e){ toast((e && e.message) || '操作失败'); }
 }
 async function stopJob(){
-  if(!S.active || !await askConfirm('停止这个任务?', '会终止正在跑的生成进程;已生成的产物全部保留,之后可以重跑或定向重做。', true)) return;
+  if(!S.active || !await askConfirm('停止这个任务?', '会终止正在进行的生成；已生成的文件全部保留，之后可以重新生成或继续修改。', true)) return;
   try{ await api('/v1/jobs/'+S.active+'/stop', {method:'POST'}); toast('已停止'); }
-  catch(e){ toast('停止失败,请重试'); }
+  catch(e){toast('停止失败，请重试');presentProblem({level:'error',title:'任务停止失败',text:'任务状态没有被标记为已停止，请先确认当前进度。',detail:e&&e.message||'',actions:[{act:'retry_stop',label:'重试停止'}]});}
 }
-function openRedo(){
+function openRevision(){
   el('ovl').style.display='block'; el('redo').style.display='flex';
   el('redoTxt').value = ''; el('redoTxt').focus();
 }
+function openRedo(){ openRevision(); }
 async function doRedo(){
   const t = el('redoTxt').value.trim();
-  if(!t){ toast('先写清楚要重做哪一部分'); return; }
+  if(!t){ toast('先写清楚要修改哪一部分'); return; }
   closeAll();
   try{
-    const r = await api('/v1/jobs/'+S.active+'/redo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:t})});
-    toast(r.ok ? '定向重做已开始' : ('无法重做:'+(r.error||'')));
-  }catch(e){ toast('启动失败:任务可能正在运行,先停止再试'); }
+    let r;
+    try{ r=await api('/v1/jobs/'+encodeURIComponent(S.active)+'/revisions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:t})}); }
+    catch(_){ r=await api('/v1/jobs/'+encodeURIComponent(S.active)+'/redo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction:t})}); }
+    if(r&&r.job_id){S.jobs=await api('/v1/jobs');select(r.job_id);}
+    else{S.processView[S.active]=true;renderMain();}
+    if(r&&r.ok===false){presentProblem({level:'error',title:'新版本没有启动',text:_friendlyText(r.error||'请检查任务状态后重试。'),detail:r.error||'',actions:[{act:'retry_revision',label:'重新填写'}]});toast('无法修改：'+(r.error||''));}
+    else toast('新版本已开始生成');
+  }catch(e){
+    toast('启动失败：任务可能正在运行，请先停止再试');
+    presentProblem({level:'error',title:'新版本没有启动',text:'原结果和修改要求都没有被覆盖，请检查任务状态后重试。',detail:e&&e.message||'',actions:[{act:'retry_revision',label:'重新填写'},{act:'diagnose',label:'一键诊断'}]});
+  }
 }
 async function openLog(){
   if(!S.active) return;
@@ -1388,18 +2072,18 @@ async function openLog(){
       ? '<span style="color:var(--green)">✓ 已核验技能包运行证据：'+esc((r.hits||[]).join('、'))+'</span>'
       : r.skill_state==='unverifiable'
         ? '<span style="color:var(--amber)">△ 技能指令已随任务加载，但本轮无法核验实际读取</span> — '+esc(r.why||'')
-          +'<br>这不等于未使用；OpenCode 有时不输出完整运行日志。交付前请结合响应矩阵、格式门禁和 Word 质检结果复核。'
-        : '<span style="color:var(--red)">✗ 技能包未成功加载</span> — '+esc(r.why||'')
-          +'<br>请在「设置 · 生成引擎」检查技能包路径和注入状态；自定义命令需保留 {skill} 占位符。';
+          +'<br>这不等于未使用；部分生成方式不会返回完整过程记录。请以响应矩阵、交付检查和 Word 质检结果为准。'
+        : '<span style="color:var(--red)">✗ 技能规则未成功加载</span> — '+esc(r.why||'')
+          +'<br>请先运行“一键诊断”；如仍未恢复，再到高级设置检查技能包路径和注入状态。';
   }catch(e){ el('logBody').textContent = '读取失败'; }
 }
 async function rerunJob(skipAsk){
   if(!S.active) return;
-  if(!skipAsk && !await askConfirm('重新生成一个任务?', '用同一份招标文件重开一个任务(素材库补充后重跑,常用于提升质量)。')) return;
+  if(!skipAsk && !await askConfirm('重新生成一个任务?', '用同一份招标文件从头生成新任务；当前任务和文件都会保留。')) return;
   try{
     const r = await api('/v1/jobs/'+S.active+'/rerun',{method:'POST'});
-    S.jobs = await api('/v1/jobs'); toast('已开始重跑'); select(r.job_id);
-  }catch(e){ toast('重跑失败:原任务的招标文件可能已不在'); }
+    S.jobs = await api('/v1/jobs'); toast('已开始重新生成'); select(r.job_id);
+  }catch(e){ toast('重新生成失败：原任务的招标文件可能已不在'); }
 }
 function renderWorklog(){
   const host = el('wlHost'); if(!host) return;
@@ -1415,12 +2099,12 @@ function renderWorklog(){
   if(!wl.length){
     if(!running){ host.innerHTML=''; return; }
     const t = timing(id);
-    const bits = [p0.stage ? '正在:'+esc(p0.stage) : '正在启动'];
+    const bits = [p0.stage ? '正在:'+esc(_friendlyText(p0.stage)) : '正在启动'];
     if(p0.step) bits.push('第 '+p0.step+'/'+(p0.total||12)+' 步');
     if(t && t.elapsed) bits.push('已用 '+fmtDur(t.elapsed));
     host.innerHTML = '<details class="wl" open><summary>⚙ 它正在做什么</summary>'
       + '<pre id="wlBody">' + bits.join(' · ')
-      + '\n\n这个引擎不往控制台输出实时台词(不同引擎行为不同),所以这里只显示阶段进度。'
+      + '\n\n当前生成方式没有返回完整过程记录，所以这里只显示阶段进度。'
       + '\n产物会在右侧「已产出」里逐个出现——那是它真的在干活的证据。</pre></details>';
     return;
   }
@@ -1441,7 +2125,7 @@ function renderChat(){
     const u = m.role==='user';
     const meta = u ? (m._fail ? '你 · <span class="rs" data-resend="'+mi+'">未送达,点此重发</span>' : '你') : '中标狗';
     const acts = (!u && m.actions && m.actions.length)
-      ? '<div class="chips" style="margin-top:8px">'+m.actions.map((a,ai)=>'<span class="chip'+(ai?' gy':'')+'" data-eact="'+escA(a.act)+'" data-file="'+escA(a.file||'')+'" data-eparam="'+escA(a.param||'')+'">'+esc(a.label)+'</span>').join('')+'</div>' : '';
+      ? '<div class="chips" style="margin-top:8px">'+m.actions.map((a,ai)=>'<span class="chip'+(ai?' gy':'')+'" data-eact="'+escA(a.act)+'" data-file="'+escA(a.file||'')+'" data-eparam="'+escA(a.param||'')+'">'+esc(_friendlyActionLabel(a.label))+'</span>').join('')+'</div>' : '';
     return '<div class="msg '+(u?'u':'a')+(m._fail?' fail':'')+'"><div class="b">'
       + (u ? esc(m.text) : mdHtml(m.text)) + acts + '</div><div class="m">'+meta+'</div></div>';
   }).join('');
@@ -1463,7 +2147,7 @@ el('chat').addEventListener('click', e=>{
   const c = e.target.closest('[data-opt]'); if(c) answer(c.dataset.opt);
 });
 async function downloadDiagnosticBundle(){
-  if(!S.active || !S.online){ toast('本地引擎未连接,暂时不能导出诊断包'); return; }
+  if(!S.active || !S.online){ toast('本地服务未连接，暂时不能导出诊断包'); return; }
   toast('正在整理诊断包…');
   if(!IS_WEB){
     try{
@@ -1491,6 +2175,9 @@ async function downloadDiagnosticBundle(){
 }
 async function errAction(act, file, param){
   /* 消息里的操作按钮:报错自救 + 对话指挥任务(重启/定向重做),点了才执行 */
+  if(act==='show_detail'){ showDiagnosticDetail(param||S.diagnostic||(el('problemHost')&&el('problemHost')._detail)||'暂无更多技术信息'); return; }
+  if(act==='diagnose'){ runDiagnostics(); return; }
+  if(act==='continue_saved'||act==='open_revision'){ openRevision(); return; }
   if(act==='bundle'){ downloadDiagnosticBundle(); return; }
   if(act==='open_engine'){ openSheet('providers'); return; }
   if(act==='open_log'){ openLog(); return; }
@@ -1499,8 +2186,8 @@ async function errAction(act, file, param){
     if(!S.active || !S.online) return;
     try{
       const r = await api('/v1/jobs/'+S.active+'/redo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction: param||''})});
-      toast(r.ok ? '定向重做已开始,进度看右侧' : ('无法重做:'+(r.error||'')));
-    }catch(e){ toast('定向重做启动失败:任务可能正在运行'); }
+      toast(r.ok ? '新版本已开始生成，进度看右侧' : ('无法修改：'+(r.error||'')));
+    }catch(e){ toast('修改没有启动：任务可能正在运行'); }
     return;
   }
   if(act==='resume'){ resumeJob(); return; }
@@ -1510,7 +2197,7 @@ async function errAction(act, file, param){
   if(act==='open_job_folder'){ openJobFolder(); return; }
   if(act==='export_docx'){
     /* 跑完没出 Word 时的自救:引擎拿正文稿跑确定性导出脚本,不重跑、不花额度 */
-    if(!S.active || !S.online){ toast('本地引擎未连接'); return; }
+    if(!S.active || !S.online){ toast('本地服务未连接'); return; }
     toast('正在导出 Word…');
     try{
       const r = await api('/v1/jobs/'+S.active+'/export_docx',{method:'POST'});
@@ -1526,7 +2213,7 @@ async function errAction(act, file, param){
     if(!S.active || !S.online) return;
     try{
       await api('/v1/agent',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'mock', mode:'agents'})});
-      toast('已切到内置演示,开始重跑');
+      toast('已切到内置演示，开始重新生成');
       rerunJob(true);
     }catch(e){ toast('切换失败,请到「设置 · 模型接入」手动选择'); }
     return;
@@ -1635,7 +2322,7 @@ async function openArtifact(name, url){
     else toast('这个文件还没有可用的下载地址');
     return;
   }
-  if(!S.online || !S.active){ toast('本地引擎未连接，暂时无法打开文件'); return; }
+  if(!S.online || !S.active){ toast('本地服务未连接，暂时无法打开文件'); return; }
   try{
     await api('/v1/jobs/'+S.active+'/artifacts/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
     toast('已用默认应用打开');
@@ -1663,7 +2350,7 @@ async function openPreview(name, url){
   el('pvOpen').dataset.name = name;
   el('pvOpen').textContent = IS_WEB ? '下载' : '打开';
   el('pvBody').innerHTML = '';
-  if(!url){ el('pvBody').textContent = '(演示模式:样例文件,连接本地引擎后可预览真实产出)'; return; }
+  if(!url){ el('pvBody').textContent = '（演示模式：连接本地服务后可预览真实产出）'; return; }
   el('pvBody').textContent = '加载中…';
   try{
     const r = await fetch(API+url); const t = (await r.text()).slice(0, 60000);
@@ -1684,7 +2371,7 @@ document.addEventListener('click', ()=>{ const m=el('plusMenu'); if(m) m.style.d
 function pickRef(){
   el('plusMenu').style.display='none';
   if(!S.active){ toast('先选中一个任务,参考资料是加给具体任务的'); return; }
-  if(!S.online){ toast('未连接本地引擎'); return; }
+  if(!S.online){ toast('未连接本地服务'); return; }
   el('refin').click();
 }
 async function addRef(file){
@@ -1699,7 +2386,7 @@ async function addRef(file){
   el('refin').value='';
 }
 /* ---------- 新建任务向导:先放文件(可多选/整文件夹)→ 选填要求 → 点「开始生成」才启动 ---------- */
-const NJ = { items: [], tenderIdx: -1 };            // items: [{file, rel}]
+const NJ = { items: [], tenderIdx: -1, step:1 };            // items: [{file, rel}]
 const DOCLIKE = f => !/\.(png|jpe?g|gif|bmp|tiff?|zip)$/i.test(f);
 /* 默认要求:大多数人不知道该写什么,空着写出来的就是四平八稳的通稿。
    预填一份「投标方案专家」提示词当起点——用户改两句比从零写一段容易得多。
@@ -1733,12 +2420,57 @@ const NJ_DEFAULT_REQ = [
   '- 语言专业、严谨,不堆形容词。'
 ].join('\n');
 function njReqDefault(){ el('njReq').value = NJ_DEFAULT_REQ; }
-function njReset(){ NJ.items = []; NJ.tenderIdx = -1; njReqDefault(); const m=el('njMsg'); m.style.display='none'; }
+function njShowStep(step){
+  NJ.step=Math.max(1,Math.min(3,Number(step)||1));
+  document.querySelectorAll('[data-nj-step]').forEach(n=>{const v=Number(n.dataset.njStep);n.classList.toggle('on',v===NJ.step);n.classList.toggle('done',v<NJ.step);});
+  document.querySelectorAll('[data-nj-pane]').forEach(n=>n.classList.toggle('on',Number(n.dataset.njPane)===NJ.step));
+  el('njPrev').style.display=NJ.step>1?'':'none';el('njNext').style.display=NJ.step<3?'':'none';
+  el('njLater').style.display=(NJ.step===3&&S.online)?'':'none';el('njGo').style.display=NJ.step===3?'':'none';
+}
+function njNext(){
+  if(NJ.step===1&&(NJ.tenderIdx<0||!NJ.items[NJ.tenderIdx])){el('njMsg').style.display='block';el('njMsg').textContent='请先选择招标文件主件';return;}
+  el('njMsg').style.display='none';njShowStep(NJ.step+1);
+}
+function njPrev(){el('njMsg').style.display='none';njShowStep(NJ.step-1);}
+async function loadJobTemplates(){
+  if(!S.online)return;
+  try{
+    const r=await api('/v1/templates'),list=Array.isArray(r)?r:(r.templates||[]);S.templates=list;
+    const built=new Set(['auto','government','construction','service']);
+    const extra=list.filter(x=>x&&x.id&&!built.has(String(x.id))).map(x=>'<option value="'+escA(x.id)+'">'+esc(x.name||x.title||x.id)+'</option>').join('');
+    [...el('njTemplate').querySelectorAll('option[data-custom]')].forEach(n=>n.remove());
+    if(extra)el('njTemplate').insertAdjacentHTML('beforeend',extra.replace(/<option /g,'<option data-custom="1" '));
+    renderTemplateTools();
+  }catch(_){}
+}
+function renderTemplateTools(){
+  const built=new Set(['auto','government','construction','service']),id=String(el('njTemplate').value||'auto');
+  el('njTemplateDelete').style.display=built.has(id)?'none':'';
+}
+async function saveCurrentTemplate(){
+  const name=el('njTemplateName').value.trim();if(!name){toast('请先填写模板名称');el('njTemplateName').focus();return;}
+  const base=el('njTemplate').value||'auto';
+  try{
+    const r=await api('/v1/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,prompt:el('njReq').value.trim(),base_template_id:base,config:{project_id:el('njProject').value.trim()}})});
+    await loadJobTemplates();const id=String((r&&r.id)||(r&&r.template_id)||'');if(id)el('njTemplate').value=id;el('njTemplateName').value='';renderTemplateTools();toast('自定义模板已保存');
+  }catch(e){
+    toast('模板保存失败');presentProblem({level:'error',title:'自定义模板保存失败',text:'当前任务填写内容仍然保留。',detail:e&&e.message||'',actions:[{act:'retry_template_save',label:'重试保存'}]});
+  }
+}
+async function deleteSelectedTemplate(){
+  const built=new Set(['auto','government','construction','service']),id=String(el('njTemplate').value||'');
+  if(!id||built.has(id)){toast('内置模板不能删除');return;}
+  const option=el('njTemplate').selectedOptions[0],name=option?option.textContent:id;
+  if(!await askConfirm('删除自定义模板「'+name+'」？','已创建的任务不会受影响。',true))return;
+  try{await api('/v1/templates/'+encodeURIComponent(id),{method:'DELETE'});el('njTemplate').value='auto';await loadJobTemplates();renderTemplateTools();toast('模板已删除');}
+  catch(e){toast('模板删除失败');presentProblem({level:'error',title:'自定义模板删除失败',text:'模板仍然保留，可以稍后重试。',detail:e&&e.message||'',actions:[{act:'retry_template_delete',label:'重试删除',param:id}]});}
+}
+function njReset(){ NJ.items = []; NJ.tenderIdx = -1; NJ.step=1; njReqDefault(); el('njTemplate').value='auto';el('njProject').value=''; const m=el('njMsg'); m.style.display='none'; }
 function njOpen(){
   el('ovl').style.display='block'; el('newjob').style.display='flex';
-  el('njLater').style.display = S.online ? '' : 'none';          // 演示模式没有"稍后开始"
   if(!el('njReq').value.trim()) njReqDefault();   // 空着就补默认;用户改过的原样保留
-  njRender();
+  el('njProjects').innerHTML=[...new Set(S.jobs.map(j=>j.project_id).filter(Boolean))].map(n=>'<option value="'+escA(n)+'"></option>').join('');
+  njShowStep(1);njRender();loadJobTemplates();
 }
 function njAddFiles(files, isFolder){
   if(!files || !files.length) return;
@@ -1766,7 +2498,7 @@ function njRender(){
 }
 async function njStart(startNow){
   if(NJ.tenderIdx < 0 || !NJ.items[NJ.tenderIdx]){ el('njMsg').style.display='block'; el('njMsg').textContent='还没有招标文件——点「+ 文件」把它加进来'; return; }
-  if(window.Notification && Notification.permission==='default') Notification.requestPermission();
+  if(IS_WEB && !FORCE_DEMO && window.Notification && Notification.permission==='default') Notification.requestPermission();
   const tender = NJ.items[NJ.tenderIdx];
   const tname = tender.rel.split('/').pop();
   if(!S.online){ closeAll(); demoNew(tname); njReset(); return; }
@@ -1780,12 +2512,14 @@ async function njStart(startNow){
   fd.append('relpaths', JSON.stringify(rels));
   fd.append('name', tname.replace(/\.[^.]+$/,''));
   fd.append('prompt', el('njReq').value.trim());
+  fd.append('template_id', el('njTemplate').value || 'auto');
+  fd.append('project_id', el('njProject').value.trim());
   fd.append('start', startNow ? '1' : '0');
   try{
     const r = await api('/v1/jobs', {method:'POST', body:fd});
     S.jobs = await api('/v1/jobs'); closeAll(); njReset(); select(r.job_id);
     if(!startNow) toast('已暂存。想跑的时候点任务标题旁的「开始生成」');
-  }catch(e){ el('njMsg').style.display='block'; el('njMsg').textContent='创建失败:'+(e&&e.message||'没连上本地引擎'); }
+  }catch(e){ el('njMsg').style.display='block'; el('njMsg').textContent='创建失败：'+(e&&e.message||'没连上本地服务'); }
   go.disabled = later.disabled = false; go.textContent = '开始生成';
 }
 async function startStaged(){
@@ -1875,7 +2609,7 @@ async function say(text){
     clearTimeout(S._typT);
     S._typT = setTimeout(()=>{ if(S.typing[id]){ S.typing[id]=false; if(S.active===id) renderChat(); } }, 90000);
     try{ await api('/v1/jobs/'+id+'/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'text',content:text})}); }
-    catch(e){ m._fail = 1; S.typing[id] = false; if(S.active===id) renderChat(); toast('发送失败:没连上本地引擎'); }
+    catch(e){ m._fail = 1; S.typing[id] = false; if(S.active===id) renderChat(); toast('发送失败：没连上本地服务'); }
   }
   else { addLocal('user',text); setTimeout(()=>addLocal('agent','(演示)收到:「'+text+'」。已纳入当前章节,继续推进。'),500); }
 }
@@ -1905,12 +2639,12 @@ async function answer(choice){
   renderChat();
 }
 function addLocal(role,text){ (S.msgs[S.active||'demo']=S.msgs[S.active||'demo']||[]).push({role,text}); renderChat(); }
-function notify(t){ if(window.Notification && Notification.permission==='granted') new Notification('中标狗',{body:String(t).slice(0,80)}); }
+function notify(t){ if(IS_WEB && window.Notification && Notification.permission==='granted') new Notification('中标狗',{body:String(t).slice(0,80)}); }
 
 /* ================= 弹层 ================= */
 function openSheet(id){ el('ovl').style.display='block'; el(id).style.display='flex'; if(id==='providers') loadProviders(); if(id==='assets') loadAssets(); }
 function openCheck(){ el('ovl').style.display='block'; el('check').style.display='flex'; renderCheck(); }
-function closeAll(){ cfDone(false); ['ovl','check','providers','assets','preview','confirm','redo','logSheet','newjob'].forEach(i=>el(i).style.display='none'); }
+function closeAll(){ cfDone(false); ['ovl','check','providers','assets','preview','confirm','redo','logSheet','diagnosticSheet','projectSheet','onboarding','newjob'].forEach(i=>el(i).style.display='none'); }
 /* 应用内确认(替代 window.confirm:Tauri 桌面壳里原生 confirm 静默返回 false) */
 function askConfirm(title, desc, danger){
   return new Promise(res=>{
@@ -1943,9 +2677,9 @@ function renderCheck(){
      客户点了没反应,卡在那儿不知道该干嘛(真实报障)。假按钮比没有更糟:它让人以为有路可走。
      按钮走 errAction 同一条分发路径,和聊天里的操作按钮共用已验证过的实现。 */
   el('ckList').innerHTML = gaps.map(g=>{
-    const acts = (g.actions||[]).map(a=>'<span class="gap-act" data-eact="'+escA(a.act)+'" data-file="'+escA(a.file||'')+'" data-eparam="'+escA(a.param||'')+'">'+esc(a.label||'处理')+'</span>').join('');
+    const acts = (g.actions||[]).map(a=>'<span class="gap-act" data-eact="'+escA(a.act)+'" data-file="'+escA(a.file||'')+'" data-eparam="'+escA(a.param||'')+'">'+esc(_friendlyActionLabel(a.label))+'</span>').join('');
     return '<div class="lrow"><span class="dot" style="background:'+(dot[g.level]||'var(--amber)')+'"></span>'
-      + '<div class="c"><span class="n">'+esc(g.title)+'</span><span class="s">'+esc(g.detail)+'</span></div>'
+      + '<div class="c"><span class="n">'+esc(_friendlyText(g.title))+'</span><span class="s">'+esc(_friendlyText(g.detail))+'</span></div>'
       + (acts ? '<span style="display:flex;gap:10px;align-items:flex-start">'+acts+'</span>' : '') + '</div>';
   }).join('');
 }
@@ -2065,9 +2799,9 @@ function onKindChange(){
     if(k==='s2'){
       const bundled = a.opencode_bundled;
       const okk = (a.available||{}).opencode;
-      el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
-        : (okk ? '✓ 执行外壳已就绪:'+((a.paths||{}).opencode||'')
-               : '✗ 缺执行外壳(点右侧一键安装,装完不用登录)');
+      el('agS2ShellSt').textContent = bundled ? '✓ 生成组件已内置,开箱即用'
+        : (okk ? '✓ 生成组件已就绪:'+((a.paths||{}).opencode||'')
+               : '✗ 生成组件需要修复(点右侧一键处理,完成后不用登录)');
       el('agS2ShellSt').style.color = (bundled||okk) ? 'var(--green)' : 'var(--warn, #c77b00)';
       el('agS2Install').style.display = (bundled||okk) ? 'none' : 'inline-block';
     }
@@ -2171,19 +2905,19 @@ async function loadAgent(){
     // 执行外壳状态:内置(安装包自带)> 已装(路径)> 缺 → 给一键安装按钮
     const bundled = a.opencode_bundled;
     const cxOk = a.available && a.available.opencode;
-    el('agS2ShellSt').textContent = bundled ? '✓ 执行外壳已内置,开箱即用'
-      : (cxOk ? '✓ 执行外壳已就绪:'+((a.paths||{}).opencode||'')
-              : '✗ 缺执行外壳(负责跑命令写文件,点右侧一键安装,装完不用登录)');
+    el('agS2ShellSt').textContent = bundled ? '✓ 生成组件已内置,开箱即用'
+      : (cxOk ? '✓ 生成组件已就绪:'+((a.paths||{}).opencode||'')
+              : '✗ 生成组件需要修复(点右侧一键处理,完成后不用登录)');
     el('agS2ShellSt').style.color = (bundled || cxOk) ? 'var(--green)' : 'var(--warn, #c77b00)';
     el('agS2Install').style.display = (bundled || cxOk) ? 'none' : 'inline-block';
-    el('agS2Install').textContent = '一键安装执行外壳(下载约 60MB)';
+    el('agS2Install').textContent = '一键修复生成组件(下载约 60MB)';
     onKindChange();
     // 折叠摘要:平时只看这一行,展开才见全部选项
     const engName = ({mock:'内置演示流程',s2:'自动',sowork:'SoWork(商汤)',claude:'Claude Code',codex:'Codex CLI',custom:'自定义命令'})[a.kind==='env'?'custom':a.kind] || a.kind;
     const engReady = a.kind==='mock' ? '' : (a.kind==='s2'
       ? ((a.s2_key_set||a.s2_borrowed) ? ' · ✓ '+(a.s2_model_effective||'')+' · 产真实标书' : ' · 未填 Key,当前跑演示流程')
       : ((a.available||{})[a.kind==='env'?'codex':a.kind] ? ' · ✓ 已就绪' : ''));
-    el('engSum').textContent = '生成引擎:' + engName + engReady + '(点开切换/高级设置)';
+    el('engSum').textContent = '生成方式:' + engName + engReady + '(点开切换/高级设置)';
     // 快速接入卡片上直说「现在真正会跑的是谁」:不是「自动」就红字点破,
     // 否则用户在这里选了模式、实际却由别的引擎在跑(SoWork 未登录 → 任务开跑才报错)
     if(a.kind === 's2'){
@@ -2395,9 +3129,9 @@ async function quickS2(){
     }
     lines[2] = '✓ 3/4 对话:' + gen + ' · 识图:' + (vis || '(网关没有识图模型,图片打标改人工)'); flush();
 
-    lines.push('4/4 全链路测试(最多 2 分钟)…'); flush();
+    lines.push('4/4 完整连接测试(最多 2 分钟)…'); flush();
     const r = await api('/v1/agent/test', {method:'POST'});
-    lines[3] = r.ok ? ('✓ 4/4 全链路通了'+(r.latency_ms?' · '+r.latency_ms+'ms':'')+' —— 现在拖入招标文件就能产真实标书')
+    lines[3] = r.ok ? ('✓ 4/4 连接已验证'+(r.latency_ms?' · '+r.latency_ms+'ms':'')+' —— 现在拖入招标文件就能产真实标书')
                     : ('✗ 4/4 测试未通过:'+(r.error||''));
     flush();
     el('qkKey').value=''; S.s2Models = models.length ? models : S.s2Models;
@@ -2455,7 +3189,7 @@ async function clearAssets(){
 }
 async function ingestAsset(file){
   if(!file) return;
-  if(!S.online){ toast('未连接本地引擎'); return; }
+  if(!S.online){ toast('本地服务未连接'); return; }
   const m = el('ingestMsg'); m.style.display='block'; m.textContent = '整理中:'+file.name+' …';
   const fd = new FormData(); fd.append('file', file);
   try{
@@ -2492,35 +3226,35 @@ function demoBoot(){
 function demoNew(name){ const id='demo'+Date.now(); S.jobs.unshift({job_id:id,name:(name||'新任务').replace(/\.[^.]+$/,''),pct:0}); renderTasks(); select(id); demoRun(id); }
 // 演示台词:与真实运行同一条展示通道,只是内容是脚本化的样例(在线体验版没有本机引擎,不这样就只剩分隔线)
 const DEMO_LOG = {
-  '体检素材':['$ python3 preflight_check.py --tender 招标文件.pdf --materials 素材/',
+  '体检素材':['正在检查招标文件与素材库是否完整',
              '素材库定位成功:素材/(公司介绍.md、产品资料.md、产品能力表.md、资质与案例.md、图片索引.md)',
              '图片索引 6 张已登记,均带落位锚点 ✓','招标文件为 PDF → 转换 招标文件_解析版.md(4.2 万字)'],
   '读懂组成':['读 招标文件_解析版.md 第三章「投标文件组成」','识别:技术标 / 商务标 / 报价标 三册分装',
              '附件模板 5 个已登记(投标函、法人授权书、偏离表、承诺函、报价表)','写出 投标文件组成.md'],
   '提取格式':['提取正文字体:宋体小四 / 行距 1.5 倍 / 首行缩进 2 字符','页边距 上下 2.54cm 左右 3.17cm,装订线 0.5cm',
-             '页眉带项目名,页码分节(封面目录不编页)','写出 word_format_spec.json + 格式要求摘要.md'],
+             '页眉带项目名,页码分节(封面目录不编页)','已保存格式规范与摘要'],
   '评分废标':['解析评分办法表:技术分 60 / 商务分 25 / 价格分 15','高分值项 4 处已标【高】:信创适配、AI 修复、并发能力、误报治理',
              '废标条款 7 条逐条登记(★项 3 条)','写出 评分点响应矩阵.md、废标风险清单.md'],
   '拆解分工':['以投标文件组成为骨架设计大纲(技术方案 5 章)','每章生成招标摘录切片:章节切片/第N章_招标摘录.md',
              '写出 00_响应矩阵.md,记录各章 must_cover'],
-  '分章撰写':['并行派出 5 个撰写子 agent(每章一个,不逐章串行)','第1章 项目理解 写入 章节/第1章.md · wc -m 3862 ✓',
-             '第2章 系统架构 写入 章节/第2章.md · wc -m 4105 ✓ · 打标 {{图:产品架构图}}',
-             '第3章 信创适配 写入 章节/第3章.md · wc -m 3711 ✓ · 打标 {{图:信创适配配置}}',
-             '第4章 实施与服务 写入 章节/第4章.md · wc -m 2980 ✗ 低于 3500,对该章重派扩写',
-             '第4章 扩写完成 · wc -m 3806 ✓','第5章 售后与培训 写入 章节/第5章.md · wc -m 3644 ✓'],
+  '分章撰写':['5 个章节正在并行撰写，不必逐章等待','第1章 项目理解已完成 · 3862 字 ✓',
+             '第2章 系统架构已完成 · 4105 字 ✓ · 已标记产品架构图位置',
+             '第3章 信创适配已完成 · 3711 字 ✓ · 已标记配图位置',
+             '第4章 实施与服务初稿 2980 字，低于要求，正在自动扩写',
+             '第4章扩写完成 · 3806 字 ✓','第5章 售后与培训已完成 · 3644 字 ✓'],
   '逐条应答':['读 产品能力表.md(15 项能力,配图列已绑定图片ID)','逐条判定招标要求 32 条:满足 28 / 部分满足 3 / 不满足 1',
              '不满足项已注明替代方案与说明','写出 技术应答偏离表.md、商务偏离表.md'],
-  '汇总成册':['$ python3 assemble_tender.py 章节/ --out 投标文件_技术标.md',
+  '汇总成册':['正在按招标要求汇总全册',
              '按 投标文件组成.md 顺序拼装,逐字保留各章正文','总字数 19,028(各章之和 19,028,无缩水)',
              '文首插入全局对照表,文末生成《投标人补料清单》'],
-  '配图复核':['$ python3 quality_gate.py 投标文件_技术标.md --materials 素材/ --fix',
+  '配图复核':['正在核对配图、篇幅和重复内容',
              '图片核对:6 张索引图 → 打标 5 处','「缺陷检测详情」打标位置与锚点不符 → 自动搬正到「代码缺陷检测」章',
              '「白名单管理」有锚点未打标 → 自动补插到「误报治理」段','查重:未发现重复灌注段;篇幅:5 个论述章均达标 ✓',
              '写出 成品质检报告.md(结论:通过)'],
   '自查体检':['对照 00_响应矩阵.md 核对交付稿','要求覆盖率 100%(32/32) · 评分点覆盖率 100%(18/18)',
              '废标条款 7 条逐条已规避 ✓','人工确认项 3 条已列入补料清单','写出 投标文件自检报告.md'],
-  '出Word质检':['$ python3 build_tender_docx.py 投标文件_技术标.md 技术标.docx --format-spec word_format_spec.json --images-dir 素材/',
-               '图片:自动插入 6 张,连续编号图注','$ python3 check_docx_format.py 技术标.docx',
+  '出Word质检':['正在生成可直接打开的 Word 文件',
+               '图片:自动插入 6 张,连续编号图注','正在检查 Word 格式',
                '格式核验 18 项:纸张/页边距/装订线/字体/行距/缩进/页眉页脚/页码分节/目录/封面/表格 全部通过 ✓',
                '质检通过,交付物已就位']
 };
@@ -2532,7 +3266,7 @@ function demoRun(id){
   const tm=setInterval(()=>{
     if(S.chips[id]){ return; }
     if(i>=stages.length){ clearInterval(tm); setTimeout(()=>clearInterval(logT), 3000);
-      handle(id,{type:'artifact',name:'投标文件_技术标.md'}); handle(id,{type:'artifact',name:'投标文件自检报告.md'});
+      handle(id,{type:'artifact',name:'投标文件_技术标.md'}); handle(id,{type:'artifact',name:'投标文件_技术标.docx',size_kb:2180}); handle(id,{type:'artifact',name:'投标文件自检报告.md'});
       handle(id,{type:'progress',stage:'完成',pct:100,step:12,total:12});
       handle(id,{type:'message',role:'agent',text:'已出 Word:全册与自检报告在交付目录。出件前有 3 项要你确认。'});
       handle(id,{type:'health',level:'yellow',summary:'3 项人工确认后即可投',gaps:[

@@ -2,6 +2,8 @@ name: build-installers
 on:
   push:
     branches: [main, "claude/**"]
+    paths-ignore:
+      - "site/**"
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -11,7 +13,9 @@ permissions:
 
 concurrency:
   group: build-installers-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # 主分支正在上传安装包时不能被新提交取消，否则可能留下半成品 Release。
+  # PR/功能分支仍保留“只跑最新一次”以节省构建资源。
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
@@ -90,14 +94,96 @@ jobs:
           workspaces: app/src-tauri
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
+      - id: signing
+        name: validate optional commercial-signing credentials
+        shell: bash
+        env:
+          MAC_CERTIFICATE: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_CERTIFICATE || '' }}
+          MAC_CERTIFICATE_PASSWORD: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          MAC_SIGNING_IDENTITY: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          MAC_APPLE_ID: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_ID || '' }}
+          MAC_APPLE_PASSWORD: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_PASSWORD || '' }}
+          MAC_TEAM_ID: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_TEAM_ID || '' }}
+          WINDOWS_CERTIFICATE: ${{ github.ref == 'refs/heads/main' && secrets.WINDOWS_CERTIFICATE || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ github.ref == 'refs/heads/main' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            present=0
+            for value in "$MAC_CERTIFICATE" "$MAC_CERTIFICATE_PASSWORD" "$MAC_SIGNING_IDENTITY" "$MAC_APPLE_ID" "$MAC_APPLE_PASSWORD" "$MAC_TEAM_ID"; do
+              [ -n "$value" ] && present=$((present + 1))
+            done
+            if [ "$present" -ne 0 ] && [ "$present" -ne 6 ]; then
+              echo "Apple signing/notarization secrets are only partially configured; refusing an ambiguous release."
+              exit 1
+            fi
+            if [ "$present" -eq 6 ]; then
+              echo "MAC_SIGNING_READY=true" >> "$GITHUB_ENV"
+              echo "mac_signed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "MAC_SIGNING_READY=false" >> "$GITHUB_ENV"
+              echo "mac_signed=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            present=0
+            [ -n "$WINDOWS_CERTIFICATE" ] && present=$((present + 1))
+            [ -n "$WINDOWS_CERTIFICATE_PASSWORD" ] && present=$((present + 1))
+            if [ "$present" -eq 1 ]; then
+              echo "Windows signing secrets are only partially configured; refusing an ambiguous release."
+              exit 1
+            fi
+            if [ "$present" -eq 2 ]; then
+              echo "WINDOWS_SIGNING_READY=true" >> "$GITHUB_ENV"
+              echo "windows_signed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "WINDOWS_SIGNING_READY=false" >> "$GITHUB_ENV"
+              echo "windows_signed=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+      - name: import Apple Developer certificate
+        if: runner.os == 'macOS' && env.MAC_SIGNING_READY == 'true'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_CERTIFICATE || '' }}
+          p12-password: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+      - name: import Windows Authenticode certificate
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_READY == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ github.ref == 'refs/heads/main' && secrets.WINDOWS_CERTIFICATE || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ github.ref == 'refs/heads/main' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pfxPath = Join-Path $env:RUNNER_TEMP "bid-dog-signing.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if (-not $certificate.Thumbprint) { throw "Windows certificate import returned no thumbprint" }
+          $configPath = Join-Path $env:RUNNER_TEMP "tauri.windows-signing.conf.json"
+          @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $certificate.Thumbprint
+                digestAlgorithm = "sha256"
+                timestampUrl = "http://timestamp.digicert.com"
+              }
+            }
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $configPath
+          "TAURI_WINDOWS_SIGNING_CONFIG=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: build engine sidecar (内置引擎,客户免装 Python)
         shell: bash
         working-directory: server
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_SIGNING_IDENTITY || '' }}
         run: |
           python -m pip install --quiet pyinstaller fastapi uvicorn python-multipart python-docx certifi
           cp ../bidmultiagenttao_v5.3.zip . 2>/dev/null || true
+          codesign_args=()
+          if [ "$RUNNER_OS" = "macOS" ] && [ "$MAC_SIGNING_READY" = "true" ]; then
+            codesign_args=(--codesign-identity "$APPLE_SIGNING_IDENTITY")
+          fi
           pyinstaller -F -n bid-engine engine_v1.py --collect-all uvicorn --collect-all certifi \
-            --add-data "bidmultiagenttao_v5.3.zip:." --noconfirm
+            --add-data "bidmultiagenttao_v5.3.zip:." --noconfirm "${codesign_args[@]}"
           TRIPLE=$(rustc -Vv | sed -n 's/^host: //p')
           mkdir -p ../app/src-tauri/binaries
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -142,14 +228,25 @@ jobs:
       - name: build installers
         working-directory: app
         shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_TEAM_ID || '' }}
         run: |
           # 没有商业证书时，macOS 也必须做 ad-hoc 签名：既保证整个 .app 资源封装有效，
           # 也会重签 npm 上游自带无效 linker signature 的 OpenCode sidecar。
           # 这不是 Apple Developer 签名/公证，用户仍需按 README 首次放行。
-          if [ "$RUNNER_OS" = "macOS" ]; then
+          if [ "$RUNNER_OS" = "macOS" ] && [ "$MAC_SIGNING_READY" != "true" ]; then
             export APPLE_SIGNING_IDENTITY="-"
           fi
-          npm run build ${{ matrix.build_args }}
+          if [ "$RUNNER_OS" = "macOS" ] && [ "$MAC_SIGNING_READY" = "true" ]; then
+            npm run build ${{ matrix.build_args }} --config src-tauri/tauri.macos-signing.conf.json
+          elif [ "$RUNNER_OS" = "Windows" ] && [ "$WINDOWS_SIGNING_READY" = "true" ]; then
+            npm run build ${{ matrix.build_args }} --config "$TAURI_WINDOWS_SIGNING_CONFIG"
+          else
+            npm run build ${{ matrix.build_args }}
+          fi
       - name: verify macOS DMG signature and bundled executables
         if: runner.os == 'macOS'
         working-directory: app
@@ -171,7 +268,11 @@ jobs:
           app_path=$(find "$mount_dir" -maxdepth 1 -name '*.app' -print -quit)
           codesign --verify --deep --strict --verbose=2 "$app_path"
           "$app_path/Contents/MacOS/opencode-cli" --version
-          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.18.2"
+          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.19.0"
+          if [ "$MAC_SIGNING_READY" = "true" ]; then
+            spctl --assess --type execute --verbose=2 "$app_path"
+            xcrun stapler validate "$app_path"
+          fi
           engine_data="$RUNNER_TEMP/bid-engine-smoke"
           engine_log="$RUNNER_TEMP/bid-engine-smoke.log"
           engine_port=18788
@@ -192,7 +293,7 @@ jobs:
           done
           test -n "$health" || { cat "$engine_log"; exit 1; }
           printf '%s' "$health" | python -c \
-            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.18.2"'
+            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.19.0"'
           kill "$engine_pid" >/dev/null 2>&1 || true
           wait "$engine_pid" >/dev/null 2>&1 || true
           engine_pid=""
@@ -252,8 +353,14 @@ jobs:
               Get-Content $engineOut, $engineErr -ErrorAction SilentlyContinue
               throw "installed bid-engine.exe did not become healthy"
             }
-            if ($health.version -ne "0.18.2") {
+            if ($health.version -ne "0.19.0") {
               throw "installed engine version mismatch: $($health.version)"
+            }
+            if ($env:WINDOWS_SIGNING_READY -eq "true") {
+              $signature = Get-AuthenticodeSignature $installers[0].FullName
+              if ($signature.Status -ne "Valid") {
+                throw "Windows installer Authenticode signature is not valid: $($signature.Status)"
+              }
             }
           } finally {
             if ($engine -and -not $engine.HasExited) {
@@ -275,6 +382,30 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - name: enforce immutable release tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="desktop-v0.19.0"
+          tag_rows=$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
+          if [ -n "$tag_rows" ]; then
+            git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+            tag_commit=$(git rev-list -n 1 "$tag")
+            if [ "$tag_commit" != "$GITHUB_SHA" ]; then
+              echo "Release tag $tag belongs to another commit; published releases are immutable."
+              exit 1
+            fi
+            if release_json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" 2>/dev/null); then
+              release_draft=$(printf '%s' "$release_json" | jq -r '.draft')
+              if [ "$release_draft" != "true" ]; then
+                echo "Release $tag is already published; published releases are immutable."
+                exit 1
+              fi
+            fi
+            echo "Found an unfinished draft for the same commit; resuming its asset upload safely."
+          fi
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -286,161 +417,76 @@ jobs:
             name="$(basename "$f" | sed -e 's/中标狗/bid-dog/g' -e 's/标书助手/bid-dog/g')"
             mv "$f" "out/$name"
           done
-          test -f out/bid-dog_0.18.2_aarch64.dmg
-          test -f out/bid-dog_0.18.2_x64-setup.exe
+          test -f out/bid-dog_0.19.0_aarch64.dmg
+          test -f out/bid-dog_0.19.0_x64-setup.exe
           test "$(find out -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
+          (cd out && sha256sum bid-dog_0.19.0_aarch64.dmg bid-dog_0.19.0_x64-setup.exe > SHA256SUMS)
           ls -la out
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: desktop-v0.18.2
-          name: 中标狗桌面版 v0.18.2
+          tag_name: desktop-v0.19.0
+          name: 中标狗桌面版 v0.19.0
+          target_commitish: ${{ github.sha }}
+          # Only a same-commit draft reaches this step; this repairs an interrupted partial upload.
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          draft: true
           # 不再标 prerelease:标了的话 /releases/latest 与 /releases/latest/download/… 全部 404,
           # 官网和 README 的「下载最新版」就没法用一条稳定链接
           prerelease: false
           body: |
-            中标狗桌面应用安装包(自动构建,未签名)。作者:FDE-家涛。
+            中标狗桌面应用安装包（自动构建；未配置商业证书时 macOS 为 ad-hoc、Windows 为未签名）。作者:FDE-家涛。
             官网(含在线体验、成品 Word 页面):https://bid-dog.vercel.app
 
-            - macOS Apple Silicon(M 系列): `bid-dog_0.18.2_aarch64.dmg`
-            - Windows: `bid-dog_0.18.2_x64-setup.exe`
+            - macOS Apple Silicon(M 系列): `bid-dog_0.19.0_aarch64.dmg`
+            - Windows: `bid-dog_0.19.0_x64-setup.exe`
+            - 校验文件: `SHA256SUMS`
             - 需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可。
 
             **macOS 提示「已损坏,无法打开」?** 不是文件坏了,是系统对未签名应用的拦截。把应用拖入「应用程序」后,终端执行:
             `xattr -cr /Applications/中标狗.app` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。详见仓库 docs/Mac安装说明.md。
             Windows SmartScreen 提示时点「更多信息 → 仍要运行」。
 
-            v0.18.2（完整说明见仓库更新日志）:
-            - 完成态改由磁盘上的正文 Word 证据决定；只有解析件或分析件会明确停止，不再出现假 12/12。
-            - 标准/极速流中断不再静默或把半截正文当成功；半截工具参数绝不执行，极速异常会明确停止，可手动切回标准。
-            - CLI 15 分钟无进展自动停止；用时只统计活跃时间；新增一键脱敏诊断包与版本升级提示。
-            - 覆盖安装使用独立 WebView 会话和 18802 专属引擎，不再命中 v0.16.0 的旧页面或旧进程。
-            - 「状态不明」「已完成」默认可收起；任务支持全选与批量删除，并汇总成功/失败数量。
-            - 运行日志把技能证据分为已验证、暂无法验证、未装载三态，不再把日志不可见误报成未使用。
-            - 162 项离线/浏览器回归先通过；最终 dmg/NSIS 内的引擎与 OpenCode 实际启动成功后才发布。
+            v0.19.0（完整说明见仓库更新日志）:
+            - 首次使用缩为三步；发放的 Key 会一次完成生成、视觉模型和执行方式配置。
+            - 任务统一为准备中、生成中、需要你确认、已完成、未完成五种状态；开始生成前连接较慢会自动改用稳定运行方式，输出中断则安全停住并保留内容。
+            - 完成页先给最终 Word，再给目录、偏离表和出件检查；支持一句话修改并保留版本链。
+            - 新增项目、模板、归档、批量恢复/重跑/导出，以及后台通知与系统任务栏进度。
+            - 安装包内的引擎和 OpenCode 必须实际启动并通过回归；`SHA256SUMS` 可校验下载完整性。
 
-            v0.18.0:
-            - **默认引擎换成 OpenCode**。同一份真实招标文件、同素材、同模型、同提示词跑出来的结论:
-              偏离表 112 行 vs 36 行(应答密度 6.2x vs 2.0x)、出了 codex 漏掉的《评标索引》
-              (评委按它逐项翻,缺项=那项默认没响应)、废标风险清单 19.7KB vs 0.7KB、
-              三份里唯一质检判「通过」,而模板化命中同为 0——字多是写透了不是灌水。
-              结构性原因:opencode 有原生子 agent,每章一个独立写、各有完整上下文预算;
-              codex 单上下文串行写六章,越往后预算越紧(它第 1 章只有 1320 字)。
-              **codex 保留为显式可选项**,一单样本还不够,撞上问题能一键切回来。
-              安装包内置 OpenCode,x64 一律打 baseline 变体(打包时不知道客户 CPU 支不支持 AVX2,
-              标准版在老 CPU 上直接崩),CI 打完当场验证跑得起来才发包。
+            完整历史版本说明见 CHANGELOG.md。
+          files: |
+            out/bid-dog_0.19.0_aarch64.dmg
+            out/bid-dog_0.19.0_x64-setup.exe
+            out/SHA256SUMS
+      - name: verify staged release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="desktop-v0.19.0"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$tag" > "$RUNNER_TEMP/release.json"
+          python - "$RUNNER_TEMP/release.json" <<'PY'
+          import json
+          import sys
 
-            v0.17.9:
-            - **参考资料真的送到 agent 手上**(第五例「界面承诺、链路没接」)。用户传一份去年的
-              中标标书想让它照着写,界面三处都写着「AI 撰写时会参考它的写法」——而「参考资料」
-              这三个字在 agent 指令与整个技能包里一次都没出现过,文件只是躺在任务目录里。
-              现在复制进素材目录(agent 开工必读),并附清单写明「只作行文与口径参照,
-              事实数据不得从参考件里搬」;回执也不再承诺做不到的事。
-            - **「它正在做什么」不再全程空白**。实时台词靠读 agent 的控制台输出,而三个引擎里
-              只有 codex 真往控制台写 —— 另外两个跑一个多小时界面上一个字都没有,谁都以为卡住了。
-              现在降级显示「正在:分章撰写 · 第 7/12 步 · 已用 41 分钟」并说明原因。
-
-            v0.17.8:
-            - **修 OpenCode 每一单都永久挂死**(拿真实招标文件做引擎对比时挖出来的)。
-              选 opencode 跑一单,进度停在「预检 8%」:进程活着、CPU 0%、没报错、没超时、
-              日志不再增长。根因是素材库与技能包天生在工作目录之外,而 opencode 对目录外访问
-              默认要问用户 —— 我们用的却是非交互模式,没人能回答,于是永久等待。
-              这是最难排查的一类故障,客户只会说「卡住了」。已在生成的配置里补齐放行,
-              并加了回归断言:任何一项权限是 ask 都直接红牌。
-              **顺带更正**:v0.13.1 说的 OpenCode「11 项端到端实测通过」测的是连通性与协议直连,
-              没有一项跑过完整标书流程 —— 连通不等于能用。
-
-            v0.17.7:
-            - **界面上可点的东西必须真的能用**。客户报障:质检判红后面板里那颗「处理」
-              点了毫无反应。同类一次挖出三处——①「处理」只是个 span,没绑任何事件;
-              ②聊天里的「定向重做不达标章节」用的动作前端分发表里根本没有,
-              点了静默 return(看起来接了线其实没有);③麦克风前端没绑、后端还是 501,
-              双重装饰已撤下。现在每条质检项由后端指定可执行动作,**没有动作就不画按钮**,
-              具体红项直接挂「重做这一章」。并加了动作契约体检:引擎发的动作词汇与
-              前端认识的对不上直接红牌,未知动作当面提示不再静默。
-            - **五条真机高频缺陷**:①暂存任务点「开始生成」100% 假报失败(而任务已经跑了),
-              用户会反复点、最后删任务重建把 agent 一起杀掉;②在向导里拖进任何一个公司文件,
-              反而把整个素材库从生成链路上切断——**用户越认真传材料,产出越差**;
-              ③任务刚开跑那几分钟到几十分钟没有停止按钮,拖错文件只能删任务或干等三小时;
-              ④跑挂了跟正在跑长得一模一样(四种终态进度都是 0,全被当成「运行中 0%」转圈);
-              ⑤关窗杀得掉引擎、杀不掉 agent,收尾代码跟着死——回来是个永远没有结局的任务。
-              现在任务状态由引擎给五态结论,关窗改为请引擎自己收尾再退。
-            - **老 CPU 装不上 opencode 外壳会直接崩**。官方安装脚本会探测 AVX2,
-              不支持要换 baseline 变体,而我们只映射了 AVX2 版本。招投标客户里老工控机不少。
-
-            v0.17.6:
-            - **修客户报障「跑完了,没有生成标书」**。任务一路跑到 100%「完成」,右侧列着一串文件,
-              就是没有 Word。两个口子:①agent 把正文和自检报告都写出来了,却没跑最后一步导出——
-              而 md 也算交付物,交付物列表非空,于是照报「完成」,缺件告警根本不触发;
-              ②产物被写进子目录(`输出/最终交付/技术标.docx`),收拢逻辑只扫一层且文件名必须以
-              「投标」开头,够不着就等于没产出。
-              现在:完成时有正文却没 docx,**引擎自己零 token 把 Word 出出来**(异常退出、
-              3 小时超时同样补);实在补不出来就直说「跑完了,但没有生成最终 Word 标书」,
-              并给「立即补出 Word」按钮;子目录产物按深度递归收回,
-              `素材/`、`章节/`、`参考资料/` 不动。
-              源头也堵上:引擎指令与技能包都写明「**没有 .docx = 这一单没交付**」,
-              正文写完必须亲自跑导出脚本并 ls 确认文件真在才允许结束。技能包升 v5.8。
-
-            v0.17.5:
-            - **清掉灌水的残余燃料**。上一版我只从前端预填提示词里删掉了字数目标,
-              但引擎的 agent 指令里还硬编码着「每章正文≥3500 字」、还在说「篇幅目标…逐条落实」,
-              技能包里另有三处 ——**只拔了一根管子,油箱还是满的**。给定一个数字就是给了凑数的靶子
-              (真机事故:给了「8—9 万字符」,弱模型把 18 个章节套同一组小标题灌到 12 万字)。
-              现在全链路不再出现任何统一字数目标,字数验收只管论述章、拿同册其他章与招标分量作参照。
-            - **修 4 条工程标实测缺陷**:①真实招标文件会把 docx 解析打崩(p.style 为 None);
-              ②废标条款靠关键词检索,而实测一份工程招标文件里「★」「▲」「废标」各 0 次,
-              整张《初步评审标准表》会被漏掉——初步评审不过是直接出局;
-              ③大纲被一行 slice 静默砍到 6 章,招标规定 11 项也照砍、日志还只报「6 章」;
-              ④拆解员的 IT 合并配方会把六个必须分列的一级件揉成一章。
-            - **一条更正**:上一版说的「报价占 100 分中的 50 分」读自一份虚拟案例(文件自己标着
-              「虚 拟 案 例」),具体分值撤回;「报价不代劳」这条仍然成立。
-
-            v0.17.4 拿真实工程标校准(投标人给了 1 份工程招标文件 + 4 份真实工程标 + 1 对信创招投标文件):
-            - **4 份人写的、实际投出去的工程标,我们的质检门禁原本 4/4 判红**——把行业标准做法当废稿。
-              工程标的投标文件由 10 项组成,只有「施工组织设计」是论述章,其余是格式件
-              (身份证明 163 字、授权委托书 269 字、单价表 29 字)本来就该短;「目 录」这种
-              字间加空格的标题正则直接失配;而真实工程标段落重复率 8%、IT 灌水稿 9%,占比根本分不开
-              ——改由模板化检测(同名小标题/同构表格)当主判据,它在 4 份工程标上零误伤。
-            - **资质 / 业绩 / 合同 / 证照改为整块留位,一张图都不自动插**。这些材料公司手上是现成扫描件,
-              实际做法是整块粘贴复制,拆成"一个资质一个小标题"反而没法贴;参考标书 121 张图里
-              90 张以上是人员资质与合同页,自动插错一张就是造假风险。现在留〔此处粘贴:…〕空白位。
-            - **配图只做一件事**:证明我方对某条技术要求或评分点的响应,不为插图而插图。
-            - **商务和技术偏离表每份必写**,另出《评标索引》放在整册最前面
-              (评分项|分值|评估标准|对应章节),评委按它逐项翻,索引缺项 = 那项默认没响应。
-            - **报价不代劳**:实测招标文件里投标报价占 100 分中的 50 分、已标价工程量清单是电子计价文件
-              ——列为补料清单头号人工必办项,不许自动填任何价格。
-
-            v0.17.2 修复:
-            - **整册标书不再是同一组小标题、同一张样板表**。客户跑出来的 12 万字成品里,
-              20 章全套同一组 8 个二级标题、54 张表一个模样、重复段占 19%,而字数/重复/覆盖率
-              三项门禁当时全过。根因是 v0.17.0 预填的默认提示词把「实施方法论、关键技术细节、
-              交付物、风险识别…」这种名词清单写了进去,弱模型直接当成逐章模板套满全书。
-              现在:提示词删掉全部名词清单与字数目标,改成"小标题必须每章现拟/逐条应答/不编造";
-              质检门禁新增模板化检测(同一小标题 >2 次、同表头表格 >4 张 → 红牌);
-              技能包升 v5.7,大纲章数守 ≤6、严禁预设统一小标题模板。
-
-            v0.17.1 修复:
-            - **跟模型网关的连接被掐断,不再让整条任务陪葬**。此前只有「证书校验失败」会重试,
-              连接被重置(`Connection reset by peer`)、握手 EOF、网关 5xx 一律直接放弃 ——
-              中转层一失败,codex 自己重连两次撞同一堵墙,任务就死了。现在瞬时故障自动退避重试
-              (0.8s / 2s / 4.5s);证书错误、401、404、DNS 失败仍然秒失败,不白等。
-              流到一半被掐时,已经写出来的正文不再整段丢弃。报错也翻成中文,并给「重跑本任务」按钮。
-
-            v0.17.0:
-            - **「标准 / 极速」点了就算数**。之前这个开关只换了说明文字,不写配置——
-              于是出现「选了极速,任务却还在用上一个引擎跑」,SoWork 没登录时直接报一串英文退出。
-              现在点一下立即改绑并回读校验;快速接入卡也会直说当前真正生效的是哪个引擎。
-            - **「你的要求」真的进指令了**。以前它只作为一条聊天消息记录,并没有传给 agent。
-              现在会存成任务目录里的《你的要求.md》,agent 开工先读、自检报告里逐条回执;
-              而且**默认就预填了一份投标方案专家提示词**(见 v0.17.2 说明),改两句就能用。
-            - **外部引擎没登录时说人话**。openclaw/claude/codex 的授权失效,不再甩一段英文日志,
-              而是讲清是哪个引擎、为什么,并给「改用我们的 Key」「先用内置演示」两个按钮。
-
-            v0.15.x:「它正在做什么」实时台词 + 预计等待时间。
-            v0.13.x~0.14.x:成品质检门禁(图片按锚点自动搬正/补插/剔除、查重、按章字数与应答覆盖率,
-            交付前自动修复并重出 Word,产《成品质检报告》);新建任务向导;网页端长任务断流修复;分章并行提速。
-
-            本地引擎已内置(安装即用,无需装 Python)。要产真实标书:打开「设置 · 模型接入」,
-            把发给你的 Key 粘进最上面的快速接入卡,选「标准」或「极速」,点「一键接入并测试」——
-            生成、对话、识图一次配好,**不需要注册或登录任何账号,也不用装 Node**。
-            详见 docs/让别人用S2模型.md;其他引擎(SoWork / 自定义命令)见 docs/使用与绑定指南.md。
-          files: out/*
+          release = json.load(open(sys.argv[1], encoding="utf-8"))
+          if release.get("draft") is not True:
+              raise SystemExit("release must remain a draft until all assets are verified")
+          expected = {
+              "bid-dog_0.19.0_aarch64.dmg",
+              "bid-dog_0.19.0_x64-setup.exe",
+              "SHA256SUMS",
+          }
+          assets = {item.get("name"): item for item in release.get("assets", [])}
+          if set(assets) != expected:
+              raise SystemExit(f"release assets mismatch: {sorted(assets)}")
+          for name in sorted(expected):
+              asset = assets[name]
+              state = asset.get("state")
+              size = int(asset.get("size") or 0)
+              url = str(asset.get("browser_download_url") or "")
+              if not (state == "uploaded" and size > 0 and url.startswith("https://")):
+                  raise SystemExit(f"release asset is not ready: {name}")
+          PY
+          gh release edit "$tag" --draft=false --latest

@@ -44,10 +44,10 @@ APPLE_SIGNING_IDENTITY=- npm run build -- --bundles dmg
 npm run build -- --bundles nsis
 ```
 
-正式出包前的 CI 闸门会先跑离线 Python 140 项、前端 Node 稳定性 20 项和 Chromium 真实点击 2 项，合计 162 项；任一项失败都不进入 dmg/exe 构建。这些回归只验证发布链路与既定行为，不等同于三份独立真实招标文件的严格出件验收。
+正式出包前的 CI 闸门当前会跑离线 Python 174 项、前端 Node 逻辑 38 项、官网契约 1 项和 Chromium 真实点击 4 项，合计 217 项；任一项失败都不进入 dmg/exe 构建。桌面 Rust 另有 8 项单元测试。这些回归只验证发布链路与既定行为，不等同于三份独立真实招标文件的严格出件验收。
 
 产物位置(app/src-tauri/target/release/bundle/):
-- macOS:dmg/中标狗_0.18.2_aarch64.dmg(在 Mac 上构建)
+- macOS:dmg/中标狗_0.19.0_aarch64.dmg(在 Mac 上构建)
 - Windows:nsis/*-setup.exe(在 Windows 上构建)
 
 注意:Tauri 不支持跨平台交叉编译——Mac 包在 Mac 上打,Windows 包在 Windows 上打(或用 GitHub Actions 双平台流水线,tauri-action 官方模板即可)。
@@ -58,25 +58,19 @@ npm run dev   # 带热重载起桌面窗口
 ```
 
 ## 签名(正式分发前)
-- macOS:当前 CI 使用 `APPLE_SIGNING_IDENTITY=-` 做 ad-hoc 签名，确保应用和 sidecar 的签名结构有效，但仍未获得系统信任。正式分发换成 Apple Developer 证书 + 公证时，必须重新启用 `bundle.macOS.hardenedRuntime`，并让 PyInstaller 与 Tauri 使用同一个 Apple-issued identity；只重签 onefile 外层会导致内置 Python 动态库无法加载。
-- Windows:代码签名证书(bundle.windows.certificateThumbprint),否则 SmartScreen 会拦
-
-## 把 mock 换成真实 agent(只动协作层,UI 零改动)
-当前 index.html 内为演示逻辑(进度自动推进、canned 回复)。接真实 agent 时按既定协议替换数据源:
-- POST /v1/jobs · POST /v1/jobs/{id}/messages · GET /v1/jobs/{id}/events(SSE)· POST /v1/jobs/{id}/answers · POST /v1/jobs/{id}/control · GET /v1/jobs/{id}/artifacts
-- 模型接入:GET/POST /v1/providers · POST /v1/providers/{id}/test · PUT /v1/routing
-- 本地引擎:把现有 FastAPI(app_server.py)用 PyInstaller 打成 sidecar,在 tauri.conf.json 的 bundle.externalBin 里声明,应用启动时拉起并连 127.0.0.1
-- 语音:本机转写(如 whisper.cpp sidecar),失败降级 /v1/transcribe
+- macOS:没有完整凭据时，CI 使用 `APPLE_SIGNING_IDENTITY=-` 做 ad-hoc 签名，确保应用和 sidecar 的签名结构有效，但仍未获得系统信任。只有 Apple Developer 证书与公证凭据全部就绪时，CI 才叠加 hardened-runtime 配置并执行系统信任与 stapler 校验；最终 DMG 内的 PyInstaller 引擎仍须实际启动成功。
+- Windows:只有 PFX 与密码同时就绪时才导入证书并叠加 thumbprint 配置；半套凭据直接阻止发版。没有证书时 SmartScreen 仍可能拦截。
+- 凭据名、构建分支与验证命令见 [`app/src-tauri/SIGNING.md`](app/src-tauri/SIGNING.md)。
 
 ## 引擎已内置进安装包(sidecar,默认开启)
 **从当前版本起,CI 构建的安装包自带引擎二进制,客户免装 Python,双击即完整功能。**实现:
 - CI 在每个平台先跑 `pyinstaller -F -n bid-engine server/engine_v1.py --collect-all uvicorn`,按 Rust 目标三元组命名放入 `app/src-tauri/binaries/`;
 - `tauri.conf.json` 的 `bundle.externalBin` 声明 `binaries/bid-engine`;
-- `main.rs` 在 v0.18.2 专属端口 `127.0.0.1:18802` 拉起内置引擎，前端同时校验精确版本，不探测或复用历史端口上的旧进程；退出时请求引擎安全收尾，引擎日志写到 `~/Documents/中标狗/engine.log`；
-- Tauri WebView 使用 incognito 会话，并以 `index.html?desktop=0.18.2-18802` 作为版本入口；前端启动时清除旧 `localStorage.bid_api`，避免覆盖安装继续执行历史页面缓存或连回旧引擎；
+- `main.rs` 在 v0.19.0 专属端口 `127.0.0.1:18900` 拉起内置引擎，前端同时校验精确版本，不探测或复用历史端口上的旧进程；退出时请求引擎安全收尾，引擎日志写到 `~/Documents/中标狗/engine.log`；
+- Tauri WebView 使用 incognito 会话，并以 `index.html?desktop=0.19.0-18900` 作为版本入口；前端启动时清除旧 `localStorage.bid_api`，避免覆盖安装继续执行历史页面缓存或连回旧引擎；
 - 首次启动会把 `~/Documents/标书助手` 中的存量数据迁移到 `~/Documents/中标狗`，Rust 壳显式设置 `BID_HOME`，保证 sidecar、任务、素材和日志始终落在同一数据目录；
 - 前端启动先等内置引擎就绪(约 8 秒),等不到才降级演示模式,之后探测到引擎会自动切回真实模式。
-本机手动构建同理:先按上面 pyinstaller 命令产出二进制放进 `app/src-tauri/binaries/<名字>-<host triple>[.exe]` 再 `npm run build`;不放 sidecar 也能构建,应用为演示模式。
+本机手动构建同理：必须先按上面步骤把 `bid-engine-<host triple>[.exe]` 与 `opencode-cli-<host triple>[.exe]` 都放进 `app/src-tauri/binaries/`，再运行 `npm run build`；缺任一 `externalBin` 都会直接构建失败，不能产生一个看似完整的空壳安装包。
 
 **v0.18.0 起 externalBin 默认声明 `binaries/opencode-cli`（S2 引擎执行外壳）**：CI 会从 npm registry 下载
 OpenCode 1.18.13 对应平台包，抽出 `package/bin/opencode[.exe]`，重命名为
