@@ -247,13 +247,14 @@ h2{font-size:clamp(25px,3.4vw,38px);letter-spacing:-.028em;line-height:1.22;marg
 .eg span{font-size:11.5px;color:var(--dim)}
 /* 真实截图 */
 .output-proof{padding:72px 0 58px}
-.app-shot{display:block;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#fff;margin-top:36px;box-shadow:0 26px 70px -34px rgba(77,157,255,.55)}
+.result-copy{margin-top:76px}
+.app-shot{display:block;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#fff;margin-top:28px;box-shadow:0 26px 70px -34px rgba(77,157,255,.55)}
 .app-shot img{width:100%;display:block}.app-shot .cap{padding:13px 16px;color:var(--sub);background:#0b0d10;border-top:1px solid var(--line);font-size:12.5px}
-.shots{display:grid;grid-template-columns:repeat(6,1fr);gap:16px;margin-top:24px}
-.sh{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#0b0d10}
-.sh.featured{grid-column:span 6}.sh.compact{grid-column:span 2}
-.sh a{display:block}.sh img{width:100%;display:block}.sh.featured img{height:620px;object-fit:cover;object-position:top}
-.sh .cap{padding:13px 16px;font-size:12.5px;color:var(--sub);border-top:1px solid var(--line)}
+.shots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:32px}
+.sh{min-width:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#0b0d10}
+.sh a{display:block;aspect-ratio:1310 / 1853;overflow:hidden;background:#fff}
+.sh img{width:100%;height:100%;object-fit:contain;display:block}
+.sh .cap{flex:1;padding:13px 16px;font-size:12.5px;color:var(--sub);border-top:1px solid var(--line)}
 /* FAQ */
 .faq{max-width:780px;margin-top:36px}
 details{border-bottom:1px solid var(--line);padding:19px 0}
@@ -277,7 +278,6 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   .bento{grid-template-columns:1fr}
   .bx.w3,.bx.w2,.bx.w6{grid-column:span 1}
   .stats{grid-template-columns:repeat(2,1fr)}
-  .shots{grid-template-columns:1fr}.sh.featured,.sh.compact{grid-column:1}.sh.featured img{height:auto}
   nav .nl{display:none}
   .stage-head{align-items:flex-start;flex-direction:column}.demo-full{align-self:stretch;text-align:center}
 }
@@ -285,6 +285,7 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   .wrap{padding:0 16px}.hero{padding-top:48px}.stage{padding-top:52px}
   .mini{grid-template-columns:1fr;height:430px}.ms,.mr{display:none}.win{border-radius:12px}
   .tb{height:30px}.mh{padding-left:13px;padding-right:13px}.mb{padding:12px 13px}.mi{padding-left:13px;padding-right:13px}
+  .shots{grid-template-columns:1fr}.result-copy{margin-top:58px}
   nav .repo{font-size:0;padding:8px 10px}nav .repo::after{content:"GitHub";font-size:12px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -296,9 +297,9 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 <nav><div class="wrap">
   <a class="brand" href="#"><img src="assets/icon.png" alt="">中标狗</a>
   <a class="nl" href="#output">成品效果</a>
-  <a class="nl" href="#demo">真实界面</a>
-  <a class="nl" href="#feat">能做什么</a>
+  <a class="nl" href="#demo">怎么使用</a>
   <a class="nl" href="#gate">出件质检</a>
+  <a class="nl" href="#feat">能做什么</a>
   <a class="nl" href="#faq">常见问题</a>
   <a class="repo" href="https://github.com/shandianT" target="_blank" rel="noopener">GitHub · shandianT ↗</a>
   <a class="cta p" href="#get">免费下载</a>
@@ -322,18 +323,20 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 
 <!-- 先给用户看最终拿到的东西，再解释生成过程 -->
 <section class="output-proof" id="output"><div class="wrap">
-  <div class="rv center"><div class="kick">真实交付效果</div><h2>先看成品：生成后拿到的是可继续修改的 Word</h2>
-    <p class="lead">以下页面由实际 docx 直接渲染，不是设计稿。封面、正文配图、偏离表和章节版式都会一起交付。</p></div>
+  <div class="rv center"><div class="kick">真实 Word 成品</div><h2>先看成品：封面、正文、偏离表和章节页一起交付</h2>
+    <p class="lead">四张页面都由实际 docx 直接渲染，不是设计稿；每张都能点开查看高清原图。</p></div>
+  <div class="shots">
+    <div class="sh rv"><a href="assets/word-cover.png" target="_blank" rel="noopener"><img src="assets/word-cover.png" alt="Word 封面页"></a><div class="cap">封面页：项目名、文件性质与投标人落款 · 点击查看高清原图</div></div>
+    <div class="sh rv"><a href="assets/word-body.png" target="_blank" rel="noopener"><img src="assets/word-body.png" alt="Word 图文正文页"></a><div class="cap">正文页：配图自动落到对应章节，连续编号图注，页眉和页码分节 · 点击查看高清原图</div></div>
+    <div class="sh rv"><a href="assets/word-deviation.png" target="_blank" rel="noopener"><img src="assets/word-deviation.png" alt="Word 技术偏离表页"></a><div class="cap">技术偏离表：招标要求与我方应答逐条对应 · 点击查看高清原图</div></div>
+    <div class="sh rv"><a href="assets/word-xinchuang.png" target="_blank" rel="noopener"><img src="assets/word-xinchuang.png" alt="Word 章节图文页"></a><div class="cap">章节页：标题、段落、表格与素材图片统一排版 · 点击查看高清原图</div></div>
+  </div>
+  <div class="result-copy rv center"><div class="kick">交付后继续修改</div><h2>Word 先给你，检查、下载和继续修改都在同一处</h2>
+    <p class="lead">生成完成先看到主 Word，再看偏离表和内容检查；有修改点，直接说一句话继续改，并保留每个版本。</p></div>
   <a class="app-shot rv" href="app/index.html?demo=1" aria-label="打开全尺寸交付结果体验">
     <img src="assets/app-result-v019.png" alt="中标狗交付结果页真实界面">
-    <div class="cap">当前产品的交付结果页：主 Word、偏离表、内容检查和继续修改入口集中在一屏。点击进入全尺寸体验。</div>
+    <div class="cap">当前产品的交付结果页：打开或下载主 Word、查看偏离表与检查结果、继续修改都集中在一屏。点击进入全尺寸体验。</div>
   </a>
-  <div class="shots">
-    <div class="sh featured rv"><a href="assets/word-body.png" target="_blank" rel="noopener"><img src="assets/word-body.png" alt="Word 图文正文页"></a><div class="cap">正文页：配图自动落到对应章节，连续编号图注，页眉和页码分节 · 点击查看高清原图</div></div>
-    <div class="sh compact rv"><a href="assets/word-cover.png" target="_blank" rel="noopener"><img src="assets/word-cover.png" alt="Word 封面页"></a><div class="cap">封面页：项目名、文件性质与投标人落款 · 点击放大</div></div>
-    <div class="sh compact rv"><a href="assets/word-deviation.png" target="_blank" rel="noopener"><img src="assets/word-deviation.png" alt="Word 技术偏离表页"></a><div class="cap">技术偏离表：招标要求与我方应答逐条对应 · 点击放大</div></div>
-    <div class="sh compact rv"><a href="assets/word-xinchuang.png" target="_blank" rel="noopener"><img src="assets/word-xinchuang.png" alt="Word 章节图文页"></a><div class="cap">章节页：标题、段落、表格与素材图片统一排版 · 点击放大</div></div>
-  </div>
 </div></section>
 
 <!-- ============ 自动播放的产品演示 ============ -->
@@ -415,6 +418,17 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   </div>
 </div></section>
 
+<section id="gate"><div class="wrap">
+  <div class="rv"><div class="kick">出件质检</div>
+  <h2>先确认能不能交，再介绍更多能力</h2>
+  <p class="lead">正文 Word 会先生成供你检查；目录、偏离表或关键质检未通过时，任务不会误报“已完成”，并会直接列出下一步怎么补。</p></div>
+  <div class="gates rv" style="max-width:760px">
+    <div class="gt"><i style="background:var(--bad)"></i><b>暂不可投</b><span>投标人名称/报价未填 · 资质缺失 · 内容异常</span></div>
+    <div class="gt"><i style="background:var(--warn)"></i><b>待你确认</b><span>证书临期 · 业绩差一份佐证</span></div>
+    <div class="gt"><i style="background:var(--ok)"></i><b>检查通过</b><span>字体 / 页边距 / 页码 / 表格列宽 36+ 项合规</span></div>
+  </div>
+</div></section>
+
 <section id="feat"><div class="wrap">
   <div class="rv"><div class="kick">核心能力</div>
   <h2>除了写正文,还管这些</h2>
@@ -437,25 +451,15 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   </div>
 </div></section>
 
-<section id="gate"><div class="wrap">
-  <div class="rv"><div class="kick">出件质检</div>
-  <h2>没出正文 Word，或关键检查没过，就不算可交付</h2>
-  <p class="lead">Word 可以先生成供你检查；目录、偏离表或关键质检未通过时，任务不会宣告“已完成”。</p></div>
-  <div class="gates rv" style="max-width:760px">
-    <div class="gt"><i style="background:var(--bad)"></i><b>暂不可投</b><span>投标人名称/报价未填 · 资质缺失 · 内容异常</span></div>
-    <div class="gt"><i style="background:var(--warn)"></i><b>待你确认</b><span>证书临期 · 业绩差一份佐证</span></div>
-    <div class="gt"><i style="background:var(--ok)"></i><b>检查通过</b><span>字体 / 页边距 / 页码 / 表格列宽 36+ 项合规</span></div>
-  </div>
-</div></section>
-
 <section id="faq"><div class="wrap">
   <div class="rv"><div class="kick">常见问题</div><h2>装之前想知道的</h2></div>
   <div class="faq rv">
-    <details open><summary>macOS 提示「已损坏,无法打开」?</summary><p>文件并没有损坏。当前安装包尚未使用 Apple Developer ID 完成公证，macOS 会对每次新下载或覆盖安装重新加隔离标记；在商业证书配置完成前，代码本身无法冒充系统公证。更新前先从托盘退出旧版，把新版拖入「应用程序」并替换、推出 DMG 后执行下面命令；也可到「系统设置 → 隐私与安全性」点「仍要打开」。</p><div class="mac-fix"><code>xattr -dr com.apple.quarantine "/Applications/中标狗.app"</code><button class="copy-fix" id="copyMacFix" type="button">复制首次放行命令</button></div></details>
+    <details><summary>第一次使用要做什么?</summary><p>下载安装后，粘贴发放的 Key，点一次「测试连接」，再上传招标文件即可。没有 Key 也能先打开在线体验或运行内置演示，不需要先学习模型和命令行配置。</p></details>
     <details><summary>我的标书和素材会上传到哪里吗?</summary><p>原始文件和产物存在你电脑的「文稿/中标狗」文件夹，不上传到中标狗自有服务器。生成时所需的文本或图片会发送给你主动绑定的模型服务，请同时遵守该服务的数据规则。</p></details>
-    <details><summary>不填写 Key 能用吗?</summary><p>能先用内置演示完整走通流程；产真实标书时填写发放的 Key，即可完成完整生成。</p></details>
+    <details><summary>不填写 Key 能用吗?</summary><p>能先用内置演示完整走通流程；产真实标书时粘贴发放的 Key，即可完成完整生成。</p></details>
     <details><summary>生成用的是谁的额度?</summary><p>使用发放的 Key 时，生成、追问与识图都走对应套餐；应用会自动使用内置 OpenCode，无需另装 Node.js，也无需登录 OpenCode 账号。你也可以在高级设置里改用自己的 SoWork、Claude Code 或 Codex 订阅。</p></details>
-    <details><summary>怎么更新版本?</summary><p>下载新安装包覆盖安装即可,数据与配置自动保留,老版本数据目录会自动迁移,任务与素材一个不丢。</p></details>
+    <details><summary>怎么更新版本?</summary><p>等当前任务结束后从托盘真正退出旧版，再下载新安装包覆盖安装。数据与配置会自动保留，老版本数据目录也会自动迁移。</p></details>
+    <details><summary>macOS 提示「已损坏,无法打开」?</summary><p>文件并没有损坏。当前安装包尚未使用 Apple Developer ID 完成公证，macOS 会对每次新下载或覆盖安装重新加隔离标记；在商业证书配置完成前，代码本身无法冒充系统公证。更新前先从托盘退出旧版，把新版拖入「应用程序」并替换、推出 DMG 后执行下面命令；也可到「系统设置 → 隐私与安全性」点「仍要打开」。</p><div class="mac-fix"><code>xattr -dr com.apple.quarantine "/Applications/中标狗.app"</code><button class="copy-fix" id="copyMacFix" type="button">复制首次放行命令</button></div></details>
   </div>
 </div></section>
 
