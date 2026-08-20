@@ -32,3 +32,6 @@ upload_v*.zip
 
 # CI 会把根目录那份 cp 进来打包;开发机上留着会抢在根目录新包前面被解压
 server/bidmultiagenttao_v5.3.zip
+
+# 本机内容资产：可能包含客户标书、资质图片和内部方案，禁止提交到公开仓库
+local-assets/

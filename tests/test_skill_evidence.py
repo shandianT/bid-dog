@@ -687,6 +687,7 @@ def test_reserved_worker_holds_slot_through_server_fallback_cleanup(engine, job,
     release_fallback = threading.Event()
 
     monkeypatch.setattr(engine, "oc_run", lambda *_a, **_k: engine.OC_RUN_FALLBACK)
+    monkeypatch.setattr(engine, "ensure_default_shell", lambda *_args, **_kwargs: (True, "ready"))
 
     def blocked_real_agent(*_args):
         entered_fallback.set()

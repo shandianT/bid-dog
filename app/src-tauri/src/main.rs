@@ -6,10 +6,10 @@ use desktop_state::{
     aggregate_progress, close_action, should_send_shutdown, CloseAction, JobNotification,
     JobSnapshot, NotificationKind, NotificationTracker, ProgressKind,
 };
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -20,9 +20,9 @@ use tauri::window::{ProgressBarState, ProgressBarStatus};
 use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
 
-// v0.19.0 使用版本专属端口：覆盖安装时旧 PyInstaller onefile 进程可能仍驻留，
+// v0.19.1 使用版本专属端口：覆盖安装时旧 PyInstaller onefile 进程可能仍驻留，
 // 不能因历史端口“有人监听”就复用旧引擎。下一次不兼容升级也应换新端口。
-const ENGINE_PORT: u16 = 18900;
+const ENGINE_PORT: u16 = 18901;
 const JOB_POLL_INTERVAL: Duration = Duration::from_secs(3);
 const TRAY_ID: &str = "bid-dog-main";
 const TRAY_OPEN_ID: &str = "open-main-window";
@@ -89,25 +89,58 @@ fn data_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
-// 内置引擎随应用启动;端口被占=本应用的另一个实例已在跑,不重复拉起
-fn spawn_engine() -> Option<Child> {
-    if port_busy(ENGINE_PORT) {
-        return None;
-    }
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
+fn resolve_engine_sidecar(app_executable: &Path) -> Result<PathBuf, String> {
+    let dir = app_executable
+        .parent()
+        .ok_or_else(|| format!("桌面程序路径没有父目录: {}", app_executable.display()))?;
     let name = if cfg!(windows) {
         "bid-engine.exe"
     } else {
         "bid-engine"
     };
     let path = dir.join(name);
-    if !path.exists() {
-        return None; // 未打包 sidecar 的开发态:前端自动进演示模式
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!("找不到本地引擎，已检查: {}", path.display()))
     }
+}
+
+fn append_bootstrap_log(data: Option<&Path>, message: &str) {
+    let Some(dir) = data else { return };
+    let path = dir.join("engine-bootstrap.log");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{}", message);
+    }
+}
+
+// 内置引擎随应用启动;端口被占=本应用的另一个实例已在跑,不重复拉起
+fn spawn_engine() -> Option<Child> {
+    if port_busy(ENGINE_PORT) {
+        return None;
+    }
+    let data = data_dir();
+    let exe = match std::env::current_exe() {
+        Ok(value) => value,
+        Err(error) => {
+            append_bootstrap_log(data.as_deref(), &format!("读取桌面程序路径失败: {error}"));
+            return None;
+        }
+    };
+    let path = match resolve_engine_sidecar(&exe) {
+        Ok(value) => value,
+        Err(error) => {
+            append_bootstrap_log(data.as_deref(), &error);
+            return None;
+        }
+    };
+    append_bootstrap_log(
+        data.as_deref(),
+        &format!("找到本地引擎: {}", path.display()),
+    );
     let mut cmd = Command::new(&path);
     cmd.env("PORT", ENGINE_PORT.to_string());
-    if let Some(data) = data_dir() {
+    if let Some(data) = data.as_ref() {
         cmd.env("BID_HOME", &data);
         if let Ok(log) = fs::File::create(data.join("engine.log")) {
             if let Ok(log2) = log.try_clone() {
@@ -120,7 +153,19 @@ fn spawn_engine() -> Option<Child> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW:不闪黑窗
     }
-    cmd.spawn().ok()
+    match cmd.spawn() {
+        Ok(child) => {
+            append_bootstrap_log(
+                data.as_deref(),
+                &format!("本地引擎已启动，端口 {ENGINE_PORT}"),
+            );
+            Some(child)
+        }
+        Err(error) => {
+            append_bootstrap_log(data.as_deref(), &format!("本地引擎启动失败: {error}"));
+            None
+        }
+    }
 }
 
 /// 关窗时先礼后兵:请引擎自己收尾。
@@ -388,4 +433,77 @@ fn main() {
             RunEvent::Reopen { .. } => show_main_window(app),
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod engine_sidecar_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("bid-dog-{label}-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_engine_sidecar_returns_the_checked_path() {
+        let dir = temp_dir("missing-engine");
+        let app = dir.join(if cfg!(windows) {
+            "bid-assistant.exe"
+        } else {
+            "bid-assistant"
+        });
+
+        let error = resolve_engine_sidecar(&app).unwrap_err();
+
+        assert!(error.contains("bid-engine"));
+        assert!(error.contains(dir.to_string_lossy().as_ref()));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn engine_sidecar_resolves_next_to_the_desktop_executable() {
+        let dir = temp_dir("found-engine");
+        let app = dir.join(if cfg!(windows) {
+            "bid-assistant.exe"
+        } else {
+            "bid-assistant"
+        });
+        let expected = dir.join(if cfg!(windows) {
+            "bid-engine.exe"
+        } else {
+            "bid-engine"
+        });
+        fs::write(&expected, b"fixture").unwrap();
+
+        assert_eq!(resolve_engine_sidecar(&app).unwrap(), expected);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn engine_sidecar_resolves_in_unicode_and_space_install_path() {
+        let root = temp_dir("unicode-engine");
+        let dir = root.join("客户资料 空格").join("中标狗 安装目录");
+        fs::create_dir_all(&dir).unwrap();
+        let app = dir.join(if cfg!(windows) {
+            "中标狗.exe"
+        } else {
+            "中标狗"
+        });
+        let expected = dir.join(if cfg!(windows) {
+            "bid-engine.exe"
+        } else {
+            "bid-engine"
+        });
+        fs::write(&expected, b"fixture").unwrap();
+
+        assert_eq!(resolve_engine_sidecar(&app).unwrap(), expected);
+        let _ = fs::remove_dir_all(root);
+    }
 }

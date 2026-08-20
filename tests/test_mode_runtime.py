@@ -131,6 +131,7 @@ def test_interrupted_server_run_is_never_replayed_from_scratch(engine, job, monk
     cli_calls = []
     settle_calls = []
     monkeypatch.setattr(engine, "oc_run", lambda *_args: "interrupted")
+    monkeypatch.setattr(engine, "ensure_default_shell", lambda *_args, **_kwargs: (True, "ready"))
     monkeypatch.setattr(engine, "real_agent", lambda *_args: cli_calls.append(1))
     monkeypatch.setattr(engine, "settle", lambda *_args, **kwargs: settle_calls.append(kwargs) or {"state": "stopped"})
 

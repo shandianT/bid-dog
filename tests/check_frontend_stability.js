@@ -60,6 +60,9 @@ if (start >= 0 && end > start) {
     friendlyRuntimeNotice: typeof friendlyRuntimeNotice === 'function' ? friendlyRuntimeNotice : null,
     deliveryViewModel: typeof deliveryViewModel === 'function' ? deliveryViewModel : null,
     diagnosticCheckView: typeof diagnosticCheckView === 'function' ? diagnosticCheckView : null,
+    flowConsoleView: typeof flowConsoleView === 'function' ? flowConsoleView : null,
+    nextStreamState: typeof nextStreamState === 'function' ? nextStreamState : null,
+    streamReconnectDelay: typeof streamReconnectDelay === 'function' ? streamReconnectDelay : null,
   };`, sandbox);
   pure = sandbox.__pure;
 }
@@ -266,6 +269,32 @@ test('自定义模板可保存和删除，内置模板不可删', () => {
   assert.match(templateFns, /government|construction|service|auto/);
 });
 
+test('可以上传优秀标书生成并预览场景模板草稿', () => {
+  expectHtml(/id="njTemplateImport"/);
+  expectHtml(/function deriveTemplateFromFile\(/);
+  expectHtml(/\/v1\/templates\/derive/);
+  expectHtml(/模板草稿|模板预览/);
+  expectHtml(/评分响应|材料槽位|质检规则/);
+  expectHtml(/查看完整设计思路/);
+  expectHtml(/id=\"njDerivedOutline\"/);
+  expectHtml(/validation\|\|\{\}\)\.ready/);
+});
+
+test('自动推荐只做非阻塞预览，建任务由后端权威选择并防止旧请求回写', () => {
+  const recommend = section('async function recommendTemplateForTender()', 'async function deriveTemplateFromFile');
+  assert.match(recommend, /scene_hint/);
+  assert.match(recommend, /recommendSeq/);
+  const start = section('async function njStart(startNow)', 'async function startStaged');
+  assert.match(start, /recommendTemplateForTender\(\)/);
+  assert.doesNotMatch(start, /await recommendTemplateForTender\(\)/);
+  assert.match(start, /if\(NJ\.starting\)return/);
+  assert.ok(start.indexOf('NJ.starting=true') < start.indexOf('recommendTemplateForTender()'), '重复提交锁必须先于异步推荐');
+  const save = section('async function saveCurrentTemplate()', 'async function deleteSelectedTemplate');
+  assert.match(save, /NJ\.recommendation/);
+  assert.match(save, /template_id\|\|'government'/);
+  assert.ok(!/base_template_id:base,config:/.test(save), '不应再发送后端不识别的 config 字段');
+});
+
 test('批量操作呈现成功/失败汇总，部分失败进入持久问题卡', () => {
   const bulk = section('async function runBulkTaskAction(action)', 'function runTaskRowAction');
   assert.match(bulk, /succeeded|success_count/);
@@ -354,6 +383,50 @@ test('SSE 续传 URL 使用编码任务号和 offset', () => {
   assert.ok(!/S\.msgs\[id\]\s*=\s*\[\]/.test(attach), '断线重连仍会清空消息');
 });
 
+test('六段流程台只展示后端证据并兼容旧任务', () => {
+  assert.strictEqual(typeof pure.flowConsoleView, 'function', '缺少流程台纯函数');
+  const view = pure.flowConsoleView({
+    current_phase:'parse', current_action:'正在提取目录', recoverable:true,
+    checkpoint:{step:1,label:'体检素材'},
+    phases:[
+      {id:'environment',label:'环境准备',state:'done',detail:'已验证完成',evidence:'preflight.json'},
+      {id:'parse',label:'招标解析',state:'active',detail:'正在提取目录',evidence:'组成与格式规范'},
+      {id:'plan',label:'响应规划',state:'pending'}, {id:'write',label:'并行撰写',state:'pending'},
+      {id:'assemble',label:'Word 装配',state:'pending'}, {id:'deliver',label:'交付质检',state:'pending'},
+    ],
+  }, {mode:'polling',failures:3});
+  assert.deepStrictEqual(Array.from(view.phases, x=>x.label), ['环境准备','招标解析','响应规划','并行撰写','Word 装配','交付质检']);
+  assert.strictEqual(view.connectionLabel, '轮询保障中');
+  assert.strictEqual(view.checkpoint, '已完成：体检素材');
+  assert.strictEqual(view.recoverable, true);
+  assert.strictEqual(view.phases[1].state, 'active');
+  const legacy = pure.flowConsoleView(null, {mode:'idle'}, {step:7,stage:'分章撰写'});
+  assert.strictEqual(legacy.phases.length, 6);
+  assert.strictEqual(legacy.phases[3].state, 'active');
+});
+
+test('事件流第三次断开进入轮询保障，恢复后回到实时连接', () => {
+  assert.strictEqual(typeof pure.nextStreamState, 'function', '缺少连接状态机');
+  let state = {mode:'connected',failures:0};
+  state = pure.nextStreamState(state, 'error');
+  assert.deepStrictEqual({mode:state.mode,failures:state.failures},{mode:'reconnecting',failures:1});
+  state = pure.nextStreamState(state, 'error');
+  assert.strictEqual(state.mode, 'reconnecting');
+  state = pure.nextStreamState(state, 'error');
+  assert.deepStrictEqual({mode:state.mode,failures:state.failures},{mode:'polling',failures:3});
+  assert.deepStrictEqual([1,2,3,8].map(pure.streamReconnectDelay),[3000,4000,6000,10000]);
+  state = pure.nextStreamState(state, 'open');
+  assert.deepStrictEqual({mode:state.mode,failures:state.failures},{mode:'recovered',failures:0});
+  const attach = section('function attachES(id, reconnecting)', 'function eventIsRecent');
+  assert.ok(/recordStreamFailure\(id\)/.test(attach), 'SSE 错误没有进入统一状态机');
+  expectHtml(/function startJobPolling\(/);
+  expectHtml(/function clearStreamRecovery\(/);
+  const polling = section('function startJobPolling(id)', 'function clearStreamRecovery');
+  assert.ok(/S\.active\s*!==\s*id/.test(polling), '已切走的任务仍可能遗留轮询定时器');
+  rejectHtml(/startJobPolling[\s\S]{0,500}\/v1\/jobs\/[^'"`]+\/(?:rerun|resume|start)/,
+    '轮询保障不应启动、重跑或继续任务');
+});
+
 test('所有错误动作末尾都有且只有一个诊断包入口', () => {
   assert.ok(pure);
   const actions = pure.withDiagnosticAction([{act: 'rerun', label: '重跑'}, {act: 'bundle', label: '旧入口'}]);
@@ -370,7 +443,7 @@ test('所有错误动作末尾都有且只有一个诊断包入口', () => {
 test('升级信息仅在确有新版本时出现', () => {
   assert.ok(pure);
   assert.strictEqual(pure.healthUpdateInfo({update: {status: 'pending'}}), null);
-  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.0'}}), null);
+  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.1'}}), null);
   const info = pure.healthUpdateInfo({update: {status: 'available', latest: '0.18.3', url: 'https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.18.3'}});
   assert.strictEqual(info.version, '0.18.3');
   assert.match(info.url, /^https:\/\/github\.com\/shandianT\/bid-dog\/releases\//);
@@ -408,12 +481,12 @@ test('现有 OpenCode 与 Codex 回退入口没有被 v56 覆盖', () => {
 
 test('桌面版只连接当前版本专属引擎，不复用旧版驻留进程', () => {
   const connection = section('const IS_WEB', 'let S =');
-  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.19\.0'/.test(connection), '桌面端没有钉住当前引擎版本');
-  assert.ok(/DESKTOP_ENGINE\s*=\s*'http:\/\/127\.0\.0\.1:18900'/.test(connection), '桌面端没有使用版本专属端口');
+  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.19\.1'/.test(connection), '桌面端没有钉住当前引擎版本');
+  assert.ok(/DESKTOP_ENGINE\s*=\s*'http:\/\/127\.0\.0\.1:18901'/.test(connection), '桌面端没有使用版本专属端口');
   assert.ok(/IS_WEB\s*\?\s*\[location\.origin\]\s*:\s*\[DESKTOP_ENGINE\]/.test(connection), '桌面端仍会探测历史端口');
   assert.ok(!/8849|8848|8080/.test(connection), '连接候选仍含历史引擎端口');
   assert.ok(/h\.version\s*===\s*BUNDLED_ENGINE_VERSION/.test(html), '健康检查没有拒绝错误版本');
-  assert.ok(/const ENGINE_PORT:\s*u16\s*=\s*18900;/.test(rustMain), 'Tauri 启动端口与前端不一致');
+  assert.ok(/const ENGINE_PORT:\s*u16\s*=\s*18901;/.test(rustMain), 'Tauri 启动端口与前端不一致');
 });
 
 test('覆盖安装时 WebView 不复用旧前端缓存或历史引擎地址', () => {
@@ -421,8 +494,8 @@ test('覆盖安装时 WebView 不复用旧前端缓存或历史引擎地址', ()
   const launchUrl = String(mainWindow.url || '');
   const failures = [];
   if(mainWindow.incognito !== true) failures.push('主窗口必须启用 incognito=true 隔离旧 WebView 缓存');
-  if(!/0\.19\.0/.test(launchUrl) || !/18900/.test(launchUrl))
-    failures.push('主窗口 URL 必须同时包含版本 0.19.0 与专属端口 18900 作为缓存版本戳');
+  if(!/0\.19\.1/.test(launchUrl) || !/18901/.test(launchUrl))
+    failures.push('主窗口 URL 必须同时包含版本 0.19.1 与专属端口 18901 作为缓存版本戳');
   if(!/localStorage\.removeItem\(\s*['"]bid_api['"]\s*\)/.test(html))
     failures.push('新前端启动时必须清除历史 localStorage.bid_api');
   if(/localStorage\.getItem\(\s*['"]bid_api['"]\s*\)/.test(html))

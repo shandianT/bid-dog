@@ -358,6 +358,12 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 .wl{margin:10px 0 4px;border:1px solid var(--line-d);border-radius:11px;background:var(--soft);overflow:hidden}
 .wl summary{cursor:pointer;font:500 12px/2.2 inherit;color:var(--sub);padding:0 12px;user-select:none}
 .wl pre{margin:0;padding:8px 12px 10px;max-height:190px;overflow:auto;font:400 11px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--sub);white-space:pre-wrap;word-break:break-all;border-top:1px solid var(--line-d)}
+.flow-console{border:1px solid var(--line);border-radius:14px;background:linear-gradient(135deg,#fbfcfd,#fff);padding:13px 14px;box-shadow:var(--sh-xs)}
+.flow-top{display:flex;align-items:flex-start;gap:12px;margin-bottom:11px}.flow-copy{min-width:0;flex:1}.flow-kicker{font:600 9px/1 inherit;letter-spacing:.13em;color:var(--blue);margin-bottom:5px}.flow-title{font:600 14px/1.35 inherit;color:var(--ink)}
+.flow-sub{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;font:400 10.5px/1.4 inherit;color:var(--dim)}.flow-connection{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font:500 10.5px/1 inherit;padding:6px 9px;border-radius:999px;background:var(--green-bg);color:var(--green)}.flow-connection.polling,.flow-connection.reconnecting{background:var(--amber-bg);color:var(--amber)}.flow-connection.idle{background:var(--hover);color:var(--dim)}
+.flow-track{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}.flow-phase{position:relative;min-width:0;border:1px solid var(--line);border-radius:9px;padding:8px;background:#fff}.flow-phase:after{content:'›';position:absolute;right:-6px;top:17px;color:var(--faint);z-index:2}.flow-phase:last-child:after{display:none}.flow-phase.done{border-color:#cce7d8;background:#fbfefc}.flow-phase.active{border-color:#91bce9;background:var(--blue-t)}.flow-phase.attention{border-color:#efd19d;background:var(--amber-bg)}.flow-phase.failed{border-color:#efb8b2;background:var(--red-bg)}
+.flow-phase-head{display:flex;align-items:center;gap:5px}.flow-phase-dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}.flow-phase.done .flow-phase-dot{background:var(--green)}.flow-phase.active .flow-phase-dot{background:var(--blue)}.flow-phase.attention .flow-phase-dot{background:var(--amber)}.flow-phase.failed .flow-phase-dot{background:var(--red)}.flow-phase b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 10.5px/1.3 inherit}.flow-phase span{display:block;margin-top:4px;color:var(--dim);font:400 9.5px/1.35 inherit;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.flow-checks{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;padding-top:8px;border-top:1px solid var(--line)}.flow-check{display:inline-flex;align-items:center;gap:5px;font:400 10px/1.2 inherit;color:var(--dim)}.flow-check i{width:6px;height:6px;border-radius:50%;background:var(--faint)}.flow-check.done i{background:var(--green)}.flow-check.active i{background:var(--blue)}.flow-check.attention i{background:var(--amber)}.flow-check.failed i{background:var(--red)}
 .segbar{display:inline-flex;border:1px solid var(--line-d);border-radius:999px;overflow:hidden;background:var(--bg,#fff)}
 .segbar .seg{padding:6px 13px;font:500 12px/1.4 inherit;color:var(--sub);cursor:pointer;user-select:none;white-space:nowrap}
 .segbar .seg.on{background:var(--blue);color:#fff}
@@ -367,6 +373,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   aside{width:100%;min-height:220px;max-height:48dvh;border-right:0;border-bottom:1px solid var(--line);padding:12px}
   main{width:100%;height:72dvh;min-height:560px}
   .rail{width:100%;min-height:70dvh;padding:12px;overflow:visible}
+  .flow-track{grid-template-columns:repeat(3,minmax(0,1fr))}.flow-phase:nth-child(3):after{display:none}
   .head{padding:12px 12px 0}
   .head .hwrap{flex-wrap:wrap;gap:8px}
   .head .ht{flex:1 0 100%}
@@ -472,7 +479,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       <span class="pill on" id="startBtn" style="display:none" onclick="startStaged()">▶ 开始生成</span>
       <span class="pill" id="hAct" onclick="openCheck()">出件前检查</span>
     </div></div>
-    <div id="chat"><div class="cwrap" id="chatWrap"></div><div class="cwrap" id="wlHost"></div></div>
+    <div id="chat"><div class="cwrap" id="flowHost"></div><div class="cwrap" id="chatWrap"></div><div class="cwrap" id="wlHost"></div></div>
 
     <div class="compose" id="composer">
       <div class="cbox">
@@ -568,7 +575,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
   </div>
   <div class="wizard-pane on" data-nj-pane="1">
     <div class="wizard-file"><b>确认招标文件主件</b><p>多选文件时，请指定系统首先读取的招标文件。</p></div>
-    <select class="f" id="njTender" onchange="NJ.tenderIdx=+this.value"></select>
+    <select class="f" id="njTender" onchange="NJ.tenderIdx=+this.value;NJ.recommendation=null;NJ.recommendSeq++;renderTemplateTools()"></select>
     <button class="btn gy" type="button" onclick="el('filein').click()">+ 继续添加文件</button>
   </div>
   <div class="wizard-pane" data-nj-pane="2">
@@ -579,11 +586,18 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
       <option value="construction">工程施工</option>
       <option value="service">服务类投标</option>
     </select>
+    <div id="njTemplatePreview" style="border:1px solid var(--line);border-radius:10px;padding:10px 11px;font:400 12px/1.6 inherit;color:var(--sub)">上传主件后，系统会按采购对象、评标办法和交付类型推荐场景模板。</div>
     <div class="template-tools">
       <input class="f" id="njTemplateName" placeholder="自定义模板名称">
       <button class="btn gy" type="button" onclick="saveCurrentTemplate()">保存当前要求</button>
       <button class="btn gy" id="njTemplateDelete" type="button" style="display:none;color:var(--red)" onclick="deleteSelectedTemplate()">删除模板</button>
     </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="btn gy" type="button" onclick="el('njTemplateImport').click()">上传优秀标书生成模板</button>
+      <input id="njTemplateImport" type="file" accept=".docx,.pdf,.md,.txt" style="display:none" onchange="deriveTemplateFromFile(this.files[0])">
+      <span class="desc">只提取目录、表格和规则，不复制项目正文</span>
+    </div>
+    <div id="njTemplateDraft" style="display:none;border:1px solid var(--line);border-radius:10px;padding:10px 11px"></div>
     <label class="lbl" for="njProject" style="padding-left:0">归入项目（可选）</label>
     <input class="f" id="njProject" list="njProjects" placeholder="例如：滨江新区智慧管网">
     <datalist id="njProjects"></datalist>
@@ -631,7 +645,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
     background:var(--panel);border-radius:12px;padding:14px;max-height:56vh;overflow-y:auto;color:var(--sub)"></div>
 </div>
 
-<div class="sheet" id="diagnosticSheet" style="width:620px;gap:13px;z-index:53">
+<div class="sheet" id="diagnosticSheet" style="width:620px;gap:13px;z-index:70">
   <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2 style="font-size:16px">连接诊断</h2><div class="desc" style="margin-top:6px">检查本地服务、生成连接和当前任务，不会修改任务内容。</div></div>
     <span class="x" onclick="closeAll()"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>
   <div class="diag-status" id="diagnosticStatus">点击“开始诊断”获取当前状态。</div>
@@ -818,10 +832,10 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
-const BUNDLED_ENGINE_VERSION = '0.19.0';
+const BUNDLED_ENGINE_VERSION = '0.19.1';
 /* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后，旧 PyInstaller 进程可能仍驻留；
    若继续探测历史端口，就会把旧引擎误认成新版，甚至在可执行文件被替换后返回 500。 */
-const DESKTOP_ENGINE = 'http://127.0.0.1:18900';
+const DESKTOP_ENGINE = 'http://127.0.0.1:18901';
 const API_CANDIDATES = IS_WEB ? [location.origin] : [DESKTOP_ENGINE];
 /* 旧版曾把探测成功的端口写进 bid_api；新版不再读取，并在桌面启动时主动废弃它。 */
 if(!IS_WEB){ try{ localStorage.removeItem('bid_api'); }catch(_){} }
@@ -834,7 +848,8 @@ let S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}, atts:{}
           taskGrpOpen:{preparing:true, generating:true, needs_input:true, completed:false, failed:false},
           taskBulkMode:false, taskBulkDeleting:false, taskBulkBusy:false, taskBulkMore:false, taskSelected:new Set(), taskMore:null,
           taskScope:'active', archivedJobs:[], projectFilter:'', processView:{}, problems:{}, diagnostic:null, projectTargetIds:[], templates:[], setup:null, onboardingStep:1,
-          artsLoaded:{}, eventTimes:{}, esOffsets:{}, wordNotified:{}, updateInfo:null, engineVersion:'' };
+          artsLoaded:{}, eventTimes:{}, esOffsets:{}, wordNotified:{}, streamState:{}, reconnectTimers:{}, pollTimers:{}, recoveredTimers:{},
+          updateInfo:null, engineVersion:'' };
 document.getElementById('sbL').textContent = isWin ? '任务栏显示进度 · 完成后系统通知' : 'Dock 显示进度 · 完成后系统通知 · 托盘常驻';
 
 /* FRONTEND_STABILITY_PURE_START */
@@ -872,6 +887,44 @@ function activeClock(timestamps, nowMs, terminal, gapMs){
 function eventStreamUrl(apiBase, id, offset){
   return String(apiBase||'').replace(/\/$/,'') + '/v1/jobs/' + encodeURIComponent(id)
     + '/events?offset=' + Math.max(0, Number(offset)||0);
+}
+const FLOW_CONSOLE_PHASES = [
+  ['environment','环境准备',0,0],['parse','招标解析',1,4],['plan','响应规划',5,6],
+  ['write','并行撰写',7,8],['assemble','Word 装配',9,10],['deliver','交付质检',11,12]
+];
+function nextStreamState(current, event){
+  const old=current||{}, kind=String(event||'');
+  if(kind==='open') return {mode:(Number(old.failures)>0||old.mode==='polling'||old.mode==='reconnecting')?'recovered':'connected',failures:0};
+  if(kind==='error'){
+    const failures=Math.max(0,Number(old.failures)||0)+1;
+    return {mode:failures>=3?'polling':'reconnecting',failures};
+  }
+  if(kind==='settled') return {mode:'connected',failures:0};
+  return {mode:String(old.mode||'idle'),failures:Math.max(0,Number(old.failures)||0)};
+}
+function streamReconnectDelay(failures){
+  return [3000,4000,6000,10000][Math.min(3,Math.max(0,(Number(failures)||1)-1))];
+}
+function flowConsoleView(flow, stream, progress){
+  const raw=flow&&typeof flow==='object'?flow:{}, p=progress||{};
+  const cp=raw.checkpoint||{}, step=Math.max(0,Math.min(12,Number(cp.step!=null?cp.step:p.step)||0));
+  const supplied=Array.isArray(raw.phases)?raw.phases:[];
+  let current=String(raw.current_phase||'');
+  if(!current) current=(FLOW_CONSOLE_PHASES.find(x=>step>=x[2]&&step<=x[3])||FLOW_CONSOLE_PHASES[0])[0];
+  const currentIndex=Math.max(0,FLOW_CONSOLE_PHASES.findIndex(x=>x[0]===current));
+  const phases=FLOW_CONSOLE_PHASES.map((definition,index)=>{
+    const found=supplied.find(x=>x&&x.id===definition[0]);
+    if(found) return {id:definition[0],label:String(found.label||definition[1]),state:String(found.state||'pending'),
+      detail:String(found.detail||''),evidence:String(found.evidence||''),checks:Array.isArray(found.checks)?found.checks:[]};
+    return {id:definition[0],label:definition[1],state:index<currentIndex?'done':index===currentIndex?'active':'pending',
+      detail:index===currentIndex?String(p.stage||'正在处理'):index<currentIndex?'已验证完成':'等待执行',evidence:'',checks:[]};
+  });
+  const mode=String((stream||{}).mode||'idle');
+  const labels={connected:'实时连接',reconnecting:'正在自动重连',polling:'轮询保障中',recovered:'连接已恢复',idle:'等待连接'};
+  const active=phases.find(x=>x.id===current)||phases[0];
+  return {phases,currentPhase:current,currentAction:String(raw.current_action||p.stage||active.detail||'正在准备任务'),
+    checkpoint:cp.label?'已完成：'+String(cp.label):'尚未形成检查点',connectionMode:mode,
+    connectionLabel:labels[mode]||labels.idle,recoverable:raw.recoverable!==false};
 }
 function withDiagnosticAction(actions){
   const out = (actions||[]).filter(a=>a && a.act !== 'bundle').map(a=>Object.assign({},a));
@@ -1160,12 +1213,14 @@ function renderProblem(){
 }
 function clearProblem(){const key=S.active||'_global';delete S.problems[key];renderProblem();}
 function showDiagnosticDetail(detail){
+  const problem=el('problemHost');
+  if(problem&&problem.style.display!=='none'){problem.dataset.hiddenForDiagnostic='1';problem.style.display='none';}
   el('ovl').style.display='block';el('diagnosticSheet').style.display='flex';
   el('diagnosticDetailWrap').style.display=detail?'block':'none';el('diagnosticDetail').textContent=detail||'';
 }
 async function runDiagnostics(){
   showDiagnosticDetail((el('problemHost')&&el('problemHost')._detail)||'');
-  const out=el('diagnosticStatus'),btn=el('diagnosticRun');out.textContent='正在检查连接与当前任务…';btn.disabled=true;
+  const out=el('diagnosticStatus'),btn=el('diagnosticRun');out.textContent='正在检查连接与当前任务…';btn.disabled=true;btn.textContent='诊断中…';
   try{
     const r=await api('/v1/diagnostics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:S.active||null})});
     const checks=Array.isArray(r.checks)?r.checks:(Array.isArray(r.items)?r.items:[]);
@@ -1176,7 +1231,7 @@ async function runDiagnostics(){
   }catch(e){
     try{const h=await api('/v1/health');out.textContent='✓ 本地服务已连接\n△ 完整诊断暂不可用，请更新应用后重试';el('diagnosticDetail').textContent=JSON.stringify(h,null,2);el('diagnosticDetailWrap').style.display='block';}
     catch(_){out.textContent='✗ 本地服务没有响应\n请退出应用后重新打开；任务文件不会丢失。';}
-  }finally{btn.disabled=false;}
+  }finally{btn.disabled=false;btn.textContent='开始诊断';}
 }
 function problemAction(act,param){
   const p=S.problems[S.active||'_global']||S.problems._global||{};
@@ -1264,6 +1319,29 @@ async function goOnline(h){
   try{ const st = await api('/v1/stats/stages'); S.stageAvgs = st.stages || null; }catch(e){}
   renderTasks(); renderMain(); showOnboarding(false);
 }
+function showEngineOffline(){
+  S.online = false;
+  el('conn').textContent = S.stale ? '本地服务需要更新' : '本地引擎未启动';
+  el('demoTag').style.display = 'block';
+  el('demoTag').textContent = S.stale
+    ? '检测到旧版引擎 · 请退出旧版后重开最新版'
+    : '本地引擎未启动 · 当前无法生成真实文件';
+  el('brandDot').style.background = 'var(--amber)';
+  el('sbR').textContent = isWin ? 'C:\\Users\\me\\Documents\\中标狗\\jobs' : '~/Documents/中标狗/jobs';
+  el('heroSub').textContent = S.stale
+    ? '当前引擎版本与应用不匹配，退出所有旧版中标狗后重新打开最新版'
+    : '生成环境没有启动；应用会继续重连，也可以立即运行诊断查看缺失组件和启动路径';
+  renderTasks(); renderMain();
+  presentProblem({
+    level:'error',
+    title:S.stale ? '本地生成引擎需要更新' : '本地生成引擎没有启动',
+    text:S.stale
+      ? '旧版引擎仍占用端口，最新版无法接管生成任务。'
+      : '安装包内置引擎没有成功启动，可能是安装不完整、被安全软件隔离，或启动路径不可用。',
+    detail:'桌面端会把启动路径和系统错误写入 engine-bootstrap.log；点击一键诊断可查看当前环境与修复建议。',
+    actions:[{act:'diagnose',label:'一键诊断'}]
+  });
+}
 async function boot(){
   if(FORCE_DEMO){
     S.online = false;
@@ -1282,12 +1360,7 @@ async function boot(){
     el('conn').textContent = '正在启动本地服务…';
     await new Promise(r=>setTimeout(r,2000));
   }
-  S.online = false; el('conn').textContent = S.stale ? '本地服务需要更新' : '未连接本地服务（演示模式）'; el('demoTag').style.display='block';
-  el('brandDot').style.background = 'var(--amber)';
-  if(S.stale) el('demoTag').textContent = '旧版引擎缺少新版能力，已拒绝连接；请启动最新版中标狗';
-  el('sbR').textContent = isWin ? 'C:\\Users\\me\\Documents\\中标狗\\jobs' : '~/Documents/中标狗/jobs';
-  el('heroSub').textContent = '当前是演示模式（未连接本地服务），流程可完整体验，产出为样例';
-  renderTasks(); renderMain();
+  showEngineOffline();
   const re = setInterval(async()=>{ if(await findEngine()){ clearInterval(re); location.reload(); } }, 5000);
 }
 function setOnboardingStep(step){
@@ -1361,8 +1434,20 @@ function renderMain(){
   el('rail').style.display = (has && !showResult) ? 'flex' : 'none';   /* 结果页和空状态都收起右栏 */
   el('app').style.gridTemplateColumns = (has && !showResult) ? '232px minmax(0,1fr) 302px' : '232px minmax(0,1fr)';
   if(showResult) renderResult(job);
+  if(has && !showResult) renderFlowConsole();
   const tab = el('resultTabBtn'); if(tab) tab.style.display = (deliverable && !showResult) ? 'inline-block' : 'none';
   renderProblem();
+}
+function renderFlowConsole(){
+  const host=el('flowHost');if(!host)return;
+  const id=S.active,job=(S.jobs||[]).find(x=>x.job_id===id);
+  if(!id||!job){host.innerHTML='';return;}
+  const vm=flowConsoleView(job.flow,S.streamState[id],S.prog[id]);
+  const p=taskPresentation(job),active=vm.phases.find(x=>x.id===vm.currentPhase)||vm.phases[0];
+  const checks=(active&&active.checks&&active.checks.length?active.checks:[]);
+  host.innerHTML='<section class="flow-console"><div class="flow-top"><div class="flow-copy"><div class="flow-kicker">LIVE ORCHESTRATION</div><div class="flow-title">生成流程台 · '+esc(vm.currentAction)+'</div><div class="flow-sub"><span>'+esc(vm.checkpoint)+'</span><span>最近活动 '+esc(p.lastActivity)+'</span>'+(vm.recoverable?'<span>可从检查点恢复</span>':'')+'</div></div><span class="flow-connection '+escA(vm.connectionMode)+'"><i class="dot" style="background:currentColor"></i>'+esc(vm.connectionLabel)+'</span></div>'
+    +'<div class="flow-track">'+vm.phases.map(x=>'<div class="flow-phase '+escA(x.state)+'"><div class="flow-phase-head"><i class="flow-phase-dot"></i><b>'+esc(x.label)+'</b></div><span title="'+escA(x.evidence||x.detail)+'">'+esc(x.detail||x.evidence||'等待执行')+'</span></div>').join('')+'</div>'
+    +(checks.length?'<div class="flow-checks">'+checks.map(x=>'<span class="flow-check '+escA(x.state)+'" title="'+escA(x.detail||'')+'"><i></i>'+esc(x.label||x.id)+'</span>').join('')+'</div>':'')+'</section>';
 }
 function showTaskProcess(){ if(!S.active) return; S.processView[S.active]=true; renderMain(); renderHead(); renderRail(); }
 function showTaskResult(){ if(!S.active) return; S.processView[S.active]=false; renderMain(); }
@@ -1571,7 +1656,7 @@ async function archiveJob(id){
   try{
     if(FORCE_DEMO || !S.online){ const j=S.jobs.find(x=>x.job_id===id); if(j) j.archived_at=new Date().toISOString(); }
     else await api('/v1/jobs/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({archived:true})});
-    if(S.active===id){ S.active=null; if(S.es){S.es.close();S.es=null;} }
+    if(S.active===id){ clearStreamRecovery(id,true);S.active=null; }
     if(S.online&&!FORCE_DEMO) S.jobs=await api('/v1/jobs');
     S.taskMore=null; renderTasks(); renderMain(); toast('已归档，可在项目数据中恢复');
   }catch(e){
@@ -1587,7 +1672,7 @@ async function restoreJob(id){
       await api('/v1/jobs/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({archived:false})});
       const r=await api('/v1/jobs?scope=archived');S.archivedJobs=archivedOnly(r);S.jobs=await api('/v1/jobs');
     }
-    if(S.active===id){S.active=null;if(S.es){S.es.close();S.es=null;}}
+    if(S.active===id){clearStreamRecovery(id,true);S.active=null;}
     S.taskMore=null;renderTasks();renderMain();toast('已恢复到当前任务');
   }catch(e){
     toast('恢复失败：'+(e&&e.message||'请重试'));
@@ -1683,7 +1768,7 @@ async function delJob(id){
   if(!await askConfirm('删除任务「'+((j&&j.name)||id)+'」?', '该任务的招标文件与生成的产出会一并删除,不可恢复;正在生成的会先停止。', true)) return;
   try{
     await api('/v1/jobs/'+encodeURIComponent(id), {method:'DELETE'});
-    if(S.active===id){ S.active=null; if(S.es){ S.es.close(); S.es=null; } renderMain(); }
+    if(S.active===id){ clearStreamRecovery(id,true);S.active=null;renderMain(); }
     S.jobs = await api('/v1/jobs'); renderTasks(); if(S.active) renderRail();
     toast('已删除');
   }catch(e){ toast('删除失败,请重试'); }
@@ -1736,8 +1821,8 @@ async function deleteSelectedJobs(){
     }
 
     if(succeeded.includes(S.active)){
+      clearStreamRecovery(S.active,true);
       S.active = null;
-      if(S.es){ S.es.close(); S.es = null; }
       renderMain();
     }
     S.taskSelected.clear();
@@ -1753,7 +1838,55 @@ async function deleteSelectedJobs(){
 }
 
 /* ================= 选择任务 + SSE(断线自动重连) ================= */
+function stopJobPolling(id){
+  if(S.pollTimers[id]){clearInterval(S.pollTimers[id]);delete S.pollTimers[id];}
+}
+async function pollJobState(id){
+  if(!S.online||S.active!==id)return;
+  try{
+    S.jobs=await api('/v1/jobs');
+    if(S.active===id){renderTasks();renderHead();renderRail();renderMain();}
+  }catch(_){/* 本轮失败保持已有任务事实；下一轮继续 */}
+}
+function startJobPolling(id){
+  if(!S.online||S.active!==id||S.pollTimers[id])return;
+  pollJobState(id);S.pollTimers[id]=setInterval(()=>pollJobState(id),4000);
+}
+function clearStreamRecovery(id,closeSource){
+  if(S.reconnectTimers[id]){clearTimeout(S.reconnectTimers[id]);delete S.reconnectTimers[id];}
+  if(S.recoveredTimers[id]){clearTimeout(S.recoveredTimers[id]);delete S.recoveredTimers[id];}
+  stopJobPolling(id);
+  if(closeSource&&S.es){S.es.close();S.es=null;}
+}
+function markStreamOpen(id){
+  const old=S.streamState[id]||{mode:'idle',failures:0};
+  S.streamState[id]=nextStreamState(old,'open');
+  if(S.reconnectTimers[id]){clearTimeout(S.reconnectTimers[id]);delete S.reconnectTimers[id];}
+  stopJobPolling(id);renderFlowConsole();
+  if(S.streamState[id].mode==='recovered'){
+    if(S.recoveredTimers[id])clearTimeout(S.recoveredTimers[id]);
+    S.recoveredTimers[id]=setTimeout(()=>{
+      if(S.active===id){S.streamState[id]=nextStreamState(S.streamState[id],'settled');renderFlowConsole();}
+      delete S.recoveredTimers[id];
+    },3000);
+  }
+}
+function recordStreamFailure(id){
+  S.streamState[id]=nextStreamState(S.streamState[id],'error');
+  const state=S.streamState[id];
+  if(state.mode==='polling')startJobPolling(id);
+  if(S.reconnectTimers[id])clearTimeout(S.reconnectTimers[id]);
+  if(S.active===id&&S.online){
+    S.reconnectTimers[id]=setTimeout(()=>{
+      delete S.reconnectTimers[id];
+      if(S.active===id&&S.online&&!S.es)attachES(id,true);
+    },streamReconnectDelay(state.failures));
+  }
+  renderFlowConsole();
+  return state;
+}
 function select(id){
+  const previous=S.active;if(previous&&previous!==id)clearStreamRecovery(previous,true);
   if(S.esOffsets[id] == null){
     S.esOffsets[id] = 0; S.msgs[id] = []; S.chips[id] = null;
     S.worklog[id] = []; S.eventTimes[id] = []; S.steps[id] = {}; S.names[id] = {};
@@ -1772,14 +1905,18 @@ document.addEventListener('visibilitychange', ()=>{
 });
 function attachES(id, reconnecting){
   if(S.es) S.es.close();
+  if(S.reconnectTimers[id]){clearTimeout(S.reconnectTimers[id]);delete S.reconnectTimers[id];}
   const offset = Math.max(0, Number(S.esOffsets[id])||0);
   const es = new EventSource(eventStreamUrl(API, id, offset)); S.es = es;
   es.onopen = () => {
-    if(S.es === es && S.active === id)
+    if(S.es === es && S.active === id){
+      markStreamOpen(id);
       el('conn').textContent = '本地服务已连接';
+    }
   };
   es.onmessage = ev => {
     if(S.es !== es) return;
+    const stream=S.streamState[id]||(S.streamState[id]={mode:'connected',failures:0});stream.lastEventAt=Date.now();
     S.esOffsets[id] = (Number(S.esOffsets[id])||0) + 1;   // 先记行号:坏 JSON 也不能在重连后无限重放
     try{ handle(id, JSON.parse(ev.data)); }catch(e){ console.warn('[events] 忽略坏事件', e); }
   };
@@ -1788,7 +1925,7 @@ function attachES(id, reconnecting){
     if(S.es === es){
       S.es = null; S.typing[id] = false;
       if(S.active===id) el('conn').textContent = '连接暂时中断 · 正在自动继续';
-      setTimeout(()=>{ if(S.active===id && S.online && !S.es) attachES(id, true); }, reconnecting ? 4000 : 3000);
+      recordStreamFailure(id);
     }
   };
 }
@@ -2386,7 +2523,7 @@ async function addRef(file){
   el('refin').value='';
 }
 /* ---------- 新建任务向导:先放文件(可多选/整文件夹)→ 选填要求 → 点「开始生成」才启动 ---------- */
-const NJ = { items: [], tenderIdx: -1, step:1 };            // items: [{file, rel}]
+const NJ = { items: [], tenderIdx: -1, step:1, templateDraft:null, recommendation:null, recommendSeq:0, starting:false }; // items: [{file, rel}]
 const DOCLIKE = f => !/\.(png|jpe?g|gif|bmp|tiff?|zip)$/i.test(f);
 /* 默认要求:大多数人不知道该写什么,空着写出来的就是四平八稳的通稿。
    预填一份「投标方案专家」提示词当起点——用户改两句比从零写一段容易得多。
@@ -2429,6 +2566,7 @@ function njShowStep(step){
 }
 function njNext(){
   if(NJ.step===1&&(NJ.tenderIdx<0||!NJ.items[NJ.tenderIdx])){el('njMsg').style.display='block';el('njMsg').textContent='请先选择招标文件主件';return;}
+  if(NJ.step===1)recommendTemplateForTender();
   el('njMsg').style.display='none';njShowStep(NJ.step+1);
 }
 function njPrev(){el('njMsg').style.display='none';njShowStep(NJ.step-1);}
@@ -2436,36 +2574,106 @@ async function loadJobTemplates(){
   if(!S.online)return;
   try{
     const r=await api('/v1/templates'),list=Array.isArray(r)?r:(r.templates||[]);S.templates=list;
-    const built=new Set(['auto','government','construction','service']);
-    const extra=list.filter(x=>x&&x.id&&!built.has(String(x.id))).map(x=>'<option value="'+escA(x.id)+'">'+esc(x.name||x.title||x.id)+'</option>').join('');
-    [...el('njTemplate').querySelectorAll('option[data-custom]')].forEach(n=>n.remove());
-    if(extra)el('njTemplate').insertAdjacentHTML('beforeend',extra.replace(/<option /g,'<option data-custom="1" '));
+    const current=String(el('njTemplate').value||'auto');
+    el('njTemplate').innerHTML='<option value="auto">自动推荐（推荐）</option>'+list.filter(x=>x&&x.id).map(x=>'<option value="'+escA(x.id)+'" data-builtin="'+(x.builtin?'1':'0')+'">'+esc(x.name||x.title||x.id)+'</option>').join('');
+    el('njTemplate').value=[...el('njTemplate').options].some(x=>x.value===current)?current:'auto';
     renderTemplateTools();
   }catch(_){}
 }
 function renderTemplateTools(){
-  const built=new Set(['auto','government','construction','service']),id=String(el('njTemplate').value||'auto');
-  el('njTemplateDelete').style.display=built.has(id)?'none':'';
+  const id=String(el('njTemplate').value||'auto'),item=S.templates.find(x=>String(x.id)===id);
+  el('njTemplateDelete').style.display=(!item||item.builtin)?'none':'';
+  if(id==='auto'){
+    const r=NJ.recommendation;
+    el('njTemplatePreview').innerHTML=r
+      ? '<b>自动推荐：'+esc(r.template_name||'')+'</b><br>依据：'+esc((r.reasons||[]).join('、'))+' · 置信度 '+Math.round(Number(r.confidence||0)*100)+'%'
+      : '上传主件后，系统会按采购对象、评标办法和交付类型推荐场景模板。';
+    return;
+  }
+  el('njTemplatePreview').innerHTML=templateSummaryHtml(item,'场景模板')+templateDetailHtml(item,false);
 }
+function templateSummaryHtml(item,label){
+  if(!item)return '模板信息暂不可用';
+  const p=item.package||{},outline=p.outline||[],scores=p.scoring_focus||[],slots=p.material_slots||[],rules=p.quality_rules||[],tables=p.tables||[];
+  if(!p.schema_version&&!outline.length&&!scores.length&&!slots.length&&!rules.length&&!tables.length){
+    return '<b>'+esc(label||'模板预览')+'：'+esc(item.name||'')+'</b><div style="margin-top:5px">旧版自定义模板，仅保留生成要求；建议基于当前场景模板重新保存。</div>';
+  }
+  const titles=outline.slice(0,5).map(x=>x.title).filter(Boolean).join('、');
+  return '<b>'+esc(label||'模板预览')+'：'+esc(item.name||'')+'</b>'
+    +'<div style="margin-top:4px">'+esc(item.description||'')+'</div>'
+    +'<div style="margin-top:5px">目录 '+outline.length+' 章'+(titles?'：'+esc(titles)+(outline.length>5?'…':''):'')+'</div>'
+    +'<div>评分响应 '+scores.length+' 组 · 表格 '+tables.length+' 类 · 材料槽位 '+slots.length+' 类 · 质检规则 '+rules.length+' 条</div>';
+}
+function templateDetailHtml(item,open){
+  const p=(item&&item.package)||{},outline=p.outline||[],scores=p.scoring_focus||[],tables=p.tables||[],slots=p.material_slots||[],rules=p.quality_rules||[],sources=p.sources||[];
+  if(!p.schema_version)return '';
+  const rows=(title,items,render)=>items.length?'<div style="margin-top:8px"><b>'+esc(title)+'</b>'+items.map(render).join('')+'</div>':'';
+  return '<details '+(open?'open ':'')+'style="margin-top:8px"><summary style="cursor:pointer;color:var(--blue)">查看完整设计思路</summary><div style="margin-top:6px">'
+    +rows('目录与写作目的',outline,x=>'<div>• '+esc(x.title||'')+(x.purpose?'：'+esc(x.purpose):'')+(x.evidence&&x.evidence.length?'（依据：'+esc(x.evidence.join('、'))+'）':'')+'</div>')
+    +rows('评分响应',scores,x=>'<div>• '+esc(x.name||'')+'：'+esc((x.checks||[]).join('、'))+'</div>')
+    +rows('必备表格',tables,x=>'<div>• '+esc(x.name||'')+'：'+esc((x.columns||[]).join('｜'))+'</div>')
+    +rows('材料槽位',slots,x=>'<div>• '+esc(x.name||'')+'：'+esc((x.evidence||[]).join('、'))+(x.required?'（必需）':'')+'</div>')
+    +rows('质检规则',rules,x=>'<div>• '+esc(String(x||''))+'</div>')
+    +rows('设计依据',sources,x=>'<div>• '+esc(x.title||'')+(x.issuer?' · '+esc(x.issuer):'')+'</div>')
+    +'</div></details>';
+}
+async function recommendTemplateForTender(){
+  if(!S.online||NJ.tenderIdx<0||!NJ.items[NJ.tenderIdx])return;
+  const seq=++NJ.recommendSeq,fd=new FormData();fd.append('file',NJ.items[NJ.tenderIdx].file);fd.append('scene_hint',el('njReq').value.trim());
+  try{
+    const r=await api('/v1/templates/recommend',{method:'POST',body:fd});if(seq!==NJ.recommendSeq)return;NJ.recommendation=r;
+    if(String(el('njTemplate').value||'auto')==='auto')renderTemplateTools();
+  }catch(_){if(seq!==NJ.recommendSeq)return;NJ.recommendation=null;if(String(el('njTemplate').value||'auto')==='auto')renderTemplateTools();}
+}
+async function deriveTemplateFromFile(file){
+  if(!file)return;
+  if(!S.online){toast('请先连接本地服务');return;}
+  const host=el('njTemplateDraft');host.style.display='block';host.textContent='正在分析目录、表格和场景规则…';
+  const fd=new FormData();fd.append('file',file);
+  try{
+    const draft=await api('/v1/templates/derive',{method:'POST',body:fd});NJ.templateDraft=draft;const ready=!!(draft.validation||{}).ready;
+    host.innerHTML=templateSummaryHtml(draft,'模板草稿')
+      +templateDetailHtml(draft,true)
+      +'<label class="lbl" for="njDerivedTemplateName" style="padding-left:0;margin-top:8px">模板名称</label><input class="f" id="njDerivedTemplateName" value="'+escA(draft.name||'')+'">'
+      +'<label class="lbl" for="njDerivedOutline" style="padding-left:0;margin-top:8px">目录（每行一章，可修改）</label><textarea class="f" id="njDerivedOutline" rows="6">'+esc(((draft.package||{}).outline||[]).map(x=>x.title||'').join('\n'))+'</textarea>'
+      +'<div style="margin-top:7px;color:'+(ready?'var(--amber)':'var(--red)')+'">质量评分 '+esc(String((draft.validation||{}).score||0))+'；'+(ready?'保存前请确认目录和材料要求，历史正文不会进入模板。':'提取到的结构不足，暂不能保存；请换用标题层级更完整的标书。')+'</div>'
+      +'<div style="display:flex;gap:7px;margin-top:9px"><button class="btn" type="button" '+(ready?'':'disabled ')+'onclick="saveDerivedTemplate()">确认并保存模板</button><button class="btn gy" type="button" onclick="discardDerivedTemplate()">放弃</button></div>';
+  }catch(e){NJ.templateDraft=null;host.textContent='模板生成失败：'+(e&&e.message||'请换用可提取文字的 Word/PDF');}
+  el('njTemplateImport').value='';
+}
+async function saveDerivedTemplate(){
+  const draft=NJ.templateDraft;if(!draft)return;
+  if(!(draft.validation||{}).ready){toast('这份草稿结构不足，暂不能保存');return;}
+  try{
+    const name=(el('njDerivedTemplateName')&&el('njDerivedTemplateName').value.trim())||draft.name;
+    const titles=(el('njDerivedOutline')&&el('njDerivedOutline').value||'').split(/\n/).map(x=>x.trim()).filter(Boolean).slice(0,30);
+    if(titles.length<5){toast('请至少保留 5 个目录章节');return;}
+    const old=((draft.package||{}).outline||[]),byTitle=new Map(old.map(x=>[x.title,x]));
+    draft.package.outline=titles.map(title=>byTitle.get(title)||{title,purpose:'按招标文件对应要求组织本章，明确响应、证据、缺口和人工确认项',required:true,evidence:[]});
+    const saved=await api('/v1/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,description:draft.description,prompt:draft.prompt,settings:draft.settings,package:draft.package})});
+    await loadJobTemplates();el('njTemplate').value=String(saved.id||'auto');renderTemplateTools();discardDerivedTemplate();toast('场景模板已保存');
+  }catch(e){toast('模板保存失败');}
+}
+function discardDerivedTemplate(){NJ.templateDraft=null;el('njTemplateDraft').style.display='none';el('njTemplateDraft').innerHTML='';}
 async function saveCurrentTemplate(){
   const name=el('njTemplateName').value.trim();if(!name){toast('请先填写模板名称');el('njTemplateName').focus();return;}
-  const base=el('njTemplate').value||'auto';
+  const chosen=el('njTemplate').value||'auto',base=chosen==='auto'?String((NJ.recommendation||{}).template_id||'government'):chosen;
   try{
-    const r=await api('/v1/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,prompt:el('njReq').value.trim(),base_template_id:base,config:{project_id:el('njProject').value.trim()}})});
+    const r=await api('/v1/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,prompt:el('njReq').value.trim(),base_template_id:base,settings:{project_id:el('njProject').value.trim()}})});
     await loadJobTemplates();const id=String((r&&r.id)||(r&&r.template_id)||'');if(id)el('njTemplate').value=id;el('njTemplateName').value='';renderTemplateTools();toast('自定义模板已保存');
   }catch(e){
     toast('模板保存失败');presentProblem({level:'error',title:'自定义模板保存失败',text:'当前任务填写内容仍然保留。',detail:e&&e.message||'',actions:[{act:'retry_template_save',label:'重试保存'}]});
   }
 }
 async function deleteSelectedTemplate(){
-  const built=new Set(['auto','government','construction','service']),id=String(el('njTemplate').value||'');
+  const built=new Set(['auto','government','construction','service','government-it','goods','consulting']),id=String(el('njTemplate').value||'');
   if(!id||built.has(id)){toast('内置模板不能删除');return;}
   const option=el('njTemplate').selectedOptions[0],name=option?option.textContent:id;
   if(!await askConfirm('删除自定义模板「'+name+'」？','已创建的任务不会受影响。',true))return;
   try{await api('/v1/templates/'+encodeURIComponent(id),{method:'DELETE'});el('njTemplate').value='auto';await loadJobTemplates();renderTemplateTools();toast('模板已删除');}
   catch(e){toast('模板删除失败');presentProblem({level:'error',title:'自定义模板删除失败',text:'模板仍然保留，可以稍后重试。',detail:e&&e.message||'',actions:[{act:'retry_template_delete',label:'重试删除',param:id}]});}
 }
-function njReset(){ NJ.items = []; NJ.tenderIdx = -1; NJ.step=1; njReqDefault(); el('njTemplate').value='auto';el('njProject').value=''; const m=el('njMsg'); m.style.display='none'; }
+function njReset(){ NJ.items = []; NJ.tenderIdx = -1; NJ.step=1;NJ.templateDraft=null;NJ.recommendation=null;NJ.recommendSeq++; njReqDefault(); el('njTemplate').value='auto';el('njProject').value='';discardDerivedTemplate(); const m=el('njMsg'); m.style.display='none'; }
 function njOpen(){
   el('ovl').style.display='block'; el('newjob').style.display='flex';
   if(!el('njReq').value.trim()) njReqDefault();   // 空着就补默认;用户改过的原样保留
@@ -2498,29 +2706,30 @@ function njRender(){
 }
 async function njStart(startNow){
   if(NJ.tenderIdx < 0 || !NJ.items[NJ.tenderIdx]){ el('njMsg').style.display='block'; el('njMsg').textContent='还没有招标文件——点「+ 文件」把它加进来'; return; }
-  if(IS_WEB && !FORCE_DEMO && window.Notification && Notification.permission==='default') Notification.requestPermission();
-  const tender = NJ.items[NJ.tenderIdx];
-  const tname = tender.rel.split('/').pop();
-  if(!S.online){ closeAll(); demoNew(tname); njReset(); return; }
+  if(NJ.starting)return;
+  NJ.starting=true;
   const go = el('njGo'), later = el('njLater');
   go.disabled = later.disabled = true; go.textContent = '创建中…';
-  const fd = new FormData();
-  fd.append('tender', tender.file, tname);
-  const rest = NJ.items.filter((_,i)=>i!==NJ.tenderIdx);
-  const rels = [];
-  for(const it of rest){ fd.append('files', it.file, it.rel.split('/').pop()); rels.push(it.rel); }
-  fd.append('relpaths', JSON.stringify(rels));
-  fd.append('name', tname.replace(/\.[^.]+$/,''));
-  fd.append('prompt', el('njReq').value.trim());
-  fd.append('template_id', el('njTemplate').value || 'auto');
-  fd.append('project_id', el('njProject').value.trim());
-  fd.append('start', startNow ? '1' : '0');
   try{
-    const r = await api('/v1/jobs', {method:'POST', body:fd});
-    S.jobs = await api('/v1/jobs'); closeAll(); njReset(); select(r.job_id);
-    if(!startNow) toast('已暂存。想跑的时候点任务标题旁的「开始生成」');
-  }catch(e){ el('njMsg').style.display='block'; el('njMsg').textContent='创建失败：'+(e&&e.message||'没连上本地服务'); }
-  go.disabled = later.disabled = false; go.textContent = '开始生成';
+    if(IS_WEB && !FORCE_DEMO && window.Notification && Notification.permission==='default') Notification.requestPermission();
+    const tender = NJ.items[NJ.tenderIdx],tname = tender.rel.split('/').pop();
+    if(!S.online){ closeAll(); demoNew(tname); njReset(); return; }
+    // 推荐预览不能阻塞建任务；后端会在创建请求内做唯一一次权威选择并冻结快照。
+    if(String(el('njTemplate').value||'auto')==='auto'&&!NJ.recommendation)recommendTemplateForTender();
+    const fd = new FormData();fd.append('tender', tender.file, tname);
+    const rest = NJ.items.filter((_,i)=>i!==NJ.tenderIdx),rels = [];
+    for(const it of rest){ fd.append('files', it.file, it.rel.split('/').pop()); rels.push(it.rel); }
+    fd.append('relpaths', JSON.stringify(rels));fd.append('name', tname.replace(/\.[^.]+$/,''));
+    fd.append('prompt', el('njReq').value.trim());fd.append('template_id', el('njTemplate').value || 'auto');
+    fd.append('project_id', el('njProject').value.trim());fd.append('start', startNow ? '1' : '0');
+    try{
+      const r = await api('/v1/jobs', {method:'POST', body:fd});
+      S.jobs = await api('/v1/jobs'); closeAll(); njReset(); select(r.job_id);
+      if(!startNow) toast('已暂存。想跑的时候点任务标题旁的「开始生成」');
+    }catch(e){ el('njMsg').style.display='block'; el('njMsg').textContent='创建失败：'+(e&&e.message||'没连上本地服务'); }
+  }finally{
+    NJ.starting=false;go.disabled = later.disabled = false;go.textContent = '开始生成';
+  }
 }
 async function startStaged(){
   if(!S.active) return;
@@ -2644,7 +2853,7 @@ function notify(t){ if(IS_WEB && window.Notification && Notification.permission=
 /* ================= 弹层 ================= */
 function openSheet(id){ el('ovl').style.display='block'; el(id).style.display='flex'; if(id==='providers') loadProviders(); if(id==='assets') loadAssets(); }
 function openCheck(){ el('ovl').style.display='block'; el('check').style.display='flex'; renderCheck(); }
-function closeAll(){ cfDone(false); ['ovl','check','providers','assets','preview','confirm','redo','logSheet','diagnosticSheet','projectSheet','onboarding','newjob'].forEach(i=>el(i).style.display='none'); }
+function closeAll(){ cfDone(false); ['ovl','check','providers','assets','preview','confirm','redo','logSheet','diagnosticSheet','projectSheet','onboarding','newjob'].forEach(i=>el(i).style.display='none'); const p=el('problemHost');if(p&&p.dataset.hiddenForDiagnostic){delete p.dataset.hiddenForDiagnostic;renderProblem();} }
 /* 应用内确认(替代 window.confirm:Tauri 桌面壳里原生 confirm 静默返回 false) */
 function askConfirm(title, desc, danger){
   return new Promise(res=>{

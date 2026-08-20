@@ -3,7 +3,7 @@
 """
 中标狗 · 本地引擎(v1 协议实现)
 任务=目录:jobs/<id>/ 下的文件即全部状态(任务.json / progress.json / events.jsonl / chat.jsonl / 交付物)
-运行:pip install fastapi uvicorn python-multipart && python3 engine_v1.py   # 127.0.0.1:8080
+运行:pip install fastapi uvicorn python-multipart python-docx pypdf certifi && python3 engine_v1.py   # 127.0.0.1:8080
 真实 agent:环境变量 AGENT_CMD 命令模板(占位符 {tender}/{out}/{materials}),不配则跑内置 mock 流程。
 打包:pyinstaller -F engine_v1.py → 作为 Tauri sidecar 随安装包分发(见 BUILD.md)。
 """
@@ -15,6 +15,10 @@ from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from template_engine import (builtin_templates, compare_instruction_coverage,
+                             compile_template_instructions, derive_template,
+                             extract_document_structure, normalize_package,
+                             recommend_template, validate_package)
 
 def _configure_stdio_utf8():
     """Windows GUI/重定向日志常落到 cp1252；启动横幅含中文时不能因此让整个 sidecar 崩溃。"""
@@ -28,7 +32,8 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.19.0'
+ENGINE_VERSION = '0.19.1'
+MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
                    'provider_delete', 'job_delete', 'vision_index', 'artifact_open', 'job_folder_open', 'chat_control', 'job_redo', 'job_stop', 'job_log', 'skill_evidence',
@@ -38,7 +43,7 @@ ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest'
                    'worklog_stream', 'stage_eta', 'job_presentation', 'runtime_capabilities',
                    'delivery_summary', 'job_usage', 'job_archive', 'job_projects', 'job_bulk_actions',
                    'deliverables_zip', 'task_templates', 'one_click_diagnostics', 'job_revisions',
-                   'setup_onboarding']
+                   'setup_onboarding', 'scene_template_packages', 'template_derivation']
 HERE = os.path.dirname(os.path.abspath(__file__))
 def _data_root():
     env = os.environ.get('BID_HOME')
@@ -2989,6 +2994,83 @@ def config_agent_cmd():
     # --dangerously-bypass-approvals-and-sandbox:非交互执行,免"信任目录/审批"卡住(本机自有目录)
     return [resolve_cli('codex', eng) or 'codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', prompt]
 
+def generation_preflight(job, conf=None):
+    """Fast local checks shared by task startup and one-click diagnostics."""
+    conf = conf or read_json(conf_path(), {})
+    eng = conf.get('engine') if isinstance(conf.get('engine'), dict) else {}
+    kind = str(eng.get('kind') or 's2')
+    checks = []
+    storage_ok = os.path.isdir(job) and os.access(job, os.W_OK)
+    checks.append({'id': 'storage', 'label': '任务目录', 'status': 'pass' if storage_ok else 'fail',
+                   'message': '任务文件可以保存' if storage_ok else '任务目录不可写'})
+    skill = skill_dir_conf(conf)
+    skill_ok = os.path.isfile(os.path.join(skill, 'SKILL.md'))
+    checks.append({'id': 'skill', 'label': '写作规则', 'status': 'pass' if skill_ok else 'fail',
+                   'message': '写作规则已就绪' if skill_ok else '写作规则包缺失'})
+    repair = ''
+    if kind in ('s2', 'opencode'):
+        if not s2_conf(conf)['api_key']:
+            checks.append({'id': 'connection', 'label': '模型连接', 'status': 'demo',
+                           'message': '未填写 Key，本轮使用内置演示流程'})
+            checks.append({'id': 'runtime', 'label': '生成组件', 'status': 'skipped',
+                           'message': '演示流程无需外部生成组件'})
+        else:
+            checks.append({'id': 'connection', 'label': '模型连接', 'status': 'pending',
+                           'message': '将在派发前建立模型连接'})
+            shell = resolve_cli('opencode', eng)
+            if shell:
+                checks.append({'id': 'runtime', 'label': '生成组件', 'status': 'pass',
+                               'message': '内置 OpenCode 已就绪', 'source': shell})
+            else:
+                repair = 'opencode'
+                checks.append({'id': 'runtime', 'label': '生成组件', 'status': 'repairing',
+                               'message': '缺少内置生成组件，将自动修复'})
+    else:
+        cli_name = {'codex': 'codex', 'claude': 'claude', 'sowork': 'sowork'}.get(kind)
+        shell = resolve_cli(cli_name, eng) if cli_name else bool(config_agent_cmd())
+        checks.append({'id': 'runtime', 'label': '生成组件', 'status': 'pass' if shell else 'fail',
+                       'message': '所选生成方式已就绪' if shell else '所选生成方式不可用'})
+    ok = storage_ok and skill_ok and not repair and not any(item['status'] == 'fail' for item in checks)
+    result = {'ok': ok, 'kind': kind, 'phase': 'environment', 'repair': repair,
+              'checks': checks, 'checked_at': now()}
+    try: write_json(os.path.join(job, 'preflight.json'), result)
+    except Exception: pass
+    return result
+
+def ensure_default_shell(job, eng):
+    """Repair the managed OpenCode shell in-place, with visible task progress."""
+    if str((eng or {}).get('kind') or 's2') not in ('s2', 'opencode'):
+        return True, '当前使用显式生成方式'
+    ready = resolve_cli('opencode', eng)
+    if ready: return True, '生成组件已就绪'
+    emit(job, {'type': 'worklog', 'lines': ['检查到生成组件缺失，正在自动修复生成组件（无需安装 Python、Node 或 SoWork）']})
+    emit(job, {'type': 'progress', 'stage': '正在修复生成组件', 'pct': 1, 'step': 0, 'total': 12})
+    if PROV.get('state') != 'running':
+        PROV.update({'state': 'idle', 'which': 'opencode', 'pct': 0, 'note': '', 'path': '', 'error': ''})
+        worker = threading.Thread(target=_provision_codex, args=('opencode',), daemon=True)
+        worker.start()
+    else:
+        worker = None
+    last = None
+    deadline = time.time() + 10 * 60
+    while time.time() < deadline:
+        state = str(PROV.get('state') or 'idle')
+        snapshot = (state, int(PROV.get('pct') or 0), str(PROV.get('note') or ''))
+        if snapshot != last:
+            last = snapshot
+            note = snapshot[2] or ('正在下载生成组件 %d%%' % snapshot[1])
+            emit(job, {'type': 'worklog', 'lines': [note]})
+        if state in ('done', 'error'): break
+        if worker is not None and not worker.is_alive() and state != 'running': break
+        time.sleep(.25)
+    ready = resolve_cli('opencode', eng)
+    if ready:
+        emit(job, {'type': 'worklog', 'lines': ['生成组件已就绪，继续建立模型连接']})
+        return True, '生成组件已就绪'
+    why = str(PROV.get('error') or '自动修复没有完成')
+    append_diagnostic(job, 'opencode_auto_repair_failed', why, level='error')
+    return False, why
+
 @app.get('/v1/agent')
 def agent_status():
     conf = read_json(conf_path(), {})
@@ -3187,24 +3269,50 @@ async def create_job(tender: UploadFile = File(None), materials: UploadFile = Fi
     fl = [f for f in (files or []) if f and f.filename]
     if not (tender and tender.filename) and not fl:
         return JSONResponse({'error': '至少要有一个文件(招标文件)'}, 400)
-    template_snapshot = {}
-    if template_id:
-        selected_template = get_task_template(template_id)
-        if not selected_template: return JSONResponse({'error': '所选任务模板不存在'}, 400)
-        template_snapshot = task_template_snapshot(selected_template)
-        if not prompt.strip(): prompt = str(selected_template.get('prompt') or '')
     try: rels = json.loads(relpaths or '[]')
     except Exception: rels = []
     rels = [str(r or '') for r in rels] if isinstance(rels, list) else []
     while len(rels) < len(fl): rels.append('')
     doc_like = lambda fn: not fn.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.zip'))
     if not (tender and tender.filename) and fl:
-        # 前端没显式指定主件时,从 files 里挑:优先文件名像招标文件的文档,其次任意文档;挑走后从素材里移除
+        # 自动推荐前先确定真正主件；否则仅 files 的兼容调用只能按任务名猜场景。
         pick = next((i for i, f in enumerate(fl)
                      if re.search(r'招标|采购|磋商|询价|tender|rfp', os.path.basename(f.filename), re.I)
                      and doc_like(f.filename)), None)
         if pick is None: pick = next((i for i, f in enumerate(fl) if doc_like(f.filename)), 0)
         tender = fl.pop(pick); rels.pop(pick)
+    template_snapshot = {}
+    template_recommendation = {}
+    requested_template_id = normalize_template_request(template_id)
+    if requested_template_id == 'auto':
+        sample_text = ''
+        blob = b''
+        if tender and tender.filename:
+            try:
+                blob = await tender.read(MAX_TEMPLATE_UPLOAD_BYTES + 1)
+                await tender.seek(0)
+                if len(blob) > MAX_TEMPLATE_UPLOAD_BYTES:
+                    return JSONResponse({'error': '自动分析暂支持50MB以内的主件；请压缩文件或手动选择模板'}, 413)
+                _, _, sample_text = extract_document_structure(tender.filename, blob)
+            except Exception:
+                try: sample_text = blob.decode('utf-8', errors='ignore')[:120000]
+                except Exception: sample_text = ''
+        template_recommendation = recommend_template(
+            getattr(tender, 'filename', '') or name, sample_text + '\n' + prompt, task_templates())
+        template_id = str(template_recommendation.get('template_id') or 'government')
+    elif requested_template_id:
+        template_id = requested_template_id
+        template_recommendation = {'template_id': template_id, 'confidence': 1.0,
+                                   'reasons': ['用户明确选择']}
+    else:
+        template_id = ''
+    if template_id:
+        selected_template = get_task_template(template_id)
+        if not selected_template: return JSONResponse({'error': '所选任务模板不存在'}, 400)
+        template_snapshot = task_template_snapshot(selected_template)
+        compiled = compile_template_instructions(template_snapshot)
+        user_prompt = prompt.strip()
+        prompt = compiled + (('\n\n# 用户补充要求\n' + user_prompt) if user_prompt else '')
     jid = datetime.datetime.now().strftime('%m%d-%H%M%S-') + uuid.uuid4().hex[:4]
     job = jpath(jid); os.makedirs(job)
     tname = os.path.basename(tender.filename or '招标文件.pdf')
@@ -3232,7 +3340,8 @@ async def create_job(tender: UploadFile = File(None), materials: UploadFile = Fi
     # 即使 replay/shutdown 暂时拒绝，也不会留下“看似运行但没有 worker”的孤儿。
     write_json(os.path.join(job, '任务.json'), {'name': name or tname, 'created_at': now(),
                'paused': False, 'staged': True, 'tender': tname, 'prompt': prompt,
-               'template_id': template_id, 'template_snapshot': template_snapshot})
+               'template_id': template_id, 'template_snapshot': template_snapshot,
+               'template_recommendation': template_recommendation})
     write_json(os.path.join(job, 'product.json'),
                {'name': name or tname, 'project_id': str(project_id or '').strip()[:120],
                 'version': 1, 'root_job_id': jid, 'parent_job_id': '', 'created_at': now()})
@@ -3332,11 +3441,11 @@ def _launch_job_reserved(jid, job, mock, owner):
                                'base_url': up_now['base_url'], 'wire': up_now['wire'],
                                'verify_ssl': bool(up_now['verify_ssl']), 'started_at': now()}
     write_json(os.path.join(job, '任务.json'), meta)
-    # 先打一条 step=1 的进度再派发。前端的停止按钮要等 progress.step 有值才显示,
-    # 而这一步以前完全取决于 agent 自己什么时候写第一条进度——真实 agent 读招标文件、
-    # 建素材索引可能几分钟到几十分钟不吭声,这段时间界面上**根本没有停止按钮**:
-    # 选错了招标文件想停,只能删掉整个任务(把正在跑的 agent 一起杀掉),或者干等三小时超时。
-    emit(job, {'type': 'progress', 'stage': '已派发,正在读招标文件', 'pct': 2, 'step': 1, 'total': 12})
+    # 环境准备不是业务第 1 步。先给可见的 step=0 预检，真正建立连接后再进入读取招标文件。
+    emit(job, {'type': 'progress', 'stage': '正在检查生成环境', 'pct': 0, 'step': 0, 'total': 12})
+    preflight = generation_preflight(job, conf_now)
+    emit(job, {'type': 'worklog', 'lines': ['保存任务文件完成', '识别场景模板完成',
+              '正在检查生成组件' if preflight.get('repair') else '生成环境检查完成']})
     agent_cmd = config_agent_cmd()
     use_mock = (mock == '1') or (mock == 'auto' and not agent_cmd)
     if use_mock:
@@ -3374,6 +3483,7 @@ def _launch_job_reserved(jid, job, mock, owner):
             _start_reserved_worker(os.path.basename(jid), owner, agent_via_server_or_cli,
                                    job, oc_prompt, cmd)
         else:
+            emit(job, {'type': 'progress', 'stage': '已就绪，正在读招标文件', 'pct': 2, 'step': 1, 'total': 12})
             update_runtime(job, execution_path='cli_compat', can_pause=False,
                            pause_disabled_reason='当前稳定运行方式暂不支持暂停；如需中止，请使用停止。')
             _start_reserved_worker(os.path.basename(jid), owner, real_agent, job, cmd)
@@ -3421,6 +3531,19 @@ def agent_via_server_or_cli(job, prompt, cmd):
     否则会出现「换了条路跑,完成播报就不一样」这种说不清的差异。"""
     base = os.path.basename(job)
     result = OC_RUN_INTERRUPTED
+    eng = read_json(conf_path(), {}).get('engine') or {}
+    ok, why = ensure_default_shell(job, eng)
+    if not ok:
+        emit(job, {'type': 'error',
+                   'text': '生成组件自动修复未完成，任务已安全停下。请检查网络后重试。',
+                   'actions': [{'act': 'diagnose', 'label': '一键诊断'},
+                               {'act': 'open_engine', 'label': '检查生成设置'}]})
+        settle(job, stop_reason='已停止（生成组件修复失败）')
+        return
+    if isinstance(cmd, list) and cmd and os.path.basename(str(cmd[0])).lower() in ('opencode', 'opencode.exe'):
+        cmd[0] = resolve_cli('opencode', eng) or cmd[0]
+    emit(job, {'type': 'progress', 'stage': '已就绪，正在读招标文件', 'pct': 2, 'step': 1, 'total': 12})
+    emit(job, {'type': 'worklog', 'lines': ['生成组件已就绪', '正在建立模型连接', '开始读取招标文件']})
     try:
         result = oc_run(job, prompt)
     except Exception as e:
@@ -3596,23 +3719,7 @@ def update_product_meta(job, **changes):
     changes['updated_at'] = now()
     return patch_json(os.path.join(job, 'product.json'), changes)
 
-DEFAULT_TASK_TEMPLATES = [
-    {'id': 'government', 'name': '政府采购', 'description': '适合货物、设备及通用政府采购项目',
-     'prompt': '按政府采购文件逐条核对资格条件、符合性要求和评分办法，生成完整响应文件、技术与商务偏离表，并明确所有待确认材料。',
-     'settings': {'mode': 'standard', 'quality_gate': True, 'include_toc': True,
-                  'include_deviation_tables': True, 'focus': ['资格审查', '符合性审查', '评分办法']},
-     'builtin': True},
-    {'id': 'construction', 'name': '工程施工', 'description': '适合施工总承包、专业工程及改造项目',
-     'prompt': '围绕施工组织设计、工期计划、资源配置、质量安全和应急预案编制投标文件，逐项对应工程量、技术标准和评审要点。',
-     'settings': {'mode': 'standard', 'quality_gate': True, 'include_toc': True,
-                  'include_deviation_tables': True, 'focus': ['施工组织', '工期计划', '质量安全']},
-     'builtin': True},
-    {'id': 'service', 'name': '服务类投标', 'description': '适合咨询、运维、外包及综合服务项目',
-     'prompt': '围绕服务方案、团队配置、服务流程、进度承诺、质量保障和应急响应编制投标文件，逐项覆盖服务需求与评分点。',
-     'settings': {'mode': 'standard', 'quality_gate': True, 'include_toc': True,
-                  'include_deviation_tables': True, 'focus': ['服务方案', '团队配置', '服务承诺']},
-     'builtin': True},
-]
+DEFAULT_TASK_TEMPLATES = builtin_templates()
 
 def templates_path(): return os.path.join(_mk(ws_root()), 'task_templates.json')
 
@@ -3633,10 +3740,16 @@ def get_task_template(template_id):
     wanted = str(template_id or '')
     return next((item for item in task_templates() if item.get('id') == wanted), None)
 
+def normalize_template_request(value):
+    """Normalize legacy/default clients onto the one automatic selection path."""
+    requested = str(value or '').strip()
+    return 'auto' if requested.lower() in ('', 'auto', 'default') else requested
+
 def task_template_snapshot(item):
     if not isinstance(item, dict): return {}
-    safe = {key: item.get(key) for key in ('id', 'name', 'description', 'prompt', 'settings')}
+    safe = {key: item.get(key) for key in ('id', 'name', 'description', 'prompt', 'settings', 'package')}
     safe['settings'] = safe.get('settings') if isinstance(safe.get('settings'), dict) else {}
+    safe['package'] = normalize_package(safe.get('package'))
     # JSON round-trip gives each task an immutable deep copy of nested settings.
     return json.loads(json.dumps(safe, ensure_ascii=False))
 
@@ -3660,12 +3773,44 @@ async def create_task_template(req: Request):
     prompt = str(body.get('prompt') or '').strip()
     if not name or not prompt:
         return JSONResponse({'ok': False, 'error': '模板名称和生成要求不能为空'}, 400)
+    base = get_task_template(str(body.get('base_template_id') or ''))
+    package = normalize_package(body.get('package') if isinstance(body.get('package'), dict)
+                                else ((base or {}).get('package') or {}))
+    generated_from = package.get('generated_from') or {}
+    if generated_from.get('kind') == 'uploaded_bid' and not generated_from.get('source_structure_ready'):
+        return JSONResponse({'ok': False, 'error': '上传标书提取到的结构不足，请补足目录后再保存'}, 400)
+    validation = validate_package(package)
     item = {'id': 'tpl-' + uuid.uuid4().hex[:10], 'name': name[:80],
             'description': str(body.get('description') or '').strip()[:300],
             'prompt': prompt[:20000],
             'settings': body.get('settings') if isinstance(body.get('settings'), dict) else {},
+            'package': package, 'validation': validation,
             'builtin': False, 'created_at': now(), 'updated_at': now()}
     return _save_task_template(item)
+
+@app.post('/v1/templates/recommend')
+async def recommend_task_template(file: UploadFile = File(...), scene_hint: str = Form('')):
+    blob = await file.read(MAX_TEMPLATE_UPLOAD_BYTES + 1)
+    if len(blob) > MAX_TEMPLATE_UPLOAD_BYTES:
+        return JSONResponse({'ok': False, 'error': '文件超过50MB，请先压缩或拆分'}, 413)
+    try: _, _, text = extract_document_structure(file.filename or '招标文件', blob)
+    except Exception: text = blob.decode('utf-8', errors='ignore')[:120000]
+    result = recommend_template(file.filename or '招标文件', text + '\n' + scene_hint[:20000], task_templates())
+    selected = get_task_template(result.get('template_id')) or {}
+    result['template'] = task_template_snapshot(selected)
+    return result
+
+@app.post('/v1/templates/derive')
+async def derive_task_template(file: UploadFile = File(...), name: str = Form(''), scene_hint: str = Form('')):
+    blob = await file.read(MAX_TEMPLATE_UPLOAD_BYTES + 1)
+    if len(blob) > MAX_TEMPLATE_UPLOAD_BYTES:
+        return JSONResponse({'ok': False, 'error': '文件超过50MB，请先压缩或拆分'}, 413)
+    try:
+        return derive_template(name, file.filename or '优秀历史标书.docx', blob, task_templates(), scene_hint)
+    except ValueError as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, 400)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': '模板提炼失败：%s' % str(exc)}, 400)
 
 @app.put('/v1/templates/{template_id}')
 async def update_task_template(template_id: str, req: Request):
@@ -3678,6 +3823,11 @@ async def update_task_template(template_id: str, req: Request):
         if not isinstance(body.get('settings'), dict):
             return JSONResponse({'ok': False, 'error': '模板默认设置必须是对象'}, 400)
         item['settings'] = body['settings']
+    if 'package' in body:
+        if not isinstance(body.get('package'), dict):
+            return JSONResponse({'ok': False, 'error': '模板包必须是对象'}, 400)
+        item['package'] = normalize_package(body['package'])
+        item['validation'] = validate_package(item['package'])
     if not item.get('name') or not item.get('prompt'):
         return JSONResponse({'ok': False, 'error': '模板名称和生成要求不能为空'}, 400)
     item['updated_at'] = now()
@@ -3754,6 +3904,81 @@ def job_presentation(job, state, meta, prog, delivery=None):
                       or prog.get('stage'), '任务未完成，可以查看原因后继续处理'))
     return {'code': code, 'label': PRESENTATION_STATES[code]}, action
 
+FLOW_PHASES = [
+    {'id': 'environment', 'label': '环境准备', 'first': 0, 'last': 0,
+     'evidence': 'preflight.json', 'pending': '等待检查本地生成环境'},
+    {'id': 'parse', 'label': '招标解析', 'first': 1, 'last': 4,
+     'evidence': '招标文件、图片索引、组成与格式规范', 'pending': '等待读取招标文件'},
+    {'id': 'plan', 'label': '响应规划', 'first': 5, 'last': 6,
+     'evidence': '评分废标索引与响应矩阵', 'pending': '等待规划响应结构'},
+    {'id': 'write', 'label': '并行撰写', 'first': 7, 'last': 8,
+     'evidence': '章节稿与逐条偏离表', 'pending': '等待分章撰写'},
+    {'id': 'assemble', 'label': 'Word 装配', 'first': 9, 'last': 10,
+     'evidence': '正文与配图复核记录', 'pending': '等待汇总和装配'},
+    {'id': 'deliver', 'label': '交付质检', 'first': 11, 'last': 12,
+     'evidence': '自检报告与最终 Word', 'pending': '等待交付检查'},
+]
+
+def _flow_check_state(status):
+    status = str(status or '').lower()
+    if status in ('pass', 'demo', 'skipped'): return 'done'
+    if status in ('pending', 'repairing', 'running'): return 'active'
+    if status in ('warning', 'attention'): return 'attention'
+    if status in ('fail', 'error'): return 'failed'
+    return 'pending'
+
+def job_flow(job, state=None, meta=None, prog=None, outcome=None):
+    """Build the compact six-phase console exclusively from persisted job facts."""
+    meta = meta if isinstance(meta, dict) else read_json(os.path.join(job, '任务.json'), {})
+    prog = prog if isinstance(prog, dict) else read_json(os.path.join(job, 'progress.json'), {})
+    if prog.get('type') == 'progress': prog = sanitize_event(job, prog)
+    outcome = outcome if isinstance(outcome, dict) else read_json(os.path.join(job, 'outcome.json'), {})
+    state = state or job_state(job, meta, prog)
+    try: step = max(0, min(12, int(prog.get('step') or 0)))
+    except (TypeError, ValueError): step = 0
+    preflight = read_json(os.path.join(job, 'preflight.json'), {})
+    checks = []
+    for item in (preflight.get('checks') or []):
+        if not isinstance(item, dict): continue
+        checks.append({'id': str(item.get('id') or ''), 'label': str(item.get('label') or ''),
+                       'state': _flow_check_state(item.get('status')),
+                       'detail': str(item.get('message') or '')})
+
+    current_index = 0
+    if step:
+        current_index = next((idx for idx, phase in enumerate(FLOW_PHASES)
+                              if phase['first'] <= step <= phase['last']), len(FLOW_PHASES) - 1)
+    terminal_problem = state in ('paused', 'stopped', 'unknown')
+    problem_state = 'attention' if state in ('paused', 'stopped') else 'failed'
+    reason = str(outcome.get('reason') or prog.get('stage') or '').strip()
+    phases = []
+    for idx, definition in enumerate(FLOW_PHASES):
+        if definition['id'] == 'environment':
+            phase_state = 'done' if step >= 1 or state == 'done' else 'active'
+        elif step >= definition['last'] or state == 'done':
+            phase_state = 'done'
+        elif idx == current_index:
+            phase_state = 'active'
+        else:
+            phase_state = 'pending'
+        if terminal_problem and idx == current_index:
+            phase_state = problem_state
+        detail = definition['pending']
+        if phase_state == 'done': detail = '已验证完成'
+        elif idx == current_index:
+            detail = reason or _friendly_current_action(prog.get('stage'), definition['pending'])
+        phase = {'id': definition['id'], 'label': definition['label'], 'state': phase_state,
+                 'detail': detail, 'evidence': definition['evidence']}
+        if definition['id'] == 'environment': phase['checks'] = checks
+        phases.append(phase)
+
+    checkpoint = {'step': step, 'label': (STAGES[step - 1] if step else '任务文件已保存')}
+    return {'version': 1, 'current_phase': FLOW_PHASES[current_index]['id'],
+            'current_action': reason or phases[current_index]['detail'],
+            'checkpoint': checkpoint,
+            'recoverable': bool(os.path.isdir(job) and os.path.isfile(os.path.join(job, '任务.json'))),
+            'phases': phases}
+
 @app.patch('/v1/jobs/{jid}')
 async def update_job(jid: str, req: Request):
     job = jpath(jid)
@@ -3796,6 +4021,7 @@ def list_jobs(scope: str = 'all', project_id: str = ''):
         if project_id and product.get('project_id') != project_id: continue
         template_snapshot = meta.get('template_snapshot') if isinstance(meta.get('template_snapshot'), dict) else {}
         presentation, current_action = job_presentation(job, st, meta, prog, delivery)
+        flow = job_flow(job, st, meta, prog, outcome)
         last_activity = _job_last_activity(job, meta, prog, outcome)
         elapsed = _job_elapsed(job, st, meta, outcome, last_activity)
         eta = _job_eta(st, prog)
@@ -3806,6 +4032,7 @@ def list_jobs(scope: str = 'all', project_id: str = ''):
                     'state': st, 'can': job_can(job, st, meta),
                     'presentation': presentation, 'presentation_state': presentation['code'],
                     'status': presentation['label'], 'current_action': current_action,
+                    'flow': flow,
                     'last_activity_at': last_activity,
                     'eta': eta, 'eta_seconds': eta, 'elapsed': elapsed, 'elapsed_seconds': elapsed,
                     'usage': _job_usage(job, meta), 'runtime': job_runtime(job, meta),
@@ -4311,7 +4538,10 @@ def _diagnostic_snapshot(jid=''):
     setup = setup_status_data(conf)
     eng = conf.get('engine') if isinstance(conf.get('engine'), dict) else {}
     storage_ok = os.path.isdir(_mk(ws_root())) and os.access(ws_root(), os.W_OK)
-    shell_ok = bool(resolve_cli('opencode', eng)) if str(eng.get('kind') or 's2') in ('s2', 'opencode') else bool(config_agent_cmd())
+    kind = str(eng.get('kind') or 's2')
+    cli_name = 'opencode' if kind in ('s2', 'opencode') else {'codex': 'codex', 'claude': 'claude', 'sowork': 'sowork'}.get(kind)
+    runtime_source = resolve_cli(cli_name, eng) if cli_name else ''
+    shell_ok = bool(runtime_source) if cli_name else bool(config_agent_cmd())
     checks = [
         {'id': 'storage', 'label': '数据目录可写', 'status': 'pass' if storage_ok else 'fail',
          'message': '任务与设置可以正常保存' if storage_ok else '数据目录不可写，请检查磁盘权限'},
@@ -4323,9 +4553,11 @@ def _diagnostic_snapshot(jid=''):
         {'id': 'runtime', 'label': '生成组件', 'status': 'pass' if shell_ok else 'fail',
          'message': '生成组件已就绪' if shell_ok else '生成组件尚未就绪，可在设置中一键安装'},
     ]
+    provision = {key: PROV.get(key) for key in ('state', 'which', 'pct', 'note', 'error')}
     result = {'ok': not any(item['status'] == 'fail' for item in checks),
               'checked_at': now(), 'engine_version': ENGINE_VERSION,
-              'checks': checks, 'active_jobs': len(_running_snapshot())}
+              'checks': checks, 'active_jobs': len(_running_snapshot()),
+              'runtime_source': runtime_source or '', 'provision': provision}
     if jid:
         job = jpath(jid)
         if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
@@ -4339,9 +4571,17 @@ def _diagnostic_snapshot(jid=''):
         for line in lines:
             try: recent.append(_redact_runtime(json.loads(line), conf))
             except Exception: recent.append({'detail': _redact_runtime(line, conf)})
+        preflight = read_json(os.path.join(job, 'preflight.json'), {})
+        last_activity = str(prog.get('ts') or meta.get('updated_at') or meta.get('created_at') or '')
+        if not last_activity:
+            try: last_activity = datetime.datetime.fromtimestamp(os.path.getmtime(os.path.join(job, 'events.jsonl'))).isoformat(timespec='seconds')
+            except OSError: last_activity = now()
         result['job'] = {'job_id': os.path.basename(jid), 'state': state,
                          'presentation': presentation, 'current_action': current_action,
                          'runtime': job_runtime(job, meta), 'delivery': delivery_summary(job),
+                         'flow': job_flow(job, state, meta, prog,
+                                          read_json(os.path.join(job, 'outcome.json'), {})),
+                         'preflight': preflight, 'last_activity': last_activity,
                          'recent_diagnostics': recent,
                          'bundle_url': '/v1/jobs/%s/bundle' % os.path.basename(jid)}
     return _redact_runtime(result, conf)

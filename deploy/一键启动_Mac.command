@@ -18,21 +18,24 @@ echo "[1/4] python3 已就绪:$(python3 --version 2>&1)"
 
 # 2) 首次运行装依赖(装在本文件夹的 .venv 里,不污染系统)
 VENV=".venv"
+DEPS="fastapi uvicorn python-multipart python-docx pypdf certifi"
+MIRROR="-i https://pypi.tuna.tsinghua.edu.cn/simple"
 if [ ! -x "$VENV/bin/python" ]; then
   echo "[2/4] 首次运行,正在准备运行环境(约 1~3 分钟,请勿关闭窗口)…"
   python3 -m venv "$VENV" || { echo "创建环境失败"; read -r -p "按回车键关闭…" _; exit 1; }
-  DEPS="fastapi uvicorn python-multipart python-docx certifi"
   # 国内网络清华源快一个数量级:先走镜像(20 秒超时防死源),不行再回官方源
-  MIRROR="-i https://pypi.tuna.tsinghua.edu.cn/simple"
   "$VENV/bin/python" -m pip install --quiet --timeout 20 --retries 2 $MIRROR --upgrade pip 2>/dev/null \
     || "$VENV/bin/python" -m pip install --quiet --upgrade pip
+else
+  echo "[2/4] 运行环境已就绪"
+fi
+if ! "$VENV/bin/python" -c "import fastapi,uvicorn,multipart,docx,pypdf,certifi" >/dev/null 2>&1; then
+  echo "      正在补齐或更新运行依赖…"
   if ! "$VENV/bin/python" -m pip install --quiet --timeout 20 --retries 2 $MIRROR $DEPS; then
     echo "      镜像源不可用,改用官方源重试…"
     "$VENV/bin/python" -m pip install --quiet --timeout 60 --retries 2 $DEPS \
       || { echo "依赖安装失败,请检查网络"; read -r -p "按回车键关闭…" _; exit 1; }
   fi
-else
-  echo "[2/4] 运行环境已就绪"
 fi
 
 # 3) 选一个没被占用的端口

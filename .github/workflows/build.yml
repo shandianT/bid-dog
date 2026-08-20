@@ -176,13 +176,13 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ github.ref == 'refs/heads/main' && secrets.APPLE_SIGNING_IDENTITY || '' }}
         run: |
-          python -m pip install --quiet pyinstaller fastapi uvicorn python-multipart python-docx certifi
+          python -m pip install --quiet pyinstaller fastapi uvicorn python-multipart python-docx pypdf certifi
           cp ../bidmultiagenttao_v5.3.zip . 2>/dev/null || true
           codesign_args=()
           if [ "$RUNNER_OS" = "macOS" ] && [ "$MAC_SIGNING_READY" = "true" ]; then
             codesign_args=(--codesign-identity "$APPLE_SIGNING_IDENTITY")
           fi
-          pyinstaller -F -n bid-engine engine_v1.py --collect-all uvicorn --collect-all certifi \
+          pyinstaller -F -n bid-engine engine_v1.py --collect-all uvicorn --collect-all certifi --collect-all docx \
             --add-data "bidmultiagenttao_v5.3.zip:." --noconfirm "${codesign_args[@]}"
           TRIPLE=$(rustc -Vv | sed -n 's/^host: //p')
           mkdir -p ../app/src-tauri/binaries
@@ -274,7 +274,7 @@ jobs:
           app_path=$(find "$mount_dir" -maxdepth 1 -name '*.app' -print -quit)
           codesign --verify --deep --strict --verbose=2 "$app_path"
           "$app_path/Contents/MacOS/opencode-cli" --version
-          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.19.0"
+          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.19.1"
           if [ "$MAC_SIGNING_READY" = "true" ]; then
             spctl --assess --type execute --verbose=2 "$app_path"
             xcrun stapler validate "$app_path"
@@ -303,7 +303,19 @@ jobs:
           done
           test -n "$health" || { cat "$engine_log"; exit 1; }
           printf '%s' "$health" | python -c \
-            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.19.0"'
+            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.19.1"'
+          word_job="$engine_data/jobs/word-smoke"
+          mkdir -p "$word_job"
+          printf '%s\n' '{"name":"安装包 Word 冒烟","tender":"招标文件.docx"}' >"$word_job/任务.json"
+          {
+            printf '%s\n\n' '# 投标文件完整稿' '## 项目理解'
+            for n in {1..80}; do printf '第%s段：本段用于验证安装包内置 Word 导出资源完整，内容仅用于发布冒烟测试。\n\n' "$n"; done
+          } >"$word_job/投标文件_完整.md"
+          word_result=$(curl -fsS -X POST "http://127.0.0.1:$engine_port/v1/jobs/word-smoke/export_docx")
+          printf '%s' "$word_result" | python -c \
+            'import json,sys; r=json.load(sys.stdin); assert r["ok"] is True and r["made"]'
+          WORD_PATH="$word_job/投标文件_完整.docx" python -c \
+            'import os,zipfile; p=os.environ["WORD_PATH"]; assert os.path.getsize(p)>1024 and zipfile.is_zipfile(p)'
           kill "$engine_pid" >/dev/null 2>&1 || true
           wait "$engine_pid" >/dev/null 2>&1 || true
           engine_pid=""
@@ -363,8 +375,26 @@ jobs:
               Get-Content $engineOut, $engineErr -ErrorAction SilentlyContinue
               throw "installed bid-engine.exe did not become healthy"
             }
-            if ($health.version -ne "0.19.0") {
+            if ($health.version -ne "0.19.1") {
               throw "installed engine version mismatch: $($health.version)"
+            }
+            $wordJob = Join-Path $engineData "jobs\word-smoke"
+            New-Item -ItemType Directory -Force -Path $wordJob | Out-Null
+            '{"name":"installer Word smoke","tender":"tender.docx"}' |
+              Set-Content -Encoding utf8 (Join-Path $wordJob "任务.json")
+            $body = @("# 投标文件完整稿", "", "## 项目理解", "")
+            $body += 1..80 | ForEach-Object {
+              "Section ${_}: verify that the installed engine contains all Word export resources."
+            }
+            $body | Set-Content -Encoding utf8 (Join-Path $wordJob "投标文件_完整.md")
+            $wordResult = Invoke-RestMethod -Method Post `
+              -Uri "http://127.0.0.1:18789/v1/jobs/word-smoke/export_docx" -TimeoutSec 30
+            if (-not $wordResult.ok -or $wordResult.made.Count -lt 1) {
+              throw "installed engine could not export Word"
+            }
+            $wordPath = Join-Path $wordJob "投标文件_完整.docx"
+            if (-not (Test-Path $wordPath) -or (Get-Item $wordPath).Length -lt 1024) {
+              throw "installed engine produced no usable Word file"
             }
             if ($env:WINDOWS_SIGNING_READY -eq "true") {
               $signature = Get-AuthenticodeSignature $installers[0].FullName
@@ -398,9 +428,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="desktop-v0.19.0"
+          tag="desktop-v0.19.1"
           release_rows=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-            --jq '.[] | select(.tag_name == "desktop-v0.19.0") | [.id, .draft, .target_commitish] | @tsv')
+            --jq '.[] | select(.tag_name == "desktop-v0.19.1") | [.id, .draft, .target_commitish] | @tsv')
           release_count=$(printf '%s\n' "$release_rows" | sed '/^$/d' | wc -l | tr -d ' ')
           if [ "$release_count" -gt 1 ]; then
             echo "Multiple releases exist for $tag; refusing an ambiguous update."
@@ -413,7 +443,7 @@ jobs:
               exit 1
             fi
             if [ "$release_target" != "$GITHUB_SHA" ]; then
-              echo "Draft release desktop-v0.19.0 belongs to another commit; refusing to mix assets."
+              echo "Draft release desktop-v0.19.1 belongs to another commit; refusing to mix assets."
               exit 1
             fi
             echo "Found an unfinished draft for the same commit; resuming its asset upload safely."
@@ -445,16 +475,16 @@ jobs:
             name="$(basename "$f" | sed -e 's/中标狗/bid-dog/g' -e 's/标书助手/bid-dog/g')"
             mv "$f" "out/$name"
           done
-          test -f out/bid-dog_0.19.0_aarch64.dmg
-          test -f out/bid-dog_0.19.0_x64-setup.exe
+          test -f out/bid-dog_0.19.1_aarch64.dmg
+          test -f out/bid-dog_0.19.1_x64-setup.exe
           test "$(find out -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
-          (cd out && sha256sum bid-dog_0.19.0_aarch64.dmg bid-dog_0.19.0_x64-setup.exe > SHA256SUMS)
+          (cd out && sha256sum bid-dog_0.19.1_aarch64.dmg bid-dog_0.19.1_x64-setup.exe > SHA256SUMS)
           ls -la out
       - id: stage_release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: desktop-v0.19.0
-          name: 中标狗桌面版 v0.19.0
+          tag_name: desktop-v0.19.1
+          name: 中标狗桌面版 v0.19.1
           target_commitish: ${{ github.sha }}
           # Only a same-commit draft reaches this step; this repairs an interrupted partial upload.
           overwrite_files: true
@@ -467,8 +497,8 @@ jobs:
             中标狗桌面应用安装包（自动构建；未配置商业证书时 macOS 为 ad-hoc、Windows 为未签名）。作者:FDE-家涛。
             官网(含在线体验、成品 Word 页面):https://bid-dog.vercel.app
 
-            - macOS Apple Silicon(M 系列): `bid-dog_0.19.0_aarch64.dmg`
-            - Windows: `bid-dog_0.19.0_x64-setup.exe`
+            - macOS Apple Silicon(M 系列): `bid-dog_0.19.1_aarch64.dmg`
+            - Windows: `bid-dog_0.19.1_x64-setup.exe`
             - 校验文件: `SHA256SUMS`
             - 需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可。
 
@@ -476,17 +506,17 @@ jobs:
             `xattr -dr com.apple.quarantine "/Applications/中标狗.app"` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。每个新下载版本都可能再次需要放行。详见 README。
             Windows SmartScreen 提示时点「更多信息 → 仍要运行」。
 
-            v0.19.0（完整说明见仓库更新日志）:
-            - 首次使用缩为三步；发放的 Key 会一次完成生成、视觉模型和执行方式配置。
-            - 任务统一为准备中、生成中、需要你确认、已完成、未完成五种状态；开始生成前连接较慢会自动改用稳定运行方式，输出中断则安全停住并保留内容。
-            - 完成页先给最终 Word，再给目录、偏离表和出件检查；支持一句话修改并保留版本链。
-            - 新增项目、模板、归档、批量恢复/重跑/导出，以及后台通知与系统任务栏进度。
-            - 安装包内的引擎和 OpenCode 必须实际启动并通过回归；`SHA256SUMS` 可校验下载完整性。
+            v0.19.1（完整说明见仓库更新日志）:
+            - 修复自动/默认模板无法建任务，自动预览不再阻塞创建，并冻结场景模板快照。
+            - 生成前新增可见环境预检；缺少默认 OpenCode 时自动补齐，不要求客户安装 SoWork、Node 或 Python。
+            - 一键诊断立即反馈；桌面引擎缺失或启动失败会显示明确问题并记录实际检查路径。
+            - PyInstaller 显式收集 python-docx XML 模板；macOS DMG 与 Windows NSIS 都必须从最终安装载荷真实导出 Word 才能发布。
+            - 内置六类场景模板，并支持从优秀历史标书提炼、审阅和保存结构模板。
 
             完整历史版本说明见 CHANGELOG.md。
           files: |
-            out/bid-dog_0.19.0_aarch64.dmg
-            out/bid-dog_0.19.0_x64-setup.exe
+            out/bid-dog_0.19.1_aarch64.dmg
+            out/bid-dog_0.19.1_x64-setup.exe
             out/SHA256SUMS
       - name: verify staged release assets
         shell: bash
@@ -509,8 +539,8 @@ jobs:
           if release.get("draft") is not True:
               raise SystemExit("release must remain a draft until all assets are verified")
           expected = {
-              "bid-dog_0.19.0_aarch64.dmg",
-              "bid-dog_0.19.0_x64-setup.exe",
+              "bid-dog_0.19.1_aarch64.dmg",
+              "bid-dog_0.19.1_x64-setup.exe",
               "SHA256SUMS",
           }
           assets = {item.get("name"): item for item in release.get("assets", [])}
@@ -533,6 +563,6 @@ jobs:
           release = json.load(open(sys.argv[1], encoding="utf-8"))
           if release.get("draft") is not False:
               raise SystemExit("release was not published")
-          if release.get("tag_name") != "desktop-v0.19.0":
+          if release.get("tag_name") != "desktop-v0.19.1":
               raise SystemExit("published release tag mismatch")
           PY

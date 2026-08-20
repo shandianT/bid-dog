@@ -144,6 +144,41 @@ test('completed task opens the delivery view first and keeps process diagnostics
   await expect(page.locator('#resultView')).toBeVisible();
 });
 
+test('generation flow console shows evidence, checkpoint, and polling recovery without a giant graph', async ({ page }) => {
+  await page.goto('/?demo=1');
+  await page.evaluate(() => {
+    const id='flow-contract';
+    S.jobs=[{job_id:id,name:'政府采购响应文件',state:'running',current_action:'正在提取目录',
+      last_activity_at:new Date().toISOString(),flow:{version:1,current_phase:'environment',recoverable:true,
+        current_action:'正在检查生成组件',checkpoint:{step:0,label:'任务文件已保存'},phases:[
+          {id:'environment',label:'环境准备',state:'active',detail:'正在检查生成组件',evidence:'preflight.json',checks:[
+            {id:'storage',label:'任务目录',state:'done',detail:'任务文件可以保存'},
+            {id:'runtime',label:'生成组件',state:'active',detail:'正在自动修复'}]},
+          {id:'parse',label:'招标解析',state:'pending',detail:'等待读取招标文件'},
+          {id:'plan',label:'响应规划',state:'pending'}, {id:'write',label:'并行撰写',state:'pending'},
+          {id:'assemble',label:'Word 装配',state:'pending'}, {id:'deliver',label:'交付质检',state:'pending'}
+        ]}}];
+    S.active=id;S.processView[id]=true;S.streamState[id]={mode:'connected',failures:0};
+    renderMain();renderFlowConsole();
+  });
+
+  await expect(page.locator('#flowHost')).toBeVisible();
+  await expect(page.locator('#flowHost')).toContainText('生成流程台');
+  await expect(page.locator('#flowHost')).toContainText('正在检查生成组件');
+  await expect(page.locator('#flowHost')).toContainText('任务目录');
+  await expect(page.locator('#flowHost')).toContainText('实时连接');
+  expect(await page.locator('#flowHost .flow-phase').count()).toBe(6);
+
+  await page.evaluate(() => {
+    recordStreamFailure('flow-contract');
+    recordStreamFailure('flow-contract');
+    recordStreamFailure('flow-contract');
+  });
+  await expect(page.locator('#flowHost')).toContainText('轮询保障中');
+  await page.evaluate(() => markStreamOpen('flow-contract'));
+  await expect(page.locator('#flowHost')).toContainText('连接已恢复');
+});
+
 test('stable mode explains disabled pause and runtime fallback keeps technical text in diagnostics', async ({ page }) => {
   await page.goto('/?demo=1');
   await page.evaluate(() => {
@@ -166,4 +201,134 @@ test('stable mode explains disabled pause and runtime fallback keeps technical t
   await page.locator('#problemHost').getByRole('button',{name:'查看原因'}).click();
   await expect(page.locator('#diagnosticSheet')).toBeVisible();
   await expect(page.locator('#diagnosticDetail')).toContainText('90 秒');
+});
+
+test('one-click diagnostics becomes visible immediately above the problem card', async ({ page }) => {
+  await page.route('**/v1/diagnostics', async route => {
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    await route.continue();
+  });
+  await page.goto('/?demo=1');
+  await page.evaluate(() => presentProblem({
+    level:'error', title:'任务未完成', text:'生成组件没有启动', detail:'spawn failed',
+    actions:[{act:'diagnose',label:'一键诊断'}]
+  }));
+
+  await page.locator('#problemHost').getByRole('button',{name:'一键诊断'}).click();
+
+  await expect(page.locator('#diagnosticSheet')).toBeVisible();
+  await expect(page.locator('#diagnosticStatus')).toContainText('正在检查');
+  await expect(page.locator('#problemHost')).toBeHidden();
+  const layers = await page.evaluate(() => ({
+    diagnostic:Number(getComputedStyle(el('diagnosticSheet')).zIndex),
+    problem:Number(getComputedStyle(el('problemHost')).zIndex)
+  }));
+  expect(layers.diagnostic).toBeGreaterThan(layers.problem);
+});
+
+test('desktop engine startup failure is visible and offers diagnostics instead of silent demo mode', async ({ page }) => {
+  await page.goto('/?demo=1');
+  await page.evaluate(() => showEngineOffline());
+
+  await expect(page.locator('#conn')).toContainText('本地引擎未启动');
+  await expect(page.locator('#demoTag')).toContainText('无法生成真实文件');
+  await expect(page.locator('#problemHost')).toContainText('本地生成方式没有启动');
+  await expect(page.locator('#problemHost').getByRole('button', {name:'一键诊断'})).toBeVisible();
+  await expect(page.locator('#heroSub')).not.toContainText('流程可完整体验');
+});
+
+test('uploaded bid can be reviewed, saved as a complete template, and used by a staged job', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#conn')).toContainText('已连接', { timeout: 15_000 });
+  await page.evaluate(() => { njOpen(); njShowStep(2); });
+
+  const deriveResponse = page.waitForResponse(response =>
+    response.url().includes('/v1/templates/derive') && response.request().method() === 'POST');
+  await page.evaluate(async () => {
+    const markdown = [
+      '# 某单位软件平台项目资格与符合性响应',
+      '# 某单位软件平台项目理解与总体方案',
+      '# 某单位软件平台功能与技术参数响应',
+      '# 某单位软件平台实施进度计划',
+      '# 某单位软件平台数据安全与服务保障',
+      '# 张三项目经理团队配置',
+    ].join('\n\n');
+    await deriveTemplateFromFile(new File([markdown], '优秀历史标书.md', {type:'text/markdown'}));
+  });
+  expect((await deriveResponse).status()).toBe(200);
+  await expect(page.locator('#njTemplateDraft')).toContainText('查看完整设计思路');
+  await expect(page.locator('#njTemplateDraft')).toContainText('评分响应');
+  await expect(page.locator('#njTemplateDraft')).not.toContainText('某单位');
+  await expect(page.locator('#njTemplateDraft')).not.toContainText('张三');
+
+  await page.locator('#njDerivedTemplateName').fill('软件项目复用模板');
+  const saveResponse = page.waitForResponse(response =>
+    /\/v1\/templates$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST');
+  await page.getByRole('button', {name:'确认并保存模板'}).click();
+  const saved = await (await saveResponse).json();
+  expect(saved.id).toMatch(/^tpl-/);
+  await expect(page.locator('#njTemplate')).toHaveValue(saved.id);
+
+  await page.evaluate(() => {
+    const tender = new File(['# 软件信息化平台采购文件\n功能参数、实施、数据安全、信创和运维要求。'], '软件采购文件.md', {type:'text/markdown'});
+    NJ.items=[{file:tender,rel:tender.name}];NJ.tenderIdx=0;njRender();
+  });
+  const jobResponse = page.waitForResponse(response =>
+    /\/v1\/jobs$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST');
+  await page.evaluate(() => njStart(false));
+  const job = await (await jobResponse).json();
+  const taskPath = path.join(process.env.BID_HOME, 'jobs', job.job_id, '任务.json');
+  const stored = JSON.parse(fs.readFileSync(taskPath, 'utf8'));
+  expect(stored.template_id).toBe(saved.id);
+  expect(stored.template_snapshot.package.outline.length).toBeGreaterThanOrEqual(5);
+  expect(JSON.stringify(stored.template_snapshot)).not.toContain('某单位');
+  expect(JSON.stringify(stored.template_snapshot)).not.toContain('张三');
+});
+
+test('double start during delayed recommendation creates only one job', async ({ page }) => {
+  let recommends = 0, jobs = 0;
+  await page.route('**/v1/templates/recommend', async route => {
+    recommends += 1;
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await route.continue();
+  });
+  page.on('request', request => {
+    if(request.method() === 'POST' && /\/v1\/jobs$/.test(new URL(request.url()).pathname)) jobs += 1;
+  });
+  await page.goto('/');
+  await expect(page.locator('#conn')).toContainText('已连接', { timeout: 15_000 });
+  await page.evaluate(() => {
+    njOpen();
+    const tender = new File(['# 工程施工采购\n施工组织设计、工期、质量安全。'], '工程采购.md', {type:'text/markdown'});
+    NJ.items=[{file:tender,rel:tender.name}];NJ.tenderIdx=0;el('njTemplate').value='auto';njRender();
+  });
+
+  await page.evaluate(() => Promise.all([njStart(false), njStart(false)]));
+
+  expect(recommends).toBe(1);
+  expect(jobs).toBe(1);
+  expect(await page.evaluate(() => NJ.starting)).toBe(false);
+});
+
+test('starting an auto-template job does not wait for preview recommendation', async ({ page }) => {
+  await page.route('**/v1/templates/recommend', async route => {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  await page.goto('/');
+  await expect(page.locator('#conn')).toContainText('已连接', { timeout: 15_000 });
+  await page.evaluate(() => {
+    njOpen();
+    const tender = new File(['# 工程施工采购\n施工组织设计、工期、质量安全。'], '工程采购.md', {type:'text/markdown'});
+    NJ.items=[{file:tender,rel:tender.name}];NJ.tenderIdx=0;el('njTemplate').value='auto';njRender();
+  });
+
+  const jobRequest = page.waitForRequest(request =>
+    request.method() === 'POST' && /\/v1\/jobs$/.test(new URL(request.url()).pathname),
+    {timeout: 600});
+  await page.evaluate(() => { window.__njStartPromise = njStart(false); });
+  await jobRequest;
+  await page.evaluate(() => window.__njStartPromise);
+
+  expect(await page.evaluate(() => NJ.starting)).toBe(false);
 });

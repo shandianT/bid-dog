@@ -4,7 +4,7 @@
 **给谁用** — 拿到 Key 的同事和客户：装上、粘 Key、拖文件，不用注册 AI 账号。写代码的看文末架构小节。
 **怎么开始** — 到 [Releases](https://github.com/shandianT/bid-dog/releases/latest) 下载 dmg / exe → 打开后粘 Key并测试连接 → 上传招标文件。模型和运行方式会自动选择推荐配置。
 
-[![release](https://img.shields.io/badge/release-v0.19.0-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
+[![release](https://img.shields.io/badge/release-v0.19.1-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
 [![build](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/macOS%20Apple%20Silicon%20%7C%20Windows%20x64-111111)
 
@@ -53,8 +53,8 @@
 
 | 系统 | 安装包 | 说明 |
 |---|---|---|
-| macOS | [`bid-dog_0.19.0_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.19.0/bid-dog_0.19.0_aarch64.dmg) | Apple Silicon（M 系列） |
-| Windows | [`bid-dog_0.19.0_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.19.0/bid-dog_0.19.0_x64-setup.exe) | Windows 10 / 11 x64 |
+| macOS | [`bid-dog_0.19.1_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.19.1/bid-dog_0.19.1_aarch64.dmg) | Apple Silicon（M 系列） |
+| Windows | [`bid-dog_0.19.1_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.19.1/bid-dog_0.19.1_x64-setup.exe) | Windows 10 / 11 x64 |
 
 当前没有 Intel Mac 和 Windows ARM 安装包，请勿下载不匹配架构的安装包。官网会始终显示安装包的真实支持范围和签名状态。
 
@@ -67,7 +67,7 @@
   也可以在「系统设置 → 隐私与安全性」里点「仍要打开」。
 - **Windows** 若弹出 SmartScreen 蓝色提示：点「更多信息」→「仍要运行」。
 
-v0.19.0 的桌面 App 使用独立 WebView 会话和带版本号的入口地址，只连接本版本的 `127.0.0.1:18900` 引擎，不再读取旧页面缓存或回退到历史端口。覆盖前必须真正退出仍在托盘运行的旧 App；新版成功启动后不会再把旧引擎显示成当前版本。
+v0.19.1 的桌面 App 使用独立 WebView 会话和带版本号的入口地址，只连接本版本的 `127.0.0.1:18901` 引擎，不再读取旧页面缓存或回退到历史端口。覆盖前必须真正退出仍在托盘运行的旧 App；新版成功启动后不会再把旧引擎显示成当前版本。
 
 ---
 
@@ -75,13 +75,15 @@ v0.19.0 的桌面 App 使用独立 WebView 会话和带版本号的入口地址�
 
 1. **填写 Key** —— 首次打开只显示 Key 输入框和本地保存说明，不要求理解网关、模型 ID 或执行工具。
 2. **测试连接** —— 点一次即可完成真实连接检查，并自动选择推荐模型、标准模式和内置运行方式；失败时会给出“自动修复 / 重新连接 / 一键诊断”等明确操作。
-3. **上传文件** —— 选择招标文件后，可选“政府采购 / 工程施工 / 服务类”模板和项目分类；补充素材与特别要求默认折叠，确认摘要后开始生成。
+3. **上传文件** —— 选择招标文件后，系统会按采购对象、评标办法和交付类型推荐场景模板；也可上传一份自有优秀历史标书生成模板草稿。完整设计思路可展开查看，模板名称和目录可修改，确认评分响应、材料槽位和质检规则后再保存或开始生成。
 
 已有任务或已有可用配置的老用户会自动跳过不需要的首次步骤。Key 发生变化时只会重新测试连接，不会让你从头设置。
 
+模板不是一段提示词。六类内置场景模板会把建议目录、评分点响应、标准表格、材料槽位、Word 格式和出件质检一起带入任务；任何冲突都以本次招标文件原文为准。上传历史标书生成模板时，原始标题和表头会被泛化为可复用的章节、字段语义，不复用旧项目客户名、报价和正文事实；提取结构不足的草稿不能保存。设计和使用边界见 [场景模板系统](docs/场景模板系统.md)，当前 A/B 证据与限制见 [模板效果验证](docs/模板效果验证.md)。
+
 不用注册账号、不用登录 AI 服务、不用装 Node.js 和 Python、不用开终端。不填配置也能先跑一遍内置演示。
 
-任务只显示五种用户状态：**准备中、生成中、需要你确认、已完成、未完成**。每项都显示当前动作、最后活动和预计剩余时间；开始生成前连接慢时会自动改用稳定运行方式，已经开始输出后若断开则安全停住并保留内容。OpenCode、CLI、探活等技术原因只在诊断详情里。
+任务只显示五种用户状态：**准备中、生成中、需要你确认、已完成、未完成**。过程页用“环境准备 → 招标解析 → 响应规划 → 并行撰写 → Word 装配 → 交付质检”六段流程展示当前动作、真实检查点、最近活动和预计剩余时间。页面事件流连续断开后会自动进入轮询保障，恢复后继续实时读取；前端断线不会被误报成后台任务停止。OpenCode、CLI、探活等技术原因只在诊断详情里。
 
 完成后默认先看交付结果：主 Word、目录、技术/商务偏差表和关键检查结论，以及“打开、下载、继续修改”。运行日志和引擎状态收在第二层。继续修改会基于上一版产物创建新版本，不会把整份标书从头生成或覆盖父版本。
 

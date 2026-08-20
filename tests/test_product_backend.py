@@ -4,6 +4,7 @@ import threading
 import zipfile
 from pathlib import Path
 
+import pytest
 from docx import Document
 from fastapi.testclient import TestClient
 
@@ -259,6 +260,7 @@ def test_outer_post_dispatch_exception_keeps_technical_detail_only_in_diagnostic
     meta["oc_session"] = "session-1"
     engine.write_json(str(job / "任务.json"), meta)
     monkeypatch.setattr(engine, "oc_run", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("low-level opencode crash")))
+    monkeypatch.setattr(engine, "ensure_default_shell", lambda *_args, **_kwargs: (True, "ready"))
     monkeypatch.setattr(engine, "settle", lambda *_args, **_kwargs: {"state": "stopped"})
 
     engine.agent_via_server_or_cli(str(job), "prompt", ["unused"])
@@ -485,6 +487,175 @@ def test_default_templates_and_crud(engine):
         assert changed.json()["name"] == "医疗设备标"
         assert client.delete("/v1/templates/%s" % template_id).status_code == 200
         assert all(item["id"] != template_id for item in client.get("/v1/templates").json())
+
+
+def test_builtin_templates_are_complete_scene_packages(engine):
+    with TestClient(engine.app) as client:
+        templates = {item["id"]: item for item in client.get("/v1/templates").json()}
+
+    assert {"government", "government-it", "goods", "construction", "service", "consulting"} <= set(templates)
+    for template_id in ("government", "government-it", "goods", "construction", "service", "consulting"):
+        package = templates[template_id]["package"]
+        assert package["schema_version"] == 1
+        assert package["priority_rule"] == "招标文件原文高于模板；冲突时以招标文件为准"
+        assert len(package["outline"]) >= 5
+        assert package["scoring_focus"]
+        assert package["tables"]
+        assert package["material_slots"]
+        assert package["quality_rules"]
+        assert package["sources"]
+        assert all(source["title"] and source["issuer"] and source["url"] for source in package["sources"])
+
+
+def test_auto_template_recommendation_compiles_scene_rules_into_job_prompt(engine):
+    tender = (
+        "# 工程施工总承包招标文件\n"
+        "评分内容包括施工组织设计、施工进度计划、质量保证、安全文明施工、项目管理机构和应急预案。\n"
+    ).encode("utf-8")
+
+    with TestClient(engine.app) as client:
+        response = client.post(
+            "/v1/jobs",
+            files={"tender": ("工程施工采购.md", tender, "text/markdown")},
+            data={"template_id": "auto", "start": "0", "name": "工程施工测试", "prompt": "重点逐项对应评分分值。"},
+        )
+
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+    stored = engine.read_json(str(Path(engine.jpath(job_id)) / "任务.json"), {})
+    assert stored["template_id"] == "construction"
+    assert stored["template_snapshot"]["package"]["scene"]["category"] == "engineering_construction"
+    assert stored["template_recommendation"]["confidence"] > 0
+    prompt = stored["prompt"]
+    assert "招标文件原文高于模板" in prompt
+    assert "施工组织设计" in prompt
+    assert "进度计划" in prompt
+    assert "质量安全" in prompt
+    assert "重点逐项对应评分分值" in prompt
+
+
+@pytest.mark.parametrize("requested", ["auto", "default", ""])
+def test_default_template_aliases_all_freeze_a_real_scene_snapshot(engine, requested):
+    """Regression: legacy/default clients must not create a template-less task or 400."""
+    tender = (
+        "# 工程施工总承包招标文件\n"
+        "施工组织设计、施工进度计划、质量保证、安全文明施工和项目管理机构。\n"
+    ).encode("utf-8")
+
+    with TestClient(engine.app) as client:
+        response = client.post(
+            "/v1/jobs",
+            files={"tender": ("工程施工采购.md", tender, "text/markdown")},
+            data={"template_id": requested, "start": "0", "name": "模板兼容测试"},
+        )
+
+    assert response.status_code == 200
+    stored = engine.read_json(str(Path(engine.jpath(response.json()["job_id"])) / "任务.json"), {})
+    assert stored["template_id"] == "construction"
+    assert stored["template_recommendation"]["template_id"] == "construction"
+    assert stored["template_snapshot"]["id"] == "construction"
+    assert stored["template_snapshot"]["package"]["outline"]
+
+
+def test_auto_template_recommendation_uses_main_document_selected_from_files(engine):
+    tender = (
+        "# 工程施工总承包招标文件\n"
+        "施工组织设计、施工进度计划、质量安全、文明施工和工程量清单。\n"
+    ).encode("utf-8")
+
+    with TestClient(engine.app) as client:
+        response = client.post(
+            "/v1/jobs",
+            files=[("files", ("工程施工采购.md", tender, "text/markdown"))],
+            data={"template_id": "auto", "start": "0", "name": "仅文件列表上传", "relpaths": "[\"工程施工采购.md\"]"},
+        )
+
+    assert response.status_code == 200
+    stored = engine.read_json(str(Path(engine.jpath(response.json()["job_id"])) / "任务.json"), {})
+    assert stored["template_id"] == "construction"
+
+
+def test_template_preview_and_job_use_the_same_scene_hint(engine):
+    tender = "# 采购文件\n按采购要求响应。".encode("utf-8")
+    scene_hint = "本项目是软件信息化平台建设，包含系统集成、数据安全、信创和运维。"
+
+    with TestClient(engine.app) as client:
+        preview = client.post(
+            "/v1/templates/recommend",
+            files={"file": ("采购文件.md", tender, "text/markdown")},
+            data={"scene_hint": scene_hint},
+        )
+        job = client.post(
+            "/v1/jobs",
+            files={"tender": ("采购文件.md", tender, "text/markdown")},
+            data={"template_id": "auto", "start": "0", "name": "一致性测试", "prompt": scene_hint},
+        )
+
+    assert preview.status_code == 200
+    assert job.status_code == 200
+    stored = engine.read_json(str(Path(engine.jpath(job.json()["job_id"])) / "任务.json"), {})
+    assert preview.json()["template_id"] == "government-it"
+    assert stored["template_id"] == preview.json()["template_id"]
+
+
+def test_uploaded_good_bid_derives_reviewable_template_without_copying_body_facts(engine):
+    document = Document()
+    document.add_heading("投标文件", level=1)
+    document.add_heading("资格与符合性响应", level=1)
+    document.add_paragraph("客户名称：深圳市某局，投标报价人民币123456元。")
+    document.add_heading("技术方案", level=1)
+    document.add_heading("实施进度计划", level=2)
+    document.add_paragraph("本项目专属实施内容，不应复制进入模板。")
+    document.add_heading("质量保证与售后服务", level=1)
+    table = document.add_table(rows=2, cols=3)
+    for index, value in enumerate(("序号", "招标要求", "投标响应")):
+        table.rows[0].cells[index].text = value
+    project_data = document.add_table(rows=1, cols=3)
+    for index, value in enumerate(("某单位总部", "平台一期项目", "13800138000")):
+        project_data.rows[0].cells[index].text = value
+    buffer = io.BytesIO()
+    document.save(buffer)
+
+    with TestClient(engine.app) as client:
+        response = client.post(
+            "/v1/templates/derive",
+            files={"file": ("优秀历史标书.docx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+            data={"name": "信息化项目历史模板"},
+        )
+
+    assert response.status_code == 200
+    draft = response.json()
+    assert draft["requires_review"] is True
+    assert draft["validation"]["score"] >= 70
+    assert draft["package"]["generated_from"]["kind"] == "uploaded_bid"
+    outline_titles = [item["title"] for item in draft["package"]["outline"]]
+    assert "资格与符合性响应" in outline_titles
+    assert "功能与技术响应" in outline_titles
+    assert "实施进度与工期保障" in outline_titles
+    payload = json.dumps(draft, ensure_ascii=False)
+    assert "深圳市某局" not in payload
+    assert "123456" not in payload
+    assert "某单位总部" not in payload
+    assert "13800138000" not in payload
+    assert "本项目专属实施内容" not in payload
+
+
+def test_thin_uploaded_template_cannot_bypass_review_by_calling_save_api(engine):
+    with TestClient(engine.app) as client:
+        derived = client.post(
+            "/v1/templates/derive",
+            files={"file": ("片段.md", "# 技术方案\n只有一个章节。".encode(), "text/markdown")},
+        )
+        draft = derived.json()
+        saved = client.post(
+            "/v1/templates",
+            json={key: draft[key] for key in ("name", "description", "prompt", "settings", "package")},
+        )
+
+    assert derived.status_code == 200
+    assert draft["validation"]["ready"] is False
+    assert saved.status_code == 400
+    assert "结构不足" in saved.json()["error"]
 
 
 def test_job_creation_saves_an_immutable_template_snapshot(engine):

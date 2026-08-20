@@ -16,18 +16,23 @@ if errorlevel 1 (
 )
 echo [1/4] Python 已就绪
 for /f "delims=" %%v in ('python --version 2^>^&1') do echo       %%v
+set DEPS=fastapi uvicorn python-multipart python-docx pypdf certifi
 
 if not exist ".venv\Scripts\python.exe" (
   echo [2/4] 首次运行,正在准备运行环境(约 1~3 分钟,请勿关闭窗口)...
   python -m venv .venv || (echo 创建环境失败 & pause & exit /b 1)
   .venv\Scripts\python -m pip install --quiet --upgrade pip
-  .venv\Scripts\python -m pip install --quiet fastapi uvicorn python-multipart python-docx certifi
-  if errorlevel 1 (
-    echo       默认源较慢,改用国内镜像重试...
-    .venv\Scripts\python -m pip install --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple fastapi uvicorn python-multipart python-docx certifi || (echo 依赖安装失败,请检查网络 & pause & exit /b 1)
-  )
 ) else (
   echo [2/4] 运行环境已就绪
+)
+.venv\Scripts\python -c "import fastapi,uvicorn,multipart,docx,pypdf,certifi" >nul 2>&1
+if errorlevel 1 (
+  echo       正在补齐或更新运行依赖...
+  .venv\Scripts\python -m pip install --quiet %DEPS%
+  if errorlevel 1 (
+    echo       默认源较慢,改用国内镜像重试...
+    .venv\Scripts\python -m pip install --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple %DEPS% || (echo 依赖安装失败,请检查网络 & pause & exit /b 1)
+  )
 )
 
 set PORT=8848

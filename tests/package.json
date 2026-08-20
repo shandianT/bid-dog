@@ -1,7 +1,7 @@
 {
   "name": "bid-dog-offline-browser-tests",
   "private": true,
-  "version": "0.19.0",
+  "version": "0.19.1",
   "scripts": {
     "test": "playwright test --config=playwright.config.js"
   },

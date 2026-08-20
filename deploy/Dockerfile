@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-RUN pip install --no-cache-dir fastapi uvicorn python-multipart python-docx certifi
+RUN pip install --no-cache-dir fastapi uvicorn python-multipart python-docx pypdf certifi
 
 COPY server/ /app/server/
 COPY app/src/ /app/web/
