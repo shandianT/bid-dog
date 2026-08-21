@@ -833,7 +833,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
-const BUNDLED_ENGINE_VERSION = '0.19.3';
+const BUNDLED_ENGINE_VERSION = '0.19.4';
 /* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后，旧 PyInstaller 进程可能仍驻留；
    若继续探测历史端口，就会把旧引擎误认成新版，甚至在可执行文件被替换后返回 500。 */
 const DESKTOP_ENGINE = 'http://127.0.0.1:18901';
@@ -1363,6 +1363,7 @@ function showEngineOffline(){
     : '生成环境没有启动；应用会继续重连，也可以立即运行诊断查看缺失组件和启动路径';
   renderTasks(); renderMain();
   presentProblem({
+    job_id:'_global',
     level:'error',
     title:S.stale ? '本地生成引擎需要更新' : '本地生成引擎没有启动',
     text:S.stale

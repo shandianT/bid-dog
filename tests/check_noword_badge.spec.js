@@ -228,13 +228,26 @@ test('one-click diagnostics becomes visible immediately above the problem card',
 
 test('desktop engine startup failure is visible and offers diagnostics instead of silent demo mode', async ({ page }) => {
   await page.goto('/?demo=1');
-  await page.evaluate(() => showEngineOffline());
+  await page.evaluate(() => {
+    S.active = 'running-job';
+    showEngineOffline();
+  });
 
   await expect(page.locator('#conn')).toContainText('本地引擎未启动');
   await expect(page.locator('#demoTag')).toContainText('无法生成真实文件');
   await expect(page.locator('#problemHost')).toContainText('本地生成方式没有启动');
   await expect(page.locator('#problemHost').getByRole('button', {name:'一键诊断'})).toBeVisible();
   await expect(page.locator('#heroSub')).not.toContainText('流程可完整体验');
+
+  const problemScopes = await page.evaluate(() => Object.keys(S.problems));
+  expect(problemScopes).toContain('_global');
+  expect(problemScopes).not.toContain('running-job');
+
+  await page.evaluate(() => {
+    delete S.problems._global;
+    renderProblem();
+  });
+  await expect(page.locator('#problemHost')).toBeHidden();
 });
 
 test('uploaded bid can be reviewed, saved as a complete template, and used by a staged job', async ({ page }) => {
