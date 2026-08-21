@@ -243,7 +243,7 @@ def test_post_dispatch_error_is_calm_and_offers_real_resume_not_rerun(engine, jo
     _prepare_running_oc(engine, monkeypatch)
     monkeypatch.setattr(engine, "oc_turn", lambda _sid: (True, "synthetic low-level stream error"))
 
-    assert engine.oc_run(str(job), "work") == engine.OC_RUN_INTERRUPTED
+    assert engine.oc_run(str(job), "work", allow_cli_fallback=False) == engine.OC_RUN_INTERRUPTED
 
     errors = [event for event in events(job) if event.get("type") == "error"]
     assert errors
@@ -279,13 +279,148 @@ def test_stall_is_calm_and_technical_timeout_is_only_in_diagnostics(engine, job,
     monkeypatch.setattr(engine, "OC_STALL", 0)
     monkeypatch.setattr(engine, "oc_turn", lambda _sid: (False, ""))
 
-    assert engine.oc_run(str(job), "work") == engine.OC_RUN_INTERRUPTED
+    assert engine.oc_run(str(job), "work", allow_cli_fallback=False) == engine.OC_RUN_INTERRUPTED
 
     texts = [str(event.get("text") or "") for event in events(job) if event.get("type") == "message"]
     assert texts[-1] == "连接暂时没有响应，任务已安全停下；已生成的内容都已保留。"
     assert "执行外壳" not in texts[-1]
     diagnostic = json.loads((job / "diagnostics.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert diagnostic["code"] == "opencode_stalled"
+
+
+def test_server_stall_before_body_automatically_falls_back_to_cli_once(engine, job, monkeypatch):
+    """Catch the customer failure where parsing exists but the managed model session goes silent."""
+    _prepare_running_oc(engine, monkeypatch)
+    (job / "招标文件_解析版.md").write_text("# 解析结果\n", encoding="utf-8")
+    monkeypatch.setattr(engine, "OC_STALL", 0)
+    monkeypatch.setattr(engine, "OC_SLOW", 999)
+    monkeypatch.setattr(engine, "oc_turn", lambda _sid: (False, ""))
+
+    assert engine.oc_run(str(job), "work") == engine.OC_RUN_FALLBACK
+
+    runtime = engine.read_json(str(job / "runtime.json"), {})
+    assert runtime["execution_path"] == "cli_compat"
+    assert runtime["fallback_count"] == 1
+    texts = [str(event.get("text") or "") for event in events(job)]
+    assert sum("自动切换稳定模式" in text for text in texts) == 1
+
+
+def test_server_stall_after_body_never_replays_the_job(engine, job, monkeypatch):
+    _prepare_running_oc(engine, monkeypatch)
+    (job / "投标文件_技术标.md").write_text("# 已写正文\n\n不得从头覆盖。\n", encoding="utf-8")
+    monkeypatch.setattr(engine, "OC_STALL", 0)
+    monkeypatch.setattr(engine, "OC_SLOW", 999)
+    monkeypatch.setattr(engine, "oc_turn", lambda _sid: (False, ""))
+
+    assert engine.oc_run(str(job), "work") == engine.OC_RUN_INTERRUPTED
+    runtime = engine.read_json(str(job / "runtime.json"), {})
+    assert runtime.get("execution_path") != "cli_compat"
+    assert "不得从头覆盖" in (job / "投标文件_技术标.md").read_text(encoding="utf-8")
+
+
+def test_preflight_warns_when_macos_runs_from_translocated_dmg(engine, job, monkeypatch):
+    monkeypatch.setattr(engine.sys, "executable", "/private/var/folders/x/AppTranslocation/ABC/d/中标狗.app/Contents/MacOS/bid-engine")
+    monkeypatch.setattr(engine, "resolve_cli", lambda *_a, **_k: "/bundle/opencode-cli")
+    engine.write_json(engine.conf_path(), {
+        "engine": {"kind": "s2", "s2_key": "runtime-test-key", "s2_model": "senseaudio-s2"}
+    })
+
+    result = engine.generation_preflight(str(job))
+    location = next(item for item in result["checks"] if item["id"] == "app_location")
+    assert location["status"] == "warning"
+    assert "应用程序" in location["message"]
+
+
+def test_agent_self_test_uses_the_same_managed_session_path_as_real_jobs(engine, monkeypatch):
+    """A passing short CLI probe must not hide a broken production server-session path."""
+    engine.write_json(engine.conf_path(), {
+        "engine": {
+            "kind": "s2", "s2_base_url": "https://gateway.invalid/v1",
+            "s2_key": "runtime-test-key", "s2_model": "senseaudio-s2",
+            "s2_verify_ssl": True,
+        }
+    })
+    monkeypatch.setattr(engine, "_openai_req", lambda *_a, **_k: {"data": [{"id": "senseaudio-s2"}]})
+    monkeypatch.setattr(engine, "resolve_cli", lambda *_a, **_k: "/synthetic/opencode")
+    monkeypatch.setattr(engine, "oc_serve", lambda *_a, **_k: "http://127.0.0.1:12345")
+    monkeypatch.setattr(engine, "oc_probe", lambda: (False, "managed session did not finish"))
+
+    class PassingCliProbe:
+        returncode = 0
+        stdout = "中标狗连接成功"
+        stderr = ""
+
+    monkeypatch.setattr(engine, "_tracked_detached_run", lambda *_a, **_k: PassingCliProbe())
+    with TestClient(engine.app) as client:
+        response = client.post("/v1/agent/test")
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is False
+    assert result["execution_path"] == "opencode_server"
+    assert "正式生成链路" in result["error"]
+
+
+def test_flow_exposes_actual_expected_and_remaining_time_for_each_phase(engine, job, monkeypatch):
+    monkeypatch.setattr(engine, "now", lambda: "2026-08-21 10:05:00")
+    engine.write_json(str(job / "任务.json"), {
+        "name": "耗时测试", "tender": "招标文件.docx", "created_at": "2026-08-21 10:00:00",
+    })
+    (job / "events.jsonl").write_text(
+        "\n".join([
+            json.dumps({"ts": "2026-08-21 10:00:00", "type": "progress", "stage": "环境检查", "step": 0, "pct": 0}),
+            json.dumps({"ts": "2026-08-21 10:01:00", "type": "progress", "stage": "读取招标文件", "step": 1, "pct": 2}),
+        ]) + "\n", encoding="utf-8",
+    )
+    engine.write_json(str(job / "progress.json"), {
+        "type": "progress", "stage": "读取招标文件", "step": 1, "pct": 2,
+        "total": 12, "ts": "2026-08-21 10:01:00",
+    })
+    owner = engine._reserve_running(job.name)
+    try:
+        with TestClient(engine.app) as client:
+            item = _job_by_id(client)
+    finally:
+        engine._release_running(job.name, owner)
+
+    phases = {phase["id"]: phase for phase in item["flow"]["phases"]}
+    assert phases["environment"]["elapsed_seconds"] == 60
+    assert phases["environment"]["expected_seconds"] == 60
+    assert phases["parse"]["elapsed_seconds"] == 240
+    assert phases["parse"]["expected_seconds"] == 390
+    assert phases["parse"]["remaining_seconds"] == 150
+    assert phases["parse"]["estimate_source"] == "reference"
+    assert phases["write"]["expected_seconds"] == 1200
+    assert item["flow"]["remaining_seconds"] == 2160
+    assert item["eta_seconds"] == 2160
+    assert item["flow"]["stalled"] is True
+    assert item["flow"]["current_action"] == "模型响应偏慢，正在持续检查连接"
+
+
+def test_flow_silence_warning_is_not_hidden_by_a_long_historical_phase(engine, job, monkeypatch):
+    monkeypatch.setattr(engine, "now", lambda: "2026-08-21 10:05:00")
+    monkeypatch.setattr(engine, "stage_stats", lambda: {
+        "stages": [{"step": 1, "avg_s": 1200, "from_history": True}],
+    })
+    engine.write_json(str(job / "任务.json"), {
+        "name": "慢阶段心跳测试", "tender": "招标文件.docx",
+        "created_at": "2026-08-21 10:00:00",
+    })
+    (job / "招标文件_解析版.md").write_text("# 解析结果\n", encoding="utf-8")
+    (job / "events.jsonl").write_text(
+        json.dumps({"ts": "2026-08-21 10:01:00", "type": "progress",
+                    "stage": "读取招标文件", "step": 1, "pct": 2}) + "\n",
+        encoding="utf-8",
+    )
+    progress = {"type": "progress", "stage": "读取招标文件", "step": 1,
+                "pct": 2, "total": 12, "ts": "2026-08-21 10:01:00"}
+
+    flow = engine.job_flow(str(job), state="running", prog=progress)
+
+    assert flow["expected_seconds"] == 1200
+    assert flow["silence_seconds"] == 240
+    assert flow["stalled"] is True
+    assert flow["current_action"] == "模型响应偏慢，正在持续检查连接"
 
 
 def test_runtime_pause_reason_uses_no_implementation_terms(engine, job):

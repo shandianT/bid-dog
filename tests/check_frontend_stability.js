@@ -61,6 +61,7 @@ if (start >= 0 && end > start) {
     deliveryViewModel: typeof deliveryViewModel === 'function' ? deliveryViewModel : null,
     diagnosticCheckView: typeof diagnosticCheckView === 'function' ? diagnosticCheckView : null,
     flowConsoleView: typeof flowConsoleView === 'function' ? flowConsoleView : null,
+    phaseTimingLabel: typeof phaseTimingLabel === 'function' ? phaseTimingLabel : null,
     nextStreamState: typeof nextStreamState === 'function' ? nextStreamState : null,
     streamReconnectDelay: typeof streamReconnectDelay === 'function' ? streamReconnectDelay : null,
   };`, sandbox);
@@ -390,7 +391,8 @@ test('六段流程台只展示后端证据并兼容旧任务', () => {
     checkpoint:{step:1,label:'体检素材'},
     phases:[
       {id:'environment',label:'环境准备',state:'done',detail:'已验证完成',evidence:'preflight.json'},
-      {id:'parse',label:'招标解析',state:'active',detail:'正在提取目录',evidence:'组成与格式规范'},
+      {id:'parse',label:'招标解析',state:'active',detail:'正在提取目录',evidence:'组成与格式规范',
+        elapsed_seconds:270,expected_seconds:480,remaining_seconds:210,estimate_source:'reference'},
       {id:'plan',label:'响应规划',state:'pending'}, {id:'write',label:'并行撰写',state:'pending'},
       {id:'assemble',label:'Word 装配',state:'pending'}, {id:'deliver',label:'交付质检',state:'pending'},
     ],
@@ -400,6 +402,8 @@ test('六段流程台只展示后端证据并兼容旧任务', () => {
   assert.strictEqual(view.checkpoint, '已完成：体检素材');
   assert.strictEqual(view.recoverable, true);
   assert.strictEqual(view.phases[1].state, 'active');
+  assert.strictEqual(typeof pure.phaseTimingLabel, 'function', '缺少阶段耗时文案函数');
+  assert.strictEqual(pure.phaseTimingLabel(view.phases[1]), '已用 4分30秒 · 通常 8分钟 · 预计还需 3分30秒');
   const legacy = pure.flowConsoleView(null, {mode:'idle'}, {step:7,stage:'分章撰写'});
   assert.strictEqual(legacy.phases.length, 6);
   assert.strictEqual(legacy.phases[3].state, 'active');
@@ -443,7 +447,7 @@ test('所有错误动作末尾都有且只有一个诊断包入口', () => {
 test('升级信息仅在确有新版本时出现', () => {
   assert.ok(pure);
   assert.strictEqual(pure.healthUpdateInfo({update: {status: 'pending'}}), null);
-  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.1'}}), null);
+  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.2'}}), null);
   const info = pure.healthUpdateInfo({update: {status: 'available', latest: '0.18.3', url: 'https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.18.3'}});
   assert.strictEqual(info.version, '0.18.3');
   assert.match(info.url, /^https:\/\/github\.com\/shandianT\/bid-dog\/releases\//);
@@ -481,7 +485,7 @@ test('现有 OpenCode 与 Codex 回退入口没有被 v56 覆盖', () => {
 
 test('桌面版只连接当前版本专属引擎，不复用旧版驻留进程', () => {
   const connection = section('const IS_WEB', 'let S =');
-  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.19\.1'/.test(connection), '桌面端没有钉住当前引擎版本');
+  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.19\.2'/.test(connection), '桌面端没有钉住当前引擎版本');
   assert.ok(/DESKTOP_ENGINE\s*=\s*'http:\/\/127\.0\.0\.1:18901'/.test(connection), '桌面端没有使用版本专属端口');
   assert.ok(/IS_WEB\s*\?\s*\[location\.origin\]\s*:\s*\[DESKTOP_ENGINE\]/.test(connection), '桌面端仍会探测历史端口');
   assert.ok(!/8849|8848|8080/.test(connection), '连接候选仍含历史引擎端口');
@@ -494,8 +498,8 @@ test('覆盖安装时 WebView 不复用旧前端缓存或历史引擎地址', ()
   const launchUrl = String(mainWindow.url || '');
   const failures = [];
   if(mainWindow.incognito !== true) failures.push('主窗口必须启用 incognito=true 隔离旧 WebView 缓存');
-  if(!/0\.19\.1/.test(launchUrl) || !/18901/.test(launchUrl))
-    failures.push('主窗口 URL 必须同时包含版本 0.19.1 与专属端口 18901 作为缓存版本戳');
+  if(!/0\.19\.2/.test(launchUrl) || !/18901/.test(launchUrl))
+    failures.push('主窗口 URL 必须同时包含版本 0.19.2 与专属端口 18901 作为缓存版本戳');
   if(!/localStorage\.removeItem\(\s*['"]bid_api['"]\s*\)/.test(html))
     failures.push('新前端启动时必须清除历史 localStorage.bid_api');
   if(/localStorage\.getItem\(\s*['"]bid_api['"]\s*\)/.test(html))

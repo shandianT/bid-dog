@@ -32,7 +32,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.19.1'
+ENGINE_VERSION = '0.19.2'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -229,8 +229,11 @@ def append_diagnostic(job, code, detail, level='warning', **context):
 
 def compatibility_fallback(job, code, detail):
     reason = '当前稳定运行方式暂不支持暂停；如需中止，请使用停止。'
+    runtime = read_json(os.path.join(job, 'runtime.json'), {})
+    fallback_count = max(0, int(runtime.get('fallback_count') or 0)) + 1
     update_runtime(job, execution_path='cli_compat', can_pause=False,
-                   pause_disabled_reason=reason, fallback_reason_code=code)
+                   pause_disabled_reason=reason, fallback_reason_code=code,
+                   fallback_count=fallback_count)
     append_diagnostic(job, code, detail, fallback='cli_compat')
     emit(job, {'type': 'message', 'role': 'agent',
                'text': '连接响应较慢，已自动切换稳定模式，任务正在继续。'})
@@ -2226,7 +2229,14 @@ OC_FAILED_FINISH = {'length', 'content-filter', 'content_filter', 'error',
                     'aborted', 'abort', 'canceled', 'cancelled'}
 OC_FINISH = OC_CLEAN_FINISH | OC_FAILED_FINISH
 OC_QUIET = 25      # 已 finish 且事件流再静这么多秒,才算整单收工
-OC_STALL = 900     # 事件流彻底没动静这么久又没 finish,当卡死处理,别干等三小时
+OC_SLOW = float(os.environ.get('BIDDOG_OC_SLOW_SECONDS', 180))
+OC_STALL = float(os.environ.get('BIDDOG_OC_STALL_SECONDS', 8 * 60))
+
+def _server_fallback_safe(job):
+    """Only replay through the stable CLI path before any bid body exists, once per job."""
+    runtime = read_json(os.path.join(job, 'runtime.json'), {})
+    if int(runtime.get('fallback_count') or 0) >= 1: return False
+    return not _body_mds(job) and not _body_docxs(job)
 
 def oc_turn(sid):
     """这一轮跑完了没有,返回 (done, 出错说明)。
@@ -2523,6 +2533,8 @@ def oc_run(job, prompt, allow_cli_fallback=True):
     agent_line = 0
     current_step = 0
     step_started = time.time()
+    job_sig = cli_activity_signature(job)
+    slow_notified = False
     def drain_progress():
         nonlocal agent_line, current_step, step_started
         agent_line, accepted = drain_agent_events(job, agent_line)
@@ -2542,16 +2554,24 @@ def oc_run(job, prompt, allow_cli_fallback=True):
                 break
             time.sleep(1)
             drain_progress()
+            current_sig = cli_activity_signature(job)
+            if current_sig != job_sig:
+                job_sig = current_sig
+                beat['ts'] = time.time()
             quiet = time.time() - beat['ts']
             done, err = oc_turn(sid)
             if err:
-                append_diagnostic(job, 'opencode_turn_interrupted', err,
-                                  level='error', session_id=sid)
-                emit(job, {'type': 'error',
-                           'text': '连接中断，任务已安全停下；已生成的内容都已保留。',
-                           'actions': [{'act': 'resume', 'label': '从已保存内容继续'},
-                                       {'act': 'open_log', 'label': '查看诊断详情'}]})
                 oc_interrupt(sid)
+                if allow_cli_fallback and _server_fallback_safe(job):
+                    fallback('opencode_turn_interrupted', err)
+                    result = OC_RUN_FALLBACK
+                else:
+                    append_diagnostic(job, 'opencode_turn_interrupted', err,
+                                      level='error', session_id=sid)
+                    emit(job, {'type': 'error',
+                               'text': '连接中断，任务已安全停下；已生成的内容都已保留。',
+                               'actions': [{'act': 'resume', 'label': '从已保存内容继续'},
+                                           {'act': 'open_log', 'label': '查看诊断详情'}]})
                 break
             # 收工要两条同时成立:最新一条 assistant 已经 finish,**并且**事件流也静了。
             # 只看 finish 会在排队的两轮之间踩空 —— 第一轮 stop 的那一瞬,
@@ -2559,16 +2579,27 @@ def oc_run(job, prompt, allow_cli_fallback=True):
             if done and quiet >= OC_QUIET:
                 result = OC_RUN_COMPLETED
                 break
+            if quiet >= OC_SLOW and not slow_notified:
+                slow_notified = True
+                append_diagnostic(job, 'opencode_slow',
+                                  'No meaningful session or file activity for %.1f seconds' % quiet,
+                                  session_id=sid)
+                emit(job, {'type': 'message', 'role': 'agent',
+                           'text': '模型响应比平时慢，正在持续检查连接；已有内容会自动保留。'})
             # 事件流彻底没动静又没 finish:多半卡住了,当面说,别干等三小时
             if quiet >= OC_STALL:
-                append_diagnostic(job, 'opencode_stalled',
-                                  'No session activity for %.1f seconds' % quiet,
-                                  level='error', session_id=sid)
-                emit(job, {'type': 'message', 'role': 'agent',
-                           'text': '连接暂时没有响应，任务已安全停下；已生成的内容都已保留。',
-                           'actions': [{'act': 'resume', 'label': '从已保存内容继续'},
-                                       {'act': 'open_log', 'label': '查看诊断详情'}]})
                 oc_interrupt(sid)
+                detail = 'No meaningful session or file activity for %.1f seconds' % quiet
+                if allow_cli_fallback and _server_fallback_safe(job):
+                    fallback('opencode_stalled', detail)
+                    result = OC_RUN_FALLBACK
+                else:
+                    append_diagnostic(job, 'opencode_stalled', detail,
+                                      level='error', session_id=sid)
+                    emit(job, {'type': 'message', 'role': 'agent',
+                               'text': '连接暂时没有响应，任务已安全停下；已生成的内容都已保留。',
+                               'actions': [{'act': 'resume', 'label': '从已保存内容继续'},
+                                           {'act': 'open_log', 'label': '查看诊断详情'}]})
                 break
     finally:
         drain_progress()
@@ -2994,6 +3025,14 @@ def config_agent_cmd():
     # --dangerously-bypass-approvals-and-sandbox:非交互执行,免"信任目录/审批"卡住(本机自有目录)
     return [resolve_cli('codex', eng) or 'codex', 'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', prompt]
 
+def packaged_location_check(executable=None):
+    path = os.path.abspath(str(executable or sys.executable or ''))
+    if sys.platform == 'darwin' and '/AppTranslocation/' in path:
+        return {'id': 'app_location', 'label': '应用位置', 'status': 'warning',
+                'message': '当前从临时隔离位置运行；请把中标狗拖入“应用程序”后重新打开，路径会更稳定'}
+    return {'id': 'app_location', 'label': '应用位置', 'status': 'pass',
+            'message': '应用安装位置正常'}
+
 def generation_preflight(job, conf=None):
     """Fast local checks shared by task startup and one-click diagnostics."""
     conf = conf or read_json(conf_path(), {})
@@ -3003,6 +3042,7 @@ def generation_preflight(job, conf=None):
     storage_ok = os.path.isdir(job) and os.access(job, os.W_OK)
     checks.append({'id': 'storage', 'label': '任务目录', 'status': 'pass' if storage_ok else 'fail',
                    'message': '任务文件可以保存' if storage_ok else '任务目录不可写'})
+    checks.append(packaged_location_check())
     skill = skill_dir_conf(conf)
     skill_ok = os.path.isfile(os.path.join(skill, 'SKILL.md'))
     checks.append({'id': 'skill', 'label': '写作规则', 'status': 'pass' if skill_ok else 'fail',
@@ -3197,7 +3237,20 @@ def agent_test():
                     'error': '模型服务本身可以连接，只需修复内置生成组件。点下面的「一键修复生成组件」即可'
                              '(压缩约 60MB、解压约 170MB,不需要登录、不消耗任何订阅额度);'
                              '或手动 npm i -g opencode-ai。'}
-        cmd = [cli, 'run', '--auto', '-m', 'biddog-s2/' + up['model'], probe]
+        # 必须验证正式任务实际使用的常驻会话链路。短命令 `opencode run` 即使成功，
+        # 也证明不了 serve → session → prompt → 完整收尾这条生产路径不会中断。
+        t0 = time.time()
+        if not oc_serve(eng):
+            return {'ok': False, 'execution_path': 'opencode_server',
+                    'error': '正式生成链路未能启动。内置生成组件存在，但常驻会话服务没有就绪。'}
+        ok, why = oc_probe()
+        latency = int((time.time() - t0) * 1000)
+        if not ok:
+            return {'ok': False, 'execution_path': 'opencode_server', 'latency_ms': latency,
+                    'model': up['model'],
+                    'error': '正式生成链路测试失败：%s' % (_safe_secret_text(why, (up['api_key'],)) or '模型会话没有完整返回')}
+        return {'ok': True, 'execution_path': 'opencode_server', 'latency_ms': latency,
+                'model': up['model'], 'reply': '正式生成链路可用'}
     else:   # custom / env:把命令里的占位符换成临时目录,只验证能否跑起来
         raw = os.environ.get('AGENT_CMD') or eng.get('cmd', '')
         if not raw: return {'ok': False, 'error': '还没填自定义命令'}
@@ -3919,6 +3972,35 @@ FLOW_PHASES = [
      'evidence': '自检报告与最终 Word', 'pending': '等待交付检查'},
 ]
 
+PHASE_ENV_EXPECTED_S = 60
+
+def _progress_timeline(job):
+    """Return the first persisted timestamp for each observed progress event."""
+    rows = []
+    try:
+        source = open(os.path.join(job, 'events.jsonl'), encoding='utf-8', errors='ignore')
+    except OSError:
+        return rows
+    with source:
+        for line in source:
+            try: event = json.loads(line)
+            except (TypeError, ValueError): continue
+            if event.get('type') != 'progress': continue
+            try: step = max(0, min(12, int(event.get('step') or 0)))
+            except (TypeError, ValueError): continue
+            stamp = _parse_ts(event.get('ts'))
+            if stamp: rows.append((step, stamp))
+    return sorted(rows, key=lambda item: item[1])
+
+def _phase_expected(definition, stage_rows):
+    if definition['id'] == 'environment': return PHASE_ENV_EXPECTED_S, 'reference', 0
+    selected = [row for row in stage_rows
+                if definition['first'] <= int(row.get('step') or 0) <= definition['last']]
+    expected = int(sum(float(row.get('avg_s') or 0) for row in selected))
+    history_count = sum(1 for row in selected if row.get('from_history'))
+    source = 'history' if selected and history_count == len(selected) else ('mixed' if history_count else 'reference')
+    return expected, source, history_count
+
 def _flow_check_state(status):
     status = str(status or '').lower()
     if status in ('pass', 'demo', 'skipped'): return 'done'
@@ -3937,6 +4019,14 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
     try: step = max(0, min(12, int(prog.get('step') or 0)))
     except (TypeError, ValueError): step = 0
     preflight = read_json(os.path.join(job, 'preflight.json'), {})
+    stage_rows = (stage_stats() or {}).get('stages') or []
+    timeline = _progress_timeline(job)
+    clock = _parse_ts(now()) or datetime.datetime.now()
+    created = _parse_ts(meta.get('created_at')) or (timeline[0][1] if timeline else clock)
+    terminal_at = _parse_ts(outcome.get('ts') or (prog.get('ts') if state in ('done', 'stopped', 'unknown') else ''))
+
+    def first_step_time(predicate):
+        return next((stamp for observed_step, stamp in timeline if predicate(observed_step)), None)
     checks = []
     for item in (preflight.get('checks') or []):
         if not isinstance(item, dict): continue
@@ -3955,7 +4045,7 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
     for idx, definition in enumerate(FLOW_PHASES):
         if definition['id'] == 'environment':
             phase_state = 'done' if step >= 1 or state == 'done' else 'active'
-        elif step >= definition['last'] or state == 'done':
+        elif step > definition['last'] or state == 'done':
             phase_state = 'done'
         elif idx == current_index:
             phase_state = 'active'
@@ -3969,14 +4059,53 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
             detail = reason or _friendly_current_action(prog.get('stage'), definition['pending'])
         phase = {'id': definition['id'], 'label': definition['label'], 'state': phase_state,
                  'detail': detail, 'evidence': definition['evidence']}
+        expected, estimate_source, history_count = _phase_expected(definition, stage_rows)
+        if definition['id'] == 'environment':
+            phase_started = created
+            phase_finished = first_step_time(lambda observed: observed >= 1)
+        else:
+            phase_started = first_step_time(lambda observed: observed >= definition['first'])
+            phase_finished = first_step_time(lambda observed: observed > definition['last'])
+        if not phase_finished and phase_started:
+            if idx == current_index and state == 'running': phase_finished = clock
+            elif idx == current_index and terminal_problem: phase_finished = terminal_at or clock
+            elif phase_state == 'done': phase_finished = terminal_at or _parse_ts(prog.get('ts')) or clock
+        elapsed_seconds = None
+        if phase_started and phase_finished:
+            elapsed_seconds = max(0, int((phase_finished - phase_started).total_seconds()))
+        if phase_state == 'done': remaining_seconds = 0
+        elif phase_state in ('attention', 'failed') and terminal_problem: remaining_seconds = 0
+        elif elapsed_seconds is None: remaining_seconds = expected
+        else: remaining_seconds = max(0, expected - elapsed_seconds)
+        phase.update({'elapsed_seconds': elapsed_seconds, 'expected_seconds': expected,
+                      'remaining_seconds': remaining_seconds,
+                      'overdue_seconds': max(0, (elapsed_seconds or 0) - expected),
+                      'estimate_source': estimate_source, 'history_steps': history_count})
         if definition['id'] == 'environment': phase['checks'] = checks
         phases.append(phase)
 
     checkpoint = {'step': step, 'label': (STAGES[step - 1] if step else '任务文件已保存')}
-    return {'version': 1, 'current_phase': FLOW_PHASES[current_index]['id'],
-            'current_action': reason or phases[current_index]['detail'],
+    last_activity = _parse_ts(_job_last_activity(job, meta, prog, outcome)) or created
+    silence_seconds = max(0, int((clock - last_activity).total_seconds()))
+    # 历史阶段可能很长，但“完全没有任何活动”的心跳警告不能因此被延后。
+    # 这里与 oc_run 的慢响应提示使用同一阈值，界面与执行层才不会给出矛盾状态。
+    slow_after = int(OC_SLOW)
+    stopped_for_stall = terminal_problem and bool(re.search(r'连接中断|长时间无进展|没有响应', reason))
+    stalled = bool((state == 'running' and silence_seconds >= slow_after) or stopped_for_stall)
+    if stalled and state == 'running':
+        phases[current_index]['state'] = 'attention'
+        phases[current_index]['detail'] = '模型响应偏慢，正在持续检查连接'
+    remaining = 0 if state in ('done', 'stopped', 'unknown', 'paused') else sum(
+        int(phase.get('remaining_seconds') or 0) for phase in phases)
+    current_timing = phases[current_index]
+    return {'version': 2, 'current_phase': FLOW_PHASES[current_index]['id'],
+            'current_action': phases[current_index]['detail'] if stalled else (reason or phases[current_index]['detail']),
             'checkpoint': checkpoint,
             'recoverable': bool(os.path.isdir(job) and os.path.isfile(os.path.join(job, '任务.json'))),
+            'stalled': stalled, 'silence_seconds': silence_seconds,
+            'elapsed_seconds': current_timing.get('elapsed_seconds'),
+            'expected_seconds': current_timing.get('expected_seconds'),
+            'remaining_seconds': remaining,
             'phases': phases}
 
 @app.patch('/v1/jobs/{jid}')
@@ -4024,7 +4153,7 @@ def list_jobs(scope: str = 'all', project_id: str = ''):
         flow = job_flow(job, st, meta, prog, outcome)
         last_activity = _job_last_activity(job, meta, prog, outcome)
         elapsed = _job_elapsed(job, st, meta, outcome, last_activity)
-        eta = _job_eta(st, prog)
+        eta = int(flow.get('remaining_seconds') or 0)
         out.append({'job_id': jid, 'name': product['name'], 'created_at': meta.get('created_at', ''),
                     'stage': prog.get('stage', '启动中'), 'pct': prog.get('pct', 0),
                     'staged': bool(meta.get('staged')),

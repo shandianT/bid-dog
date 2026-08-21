@@ -20,7 +20,7 @@ use tauri::window::{ProgressBarState, ProgressBarStatus};
 use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
 
-// v0.19.1 使用版本专属端口：覆盖安装时旧 PyInstaller onefile 进程可能仍驻留，
+// v0.19.2 使用版本专属端口：覆盖安装时旧 PyInstaller onefile 进程可能仍驻留，
 // 不能因历史端口“有人监听”就复用旧引擎。下一次不兼容升级也应换新端口。
 const ENGINE_PORT: u16 = 18901;
 const JOB_POLL_INTERVAL: Duration = Duration::from_secs(3);

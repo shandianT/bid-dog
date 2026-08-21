@@ -103,7 +103,7 @@ def test_job_flow_expands_environment_preflight_before_business_steps(engine, jo
 
     flow = engine.job_flow(str(job), "running", {}, progress, {})
 
-    assert flow["version"] == 1
+    assert flow["version"] == 2
     assert flow["current_phase"] == "environment"
     assert flow["checkpoint"] == {"step": 0, "label": "任务文件已保存"}
     assert flow["recoverable"] is True

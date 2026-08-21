@@ -110,14 +110,14 @@ def _prepare_oc_run(engine, monkeypatch):
 def test_oc_run_error_never_reports_success(engine, job, monkeypatch):
     _prepare_oc_run(engine, monkeypatch)
     monkeypatch.setattr(engine, "oc_turn", lambda _sid: (True, "synthetic stream failure"))
-    assert engine.oc_run(str(job), "work") == "interrupted"
+    assert engine.oc_run(str(job), "work", allow_cli_fallback=False) == "interrupted"
 
 
 def test_oc_run_stall_never_reports_success(engine, job, monkeypatch):
     _prepare_oc_run(engine, monkeypatch)
     monkeypatch.setattr(engine, "OC_STALL", 0)
     monkeypatch.setattr(engine, "oc_turn", lambda _sid: (False, ""))
-    assert engine.oc_run(str(job), "work") == "interrupted"
+    assert engine.oc_run(str(job), "work", allow_cli_fallback=False) == "interrupted"
 
 
 def test_oc_run_only_succeeds_after_clean_finish(engine, job, monkeypatch):
