@@ -143,7 +143,7 @@ test('运行方式回落只显示友好文案，技术原因留在诊断详情',
   const notice = pure.friendlyRuntimeNotice({
     type:'message', text:'⚠ 执行外壳起来了但链路没通(执行外壳探活 90 秒没有完整回复),这一单改用兼容模式跑。'
   });
-  assert.strictEqual(notice.text, '连接响应较慢，已自动切换稳定模式，任务正在继续。');
+  assert.strictEqual(notice.text, '主连接响应较慢，已切换稳定通道继续；仍使用同一模型和同一套要求，不会降低内容标准。');
   assert.match(notice.technicalDetail, /90 秒/);
   assert.ok(!/执行外壳|OpenCode|CLI|探活|兼容模式/i.test(notice.text));
   assert.strictEqual(notice.action.label, '查看原因');
@@ -447,7 +447,7 @@ test('所有错误动作末尾都有且只有一个诊断包入口', () => {
 test('升级信息仅在确有新版本时出现', () => {
   assert.ok(pure);
   assert.strictEqual(pure.healthUpdateInfo({update: {status: 'pending'}}), null);
-  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.4'}}), null);
+  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.5'}}), null);
   const info = pure.healthUpdateInfo({update: {status: 'available', latest: '0.18.3', url: 'https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.18.3'}});
   assert.strictEqual(info.version, '0.18.3');
   assert.match(info.url, /^https:\/\/github\.com\/shandianT\/bid-dog\/releases\//);
@@ -466,6 +466,9 @@ test('标准/极速按实际模型回填，活跃任务阻止全局切模', () =
   assert.strictEqual(pure.modeSwitchBlocked([{state: 'paused'}]), true);
   const loadAgent = section('async function loadAgent()', 'const QK_MODES');
   const switcher = section('let QK_SWITCH_SEQ', 'async function qkVerify');
+  assert.ok(/class="seg on" data-mode="fast"/.test(html), '首次打开没有默认选中极速模式');
+  assert.ok(/let QK_MODE\s*=\s*'fast'/.test(html), '快速接入没有默认使用极速模式');
+  assert.ok(/setup\/connect[\s\S]{0,240}mode:'fast'/.test(html), '首次接入没有把极速模式提交给引擎');
   expectHtml(/QK_SWITCH_SEQ/);
   assert.ok(/modeFromModel\(eff\)/.test(loadAgent) && /setQkMode\(actualMode\)/.test(loadAgent), '实际模型没有回填到模式按钮');
   assert.ok(/QK_SWITCH_QUEUE/.test(switcher) && /\/v1\/agent\/test/.test(switcher), '模式切换没有串行并真实探活');
@@ -501,7 +504,7 @@ test('现有 OpenCode 与 Codex 回退入口没有被 v56 覆盖', () => {
 
 test('桌面版只连接当前版本专属引擎，不复用旧版驻留进程', () => {
   const connection = section('const IS_WEB', 'let S =');
-  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.19\.4'/.test(connection), '桌面端没有钉住当前引擎版本');
+  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.19\.5'/.test(connection), '桌面端没有钉住当前引擎版本');
   assert.ok(/DESKTOP_ENGINE\s*=\s*'http:\/\/127\.0\.0\.1:18901'/.test(connection), '桌面端没有使用版本专属端口');
   assert.ok(/IS_WEB\s*\?\s*\[location\.origin\]\s*:\s*\[DESKTOP_ENGINE\]/.test(connection), '桌面端仍会探测历史端口');
   assert.ok(!/8849|8848|8080/.test(connection), '连接候选仍含历史引擎端口');
@@ -514,8 +517,8 @@ test('覆盖安装时 WebView 不复用旧前端缓存或历史引擎地址', ()
   const launchUrl = String(mainWindow.url || '');
   const failures = [];
   if(mainWindow.incognito !== true) failures.push('主窗口必须启用 incognito=true 隔离旧 WebView 缓存');
-  if(!/0\.19\.4/.test(launchUrl) || !/18901/.test(launchUrl))
-    failures.push('主窗口 URL 必须同时包含版本 0.19.4 与专属端口 18901 作为缓存版本戳');
+  if(!/0\.19\.5/.test(launchUrl) || !/18901/.test(launchUrl))
+    failures.push('主窗口 URL 必须同时包含版本 0.19.5 与专属端口 18901 作为缓存版本戳');
   if(!/localStorage\.removeItem\(\s*['"]bid_api['"]\s*\)/.test(html))
     failures.push('新前端启动时必须清除历史 localStorage.bid_api');
   if(/localStorage\.getItem\(\s*['"]bid_api['"]\s*\)/.test(html))

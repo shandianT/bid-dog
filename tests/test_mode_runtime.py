@@ -66,7 +66,7 @@ def test_paused_session_also_rejects_global_mode_switch(engine, job):
     assert engine.s2_conf()["model"] == "senseaudio-s2"
 
 
-def test_stopped_but_resumable_session_rejects_global_mode_switch(engine, job):
+def test_stopped_session_does_not_block_the_default_mode_for_new_jobs(engine, job):
     engine.write_json(engine.conf_path(), _config("senseaudio-s2"))
     meta = engine.read_json(str(job / "任务.json"), {})
     meta.update({"paused": False, "oc_session": "session-stopped"})
@@ -80,8 +80,29 @@ def test_stopped_but_resumable_session_rejects_global_mode_switch(engine, job):
             "/v1/agent",
             json={"kind": "s2", "s2_model": "deepseek-v4-flash", "s2_key": ""},
         )
+    assert response.status_code == 200
+    assert engine.s2_conf()["model"] == "deepseek-v4-flash"
+
+
+def test_stopped_session_cannot_resume_after_its_model_was_changed(engine, job, monkeypatch):
+    engine.write_json(engine.conf_path(), _config("deepseek-v4-flash"))
+    meta = engine.read_json(str(job / "任务.json"), {})
+    meta.update({
+        "paused": False,
+        "oc_session": "session-stopped",
+        "engine_snapshot": {"model": "senseaudio-s2"},
+    })
+    engine.write_json(str(job / "任务.json"), meta)
+    engine.write_json(str(job / "outcome.json"), {"state": "stopped", "reason": "synthetic interruption"})
+    monkeypatch.setattr(engine, "oc_serve", lambda: (_ for _ in ()).throw(
+        AssertionError("模型不一致时不应启动旧会话")))
+
+    with TestClient(engine.app) as client:
+        response = client.post(f"/v1/jobs/{job.name}/resume")
+
     assert response.status_code == 409
-    assert engine.s2_conf()["model"] == "senseaudio-s2"
+    assert "模式已更改" in response.json()["error"]
+    assert "重跑" in response.json()["error"]
 
 
 def test_launch_snapshots_model_without_secret(engine, job, monkeypatch):
@@ -111,6 +132,26 @@ def test_oc_run_error_never_reports_success(engine, job, monkeypatch):
     _prepare_oc_run(engine, monkeypatch)
     monkeypatch.setattr(engine, "oc_turn", lambda _sid: (True, "synthetic stream failure"))
     assert engine.oc_run(str(job), "work", allow_cli_fallback=False) == "interrupted"
+
+
+def test_user_stop_wins_over_a_late_provider_interruption(engine, job, monkeypatch):
+    _prepare_oc_run(engine, monkeypatch)
+    owner = engine._reserve_running(job.name)
+    assert owner
+
+    def interrupted_after_stop(_sid):
+        assert engine._request_cancel(job.name, owner)
+        return True, "Provider turn interrupted"
+
+    monkeypatch.setattr(engine, "oc_turn", interrupted_after_stop)
+    try:
+        result = engine.oc_run(str(job), "work")
+    finally:
+        engine._release_running(job.name, owner)
+
+    assert result == engine.OC_RUN_CANCELLED
+    runtime = engine.read_json(str(job / "runtime.json"), {})
+    assert runtime.get("execution_path") != "cli_compat"
 
 
 def test_oc_run_stall_never_reports_success(engine, job, monkeypatch):

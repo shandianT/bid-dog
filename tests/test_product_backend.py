@@ -105,7 +105,9 @@ def test_probe_fallback_uses_only_friendly_copy_and_keeps_redacted_diagnostics(e
 
     assert result == engine.OC_RUN_FALLBACK
     user_texts = [e.get("text") for e in events(job) if e.get("type") == "message"]
-    assert user_texts[-1] == "连接响应较慢，已自动切换稳定模式，任务正在继续。"
+    assert user_texts[-1] == (
+        "主连接响应较慢，已切换稳定通道继续；仍使用同一模型和同一套要求，不会降低内容标准。"
+    )
     assert "探活" not in user_texts[-1]
     diagnostics = [json.loads(line) for line in (job / "diagnostics.jsonl").read_text(encoding="utf-8").splitlines()]
     assert diagnostics[-1]["code"] == "opencode_probe_failed"
@@ -302,7 +304,7 @@ def test_server_stall_before_body_automatically_falls_back_to_cli_once(engine, j
     assert runtime["execution_path"] == "cli_compat"
     assert runtime["fallback_count"] == 1
     texts = [str(event.get("text") or "") for event in events(job)]
-    assert sum("自动切换稳定模式" in text for text in texts) == 1
+    assert sum("已切换稳定通道继续" in text for text in texts) == 1
 
 
 def test_server_stall_after_body_never_replays_the_job(engine, job, monkeypatch):
@@ -422,6 +424,40 @@ def test_flow_silence_warning_is_not_hidden_by_a_long_historical_phase(engine, j
     assert flow["silence_seconds"] == 240
     assert flow["stalled"] is True
     assert flow["current_action"] == "模型响应偏慢，正在持续检查连接"
+
+
+def test_flow_explains_analysis_after_the_parsed_source_is_already_on_disk(engine, job, monkeypatch):
+    monkeypatch.setattr(engine, "now", lambda: "2026-08-21 10:02:00")
+    engine.write_json(str(job / "任务.json"), {
+        "name": "解析进度测试", "tender": "招标文件.docx",
+        "created_at": "2026-08-21 10:00:00",
+    })
+    (job / "招标文件_解析版.md").write_text("# 已提取的招标正文\n", encoding="utf-8")
+    progress = {"type": "progress", "stage": "已就绪，正在读招标文件", "step": 1,
+                "pct": 2, "total": 12, "ts": "2026-08-21 10:01:00"}
+
+    flow = engine.job_flow(str(job), state="running", prog=progress)
+
+    assert flow["current_phase"] == "parse"
+    assert flow["current_action"] == "招标正文已提取，正在识别目录、条款、评分项和废标条件"
+    parse = next(phase for phase in flow["phases"] if phase["id"] == "parse")
+    assert parse["detail"] == flow["current_action"]
+
+
+def test_flow_advances_from_verified_analysis_files_even_without_agent_progress_events(engine, job):
+    (job / "投标文件组成.md").write_text("组成分析\n" * 80, encoding="utf-8")
+    engine.write_json(str(job / "word_format_spec.json"), {})
+    (job / "格式要求摘要.md").write_text("格式要求\n" * 8, encoding="utf-8")
+    (job / "评分点响应矩阵.md").write_text("评分项\n" * 8, encoding="utf-8")
+    (job / "废标风险清单.md").write_text("废标风险\n" * 8, encoding="utf-8")
+    progress = {"type": "progress", "stage": "已就绪，正在读招标文件", "step": 1,
+                "pct": 2, "total": 12, "ts": engine.now()}
+
+    flow = engine.job_flow(str(job), state="running", prog=progress)
+
+    assert flow["checkpoint"] == {"step": 5, "label": "评分废标"}
+    assert flow["current_phase"] == "plan"
+    assert flow["phases"][1]["state"] == "done"
 
 
 def test_runtime_pause_reason_uses_no_implementation_terms(engine, job):
@@ -859,6 +895,17 @@ def test_setup_connect_invalid_key_is_not_saved_or_echoed(engine, monkeypatch):
     assert engine.s2_conf(engine.read_json(engine.conf_path(), {}))["api_key"] == ""
 
 
+def test_first_run_recommends_fast_mode_and_flash_model(engine):
+    with TestClient(engine.app) as client:
+        status = client.get("/v1/setup").json()
+
+    assert status["recommended"] == {
+        "engine": "opencode",
+        "mode": "fast",
+        "model": "deepseek-v4-flash",
+    }
+
+
 def test_setup_connect_complete_and_key_change_requires_retest(engine, monkeypatch):
     key_a = "s" + "k-" + "valid-secret-value-aaaaaaaa"
     key_b = "s" + "k-" + "valid-secret-value-bbbbbbbb"
@@ -872,6 +919,8 @@ def test_setup_connect_complete_and_key_change_requires_retest(engine, monkeypat
         connected = client.post("/v1/setup/connect", json={"key": key_a})
         assert connected.status_code == 200
         assert key_a not in connected.text
+        assert connected.json()["mode"] == "fast"
+        assert connected.json()["model"] == "deepseek-v4-flash"
         completed = client.post("/v1/setup/complete")
         assert completed.status_code == 200
         assert client.get("/v1/setup").json()["needed"] is False

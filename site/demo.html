@@ -701,13 +701,13 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
     <input class="f" id="qkKey" type="password" placeholder="粘贴你收到的 Key(sk-…)">
     <div style="display:flex;gap:9px;align-items:center">
       <div class="segbar" id="qkMode">
-        <span class="seg on" data-mode="quality">标准(默认)</span>
-        <span class="seg" data-mode="fast">极速</span>
+        <span class="seg" data-mode="quality">标准(质量优先)</span>
+        <span class="seg on" data-mode="fast">极速(默认)</span>
       </div>
       <span style="flex:1"></span>
       <button class="btn" id="qkBtn" onclick="quickS2()">一键接入并测试</button>
     </div>
-    <div id="qkModeHint" style="font:400 11.5px/1.6 inherit;color:var(--dim)">标准:用 senseaudio-s2 写正式标书,篇幅与细节更足。识图模型自动挑,不用你操心。</div>
+    <div id="qkModeHint" style="font:400 11.5px/1.6 inherit;color:var(--dim)">极速:用 deepseek-v4-flash,优先快速起稿和节省额度,适合首次试跑与日常标书。</div>
     <div id="qkNow" style="font:500 11.5px/1.6 inherit;color:var(--sub)"></div>
     <div id="qkMsg" style="font:400 12.5px/1.8 inherit;color:var(--sub);display:none;white-space:pre-line"></div>
   </div>
@@ -833,7 +833,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
-const BUNDLED_ENGINE_VERSION = '0.19.4';
+const BUNDLED_ENGINE_VERSION = '0.19.5';
 /* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后，旧 PyInstaller 进程可能仍驻留；
    若继续探测历史端口，就会把旧引擎误认成新版，甚至在可执行文件被替换后返回 500。 */
 const DESKTOP_ENGINE = 'http://127.0.0.1:18901';
@@ -1027,7 +1027,7 @@ function _friendlyText(value){
   let s = String(value||'').trim();
   if(!s) return '';
   if(/执行外壳起来了但链路没通|执行外壳探活/.test(s))
-    return '连接响应较慢，已自动切换稳定模式，任务正在继续。';
+    return '主连接响应较慢，已切换稳定通道继续；仍使用同一模型和同一套要求，不会降低内容标准。';
   s = s.replace(/OpenCode(?:\s+Server)?|Codex\s*CLI|Claude\s*Code|CLI/gi, '生成服务')
        .replace(/执行外壳/g, '生成服务').replace(/本地引擎/g, '本地服务')
        .replace(/探活/g, '连接检查').replace(/兼容模式/g, '稳定模式')
@@ -1107,7 +1107,7 @@ function taskCapabilities(job){
 function friendlyRuntimeNotice(event){
   const e = event || {}, raw = String(e.text || e.message || '');
   const fallback = e.code==='stable_mode_enabled' || /执行外壳起来了但链路没通|执行外壳探活|改用兼容模式/.test(raw);
-  return {text:fallback ? '连接响应较慢，已自动切换稳定模式，任务正在继续。' : _friendlyText(raw),
+  return {text:fallback ? '主连接响应较慢，已切换稳定通道继续；仍使用同一模型和同一套要求，不会降低内容标准。' : _friendlyText(raw),
           technicalDetail:String(e.technical_detail || e.technicalDetail || e.detail || (fallback ? raw : '')),
           action:{act:'show_detail', label:'查看原因'}};
 }
@@ -1439,7 +1439,7 @@ async function onboardingConnect(){
   if(!/^sk-\S{8,}/i.test(key)){el('obKey').focus();toast('请粘贴完整 Key');return;}
   setOnboardingStep(2);el('obStatus').textContent='正在保存推荐配置并测试…';el('obRetry').style.display='none';
   try{
-    const r=await api('/v1/setup/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:key,key,mode:'quality'})});
+    const r=await api('/v1/setup/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:key,key,mode:'fast'})});
     if(r&&r.ok===false)throw new Error(r.error||r.message||'连接测试未通过');
     el('obKey').value='';S.setup=r;
     el('obStatus').textContent='✓ 连接成功\n✓ 推荐配置已保存\n✓ 可以开始生成真实标书';setTimeout(()=>setOnboardingStep(3),500);
@@ -1975,7 +1975,7 @@ function handle(id, e){
     e=Object.assign({},e,{text:runtimeNotice.text,actions:(e.actions||[]).concat([runtimeNotice.action])});
     if(runtimeNotice.technicalDetail){
       S.diagnostic=runtimeNotice.technicalDetail;
-      if(runtimeNotice.text==='连接响应较慢，已自动切换稳定模式，任务正在继续。')
+      if(runtimeNotice.text.startsWith('主连接响应较慢，已切换稳定通道继续'))
         presentProblem({job_id:id,level:'info',title:'已自动保持任务继续',text:runtimeNotice.text,detail:runtimeNotice.technicalDetail,
           actions:[{act:'show_detail',label:'查看原因'},{act:'diagnose',label:'一键诊断'}]});
     }
@@ -3195,11 +3195,11 @@ async function loadAgent(){
 }
 const QK_MODES = {
   quality: {name:'标准', prefer:'senseaudio-s2', pick:/s2|pro|max|plus/i, avoid:/flash|lite|mini|turbo|nano/i,
-            hint:'标准:用 senseaudio-s2 写正式标书,篇幅与细节更足。识图模型自动挑,不用你操心。'},
+            hint:'标准:质量优先,篇幅与细节更足,适合关键项目和最终定稿；速度会比极速慢。'},
   fast:    {name:'极速', prefer:'deepseek-v4-flash', pick:/flash|lite|turbo|mini|nano/i, avoid:null,
-            hint:'极速:用 deepseek-v4-flash,出稿快、更省额度,适合试跑与演示;正式投标建议用标准。'}
+            hint:'极速:优先快速起稿和节省额度,适合首次试跑、日常标书与演示；现在为默认。'}
 };
-let QK_MODE = 'quality';
+let QK_MODE = 'fast';
 let QK_SWITCH_SEQ = 0, QK_SWITCH_QUEUE = Promise.resolve();
 function setQkMode(mode){
   if(!QK_MODES[mode]) return;

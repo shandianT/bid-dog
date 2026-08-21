@@ -196,7 +196,8 @@ test('stable mode explains disabled pause and runtime fallback keeps technical t
   await page.evaluate(() => handle('stable-job', {
     type:'message',role:'agent',text:'⚠ 执行外壳起来了但链路没通(执行外壳探活 90 秒没有完整回复),这一单改用兼容模式跑。'
   }));
-  await expect(page.locator('#problemHost')).toContainText('连接响应较慢，已自动切换稳定模式，任务正在继续。');
+  await expect(page.locator('#problemHost')).toContainText('主连接响应较慢，已切换稳定通道继续');
+  await expect(page.locator('#problemHost')).toContainText('同一模型和同一套要求');
   await expect(page.locator('#problemHost')).not.toContainText('执行外壳');
   await page.locator('#problemHost').getByRole('button',{name:'查看原因'}).click();
   await expect(page.locator('#diagnosticSheet')).toBeVisible();

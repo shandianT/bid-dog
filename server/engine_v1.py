@@ -32,7 +32,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.19.4'
+ENGINE_VERSION = '0.19.5'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -236,7 +236,8 @@ def compatibility_fallback(job, code, detail):
                    fallback_count=fallback_count)
     append_diagnostic(job, code, detail, fallback='cli_compat')
     emit(job, {'type': 'message', 'role': 'agent',
-               'text': '连接响应较慢，已自动切换稳定模式，任务正在继续。'})
+               'text': '主连接响应较慢，已切换稳定通道继续；'
+                       '仍使用同一模型和同一套要求，不会降低内容标准。'})
 
 _SECRET_RE = re.compile(r'(?i)(?:' + 's' + 'k' + r')-[a-z0-9_-]{16,}')
 _NAMED_SECRET_RE = re.compile(
@@ -1171,7 +1172,10 @@ def evidence_for_step(job, step):
         return bool((tender and os.path.isfile(os.path.join(job, tender))) or
                     _named_files(job, ('解析版',), '.md', 20))
     if step == 2:
-        return bool(_named_files(job, ('图片索引', '无图片', '图片检查'), min_size=10))
+        # 旧任务可能没有单独写出“无图片”证据，却已产出下一步的组成分析。
+        # 后续结构证据成立时，图片盘点不应永久卡住整条进度链。
+        return bool(_named_files(job, ('图片索引', '无图片', '图片检查'), min_size=10) or
+                    _named_files(job, ('投标文件组成', '组成分析'), '.md', 500))
     if step == 3:
         return bool(_named_files(job, ('投标文件组成', '组成分析'), '.md', 500))
     if step == 4:
@@ -1182,7 +1186,9 @@ def evidence_for_step(job, step):
         return bool(_named_files(job, ('评分点响应矩阵', '评分矩阵'), min_size=20) and
                     _named_files(job, ('废标风险',), min_size=20))
     if step == 6:
-        return bool(_named_files(job, ('响应矩阵', '响应对照'), '.md', 20))
+        # “评分点响应矩阵”是第 5 步证据，不能再被模糊匹配成第 6 步。
+        response_files = _named_files(job, ('响应矩阵', '响应对照'), '.md', 20)
+        return any('评分' not in name for name in response_files)
     if step == 7:
         outline = _named_files(job, ('大纲', '目录'), '.md', 20)
         chapters = _named_files(job, ('第', '章节'), '.md', 100)
@@ -2560,6 +2566,12 @@ def oc_run(job, prompt, allow_cli_fallback=True):
                 beat['ts'] = time.time()
             quiet = time.time() - beat['ts']
             done, err = oc_turn(sid)
+            # 用户可能在本轮请求等待期间点了停止。停止意图必须高于迟到的连接错误，
+            # 否则会误报“已切换稳定通道继续”，甚至启动第二条执行路径。
+            if _cancel_requested(base):
+                oc_interrupt(sid)
+                result = OC_RUN_CANCELLED
+                break
             if err:
                 oc_interrupt(sid)
                 if allow_cli_fallback and _server_fallback_safe(job):
@@ -3136,7 +3148,11 @@ def agent_status():
             's2_model_effective': s2_conf(conf)['model']}
 
 def config_locked_jobs():
-    """运行中或可恢复的暂停会话都锁住全局模型，避免同一任务跨模型续写。"""
+    """只让正在执行或暂停的会话锁住全局模型。
+
+    已停止的历史任务不应阻塞新任务切换默认模式；若其旧会话与新模型不一致，
+    resume 入口会明确要求重跑，不会跨模型偷偷续写。
+    """
     locked = set(_running_snapshot())
     try: ids = os.listdir(jobs_dir())
     except Exception: ids = []
@@ -3144,8 +3160,7 @@ def config_locked_jobs():
         job = jpath(jid)
         if not os.path.isdir(job): continue
         meta = read_json(os.path.join(job, '任务.json'), {})
-        outcome = read_json(os.path.join(job, 'outcome.json'), {})
-        if meta.get('oc_session') and (meta.get('paused') or outcome.get('state') == 'stopped'):
+        if meta.get('oc_session') and meta.get('paused'):
             locked.add(os.path.basename(jid))
     return sorted(locked)
 
@@ -4019,6 +4034,10 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
     try: step = max(0, min(12, int(prog.get('step') or 0)))
     except (TypeError, ValueError): step = 0
     preflight = read_json(os.path.join(job, 'preflight.json'), {})
+    # 展示进度同时参考落盘产物：事件丢失/延迟时，不让界面永久卡在第 1 步。
+    # 但显式的 step=0 环境预检期间不跨过该阶段，即使目录里还有旧轮产物。
+    if not (step == 0 and preflight and state == 'running'):
+        step = max(step, verified_step(job, 12))
     stage_rows = (stage_stats() or {}).get('stages') or []
     timeline = _progress_timeline(job)
     clock = _parse_ts(now()) or datetime.datetime.now()
@@ -4092,6 +4111,11 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
     slow_after = int(OC_SLOW)
     stopped_for_stall = terminal_problem and bool(re.search(r'连接中断|长时间无进展|没有响应', reason))
     stalled = bool((state == 'running' and silence_seconds >= slow_after) or stopped_for_stall)
+    parsed_source_ready = bool(_named_files(job, ('解析版',), '.md', 20))
+    if state == 'running' and step <= 1 and parsed_source_ready and not stalled:
+        parsed_action = '招标正文已提取，正在识别目录、条款、评分项和废标条件'
+        phases[current_index]['detail'] = parsed_action
+        reason = parsed_action
     if stalled and state == 'running':
         phases[current_index]['state'] = 'attention'
         phases[current_index]['detail'] = '模型响应偏慢，正在持续检查连接'
@@ -4573,6 +4597,14 @@ async def resume_job(jid: str):
         if not sid:
             _release_running(base, owner)
             return JSONResponse({'ok': False, 'error': '这一单没有留下可恢复的进度记录，只能“重跑本任务”重新生成。'}, 400)
+        snapshot = meta.get('engine_snapshot') if isinstance(meta.get('engine_snapshot'), dict) else {}
+        previous_model = str(snapshot.get('model') or '').strip()
+        current_model = str(s2_conf().get('model') or '').strip()
+        if previous_model and current_model and previous_model != current_model:
+            _release_running(base, owner)
+            return JSONResponse({'ok': False,
+                                 'error': '生成模式已更改，旧会话不能跨模型续写；'
+                                          '请使用“重跑本任务”按当前模式重新生成。'}, 409)
         if not oc_serve():
             append_diagnostic(job, 'resume_connection_unavailable', 'OpenCode server unavailable', level='error')
             _release_running(base, owner)
@@ -5233,7 +5265,8 @@ def test_provider(pid: str):
 # /chat/completions。所以这里做一层协议翻译,并且刻意放进「已经随 App 分发的这个引擎」里:
 # 不多装一个进程、不多开一个端口、不改客户机器的 ~/.codex —— 客户那边只是多填一个 Key。
 S2_DEFAULT_BASE = 'https://api.senseaudio.cn/v1'
-S2_DEFAULT_MODEL = 'senseaudio-s2'
+S2_DEFAULT_MODEL = 'deepseek-v4-flash'
+S2_QUALITY_MODEL = 'senseaudio-s2'
 SELF_PORT = int(os.environ.get('PORT', 8080))
 RELAY_LAST = {}      # 最近一次中转的结果:出问题时「测试连接」和运行日志能说清卡在哪一层
 
@@ -5309,7 +5342,7 @@ def setup_status_data(conf=None):
     completed = bool(legacy_skipped or (setup.get('completed_at') and connected))
     return {'needed': not completed, 'completed': completed, 'connected': connected,
             'key_set': key_set, 'legacy_skipped': legacy_skipped,
-            'recommended': {'engine': 'opencode', 'mode': 'standard',
+            'recommended': {'engine': 'opencode', 'mode': 'fast',
                             'model': S2_DEFAULT_MODEL},
             'steps': ['connect', 'create_first_job']}
 
@@ -5346,6 +5379,9 @@ async def setup_connect(req: Request):
     if MULTIUSER and not ALLOW_AGENT_CONFIG:
         return JSONResponse({'ok': False, 'error': '当前部署由管理员统一配置'}, 403)
     body = await req.json()
+    requested_mode = 'quality' if str(body.get('mode') or '').strip().lower() == 'quality' else 'fast'
+    requested_model = str(body.get('model') or (
+        S2_QUALITY_MODEL if requested_mode == 'quality' else S2_DEFAULT_MODEL)).strip()
     path = conf_path()
     with _json_lock(path):
         current = read_json(path, {})
@@ -5356,7 +5392,7 @@ async def setup_connect(req: Request):
         engine.update({'kind': 's2', 'mode': 'agents',
                        's2_key': key,
                        's2_base_url': str(body.get('base_url') or S2_DEFAULT_BASE).strip().rstrip('/'),
-                       's2_model': str(body.get('model') or S2_DEFAULT_MODEL).strip(),
+                       's2_model': requested_model,
                        's2_wire': 'auto', 's2_verify_ssl': bool(body.get('verify_ssl', True)),
                        'login_shell': True})
         candidate = dict(current); candidate['engine'] = engine
@@ -5389,7 +5425,7 @@ async def setup_connect(req: Request):
     return {'ok': True, 'connected': True, 'key_set': True,
             'key_changed': bool(previous.get('tested_key_fingerprint')
                                 and previous.get('tested_key_fingerprint') != fingerprint),
-            'engine': 'opencode', 'mode': 'standard', 'model': generation_model,
+            'engine': 'opencode', 'mode': requested_mode, 'model': generation_model,
             'vision_model': vision_model, 'vision_enabled': bool(vision_model)}
 
 @app.post('/v1/setup/complete')
