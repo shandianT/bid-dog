@@ -4,7 +4,7 @@
 **给谁用** — 拿到 Key 的同事和客户：装上、粘 Key、拖文件，不用注册 AI 账号。写代码的看文末架构小节。
 **怎么开始** — 到 [Releases](https://github.com/shandianT/bid-dog/releases/latest) 下载 dmg / exe → 打开后粘 Key并测试连接 → 上传招标文件。模型和运行方式会自动选择推荐配置。
 
-[![release](https://img.shields.io/badge/release-v0.19.5-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
+[![release](https://img.shields.io/badge/release-v0.19.6-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
 [![build](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/macOS%20Apple%20Silicon%20%7C%20Windows%20x64-111111)
 
@@ -53,8 +53,8 @@
 
 | 系统 | 安装包 | 说明 |
 |---|---|---|
-| macOS | [`bid-dog_0.19.5_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.19.5/bid-dog_0.19.5_aarch64.dmg) | Apple Silicon（M 系列） |
-| Windows | [`bid-dog_0.19.5_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.19.5/bid-dog_0.19.5_x64-setup.exe) | Windows 10 / 11 x64 |
+| macOS | [`bid-dog_0.19.6_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.19.6/bid-dog_0.19.6_aarch64.dmg) | Apple Silicon（M 系列） |
+| Windows | [`bid-dog_0.19.6_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.19.6/bid-dog_0.19.6_x64-setup.exe) | Windows 10 / 11 x64 |
 
 当前没有 Intel Mac 和 Windows ARM 安装包，请勿下载不匹配架构的安装包。官网会始终显示安装包的真实支持范围和签名状态。
 
@@ -67,14 +67,14 @@
   也可以在「系统设置 → 隐私与安全性」里点「仍要打开」。
 - **Windows** 若弹出 SmartScreen 蓝色提示：点「更多信息」→「仍要运行」。
 
-v0.19.5 的桌面 App 使用独立 WebView 会话和带版本号的入口地址，只连接 `127.0.0.1:18901` 上经身份校验的引擎。覆盖升级时若旧版仍在，应用会让它先安全收尾，然后自动启动新版；无需手动查找或强杀进程。未知端口占用者不会被关闭。
+v0.19.6 的桌面 App 使用独立 WebView 会话和带版本号的入口地址，只连接 `127.0.0.1:18901` 上经身份校验的引擎。覆盖升级时若旧版仍在，应用会让它先安全收尾，然后自动启动新版；无需手动查找或强杀进程。未知端口占用者不会被关闭。
 
 ---
 
 ## 三步上手
 
 1. **填写 Key** —— 首次打开只显示 Key 输入框和本地保存说明，不要求理解网关、模型 ID 或执行工具。
-2. **测试连接** —— 点一次即可完成真实连接检查，并自动选择推荐模型、标准模式和内置运行方式；失败时会给出“自动修复 / 重新连接 / 一键诊断”等明确操作。
+2. **测试连接** —— 点一次即可完成真实连接检查，并自动选择推荐模型、极速模式和内置运行方式；失败时会给出“自动修复 / 重新连接 / 一键诊断”等明确操作。
 3. **上传文件** —— 选择招标文件后，系统会按采购对象、评标办法和交付类型推荐场景模板；也可上传一份自有优秀历史标书生成模板草稿。完整设计思路可展开查看，模板名称和目录可修改，确认评分响应、材料槽位和质检规则后再保存或开始生成。
 
 已有任务或已有可用配置的老用户会自动跳过不需要的首次步骤。Key 发生变化时只会重新测试连接，不会让你从头设置。
