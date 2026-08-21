@@ -52,7 +52,7 @@ if (start >= 0 && end > start) {
   const sandbox = {};
   vm.runInNewContext(`${block}\nthis.__pure = {
     isBodyWordArtifact, wordPresence, completionGate, activeClock, eventStreamUrl,
-    withDiagnosticAction, healthUpdateInfo, modeFromModel, modeSwitchBlocked,
+    withDiagnosticAction, healthUpdateInfo, modeFromModel, modeSwitchBlocked, engineConnectionGate,
     publicTaskState: typeof publicTaskState === 'function' ? publicTaskState : null,
     taskGroupOpen: typeof taskGroupOpen === 'function' ? taskGroupOpen : null,
     taskPresentation: typeof taskPresentation === 'function' ? taskPresentation : null,
@@ -447,7 +447,7 @@ test('所有错误动作末尾都有且只有一个诊断包入口', () => {
 test('升级信息仅在确有新版本时出现', () => {
   assert.ok(pure);
   assert.strictEqual(pure.healthUpdateInfo({update: {status: 'pending'}}), null);
-  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.2'}}), null);
+  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.3'}}), null);
   const info = pure.healthUpdateInfo({update: {status: 'available', latest: '0.18.3', url: 'https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.18.3'}});
   assert.strictEqual(info.version, '0.18.3');
   assert.match(info.url, /^https:\/\/github\.com\/shandianT\/bid-dog\/releases\//);
@@ -475,6 +475,22 @@ test('标准/极速按实际模型回填，活跃任务阻止全局切模', () =
   expectHtml(/模式未切换/);
 });
 
+test('旧引擎自动接管期间不提交模型设置也不误报已保存', () => {
+  assert.strictEqual(typeof pure.engineConnectionGate, 'function', '缺少引擎接管状态判断');
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(pure.engineConnectionGate(false, '0.19.1'))),
+    {ready:false, switching:true, message:'检测到旧版本地引擎，正在安全切换到新版；若旧任务仍在收尾，完成后会自动连接。Key 尚未提交或保存。'}
+  );
+  assert.strictEqual(pure.engineConnectionGate(false, null).ready, false);
+  assert.strictEqual(pure.engineConnectionGate(true, null).ready, true);
+  const quick = section('async function quickS2()', 'async function saveAgent');
+  const boot = section('async function boot()', 'function setOnboardingStep');
+  assert.ok(/engineConnectionGate\(S\.online,\s*S\.stale\)/.test(quick), '一键接入前没有阻断旧引擎接管状态');
+  assert.ok(/正在安全切换到新版/.test(html), '界面没有告诉用户会自动完成接管');
+  assert.ok(/await\s+goOnline\(h\)/.test(boot), '自动接管成功后应原地连接，保留尚未提交的 Key');
+  assert.ok(!/location\.reload\(\)/.test(boot), '接管后刷新页面会丢失尚未提交的 Key');
+});
+
 test('现有 OpenCode 与 Codex 回退入口没有被 v56 覆盖', () => {
   expectHtml(/<option value="claude">Claude Code<\/option>/);
   expectHtml(/<option value="codex">Codex CLI<\/option>/);
@@ -485,7 +501,7 @@ test('现有 OpenCode 与 Codex 回退入口没有被 v56 覆盖', () => {
 
 test('桌面版只连接当前版本专属引擎，不复用旧版驻留进程', () => {
   const connection = section('const IS_WEB', 'let S =');
-  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.19\.2'/.test(connection), '桌面端没有钉住当前引擎版本');
+  assert.ok(/BUNDLED_ENGINE_VERSION\s*=\s*'0\.19\.3'/.test(connection), '桌面端没有钉住当前引擎版本');
   assert.ok(/DESKTOP_ENGINE\s*=\s*'http:\/\/127\.0\.0\.1:18901'/.test(connection), '桌面端没有使用版本专属端口');
   assert.ok(/IS_WEB\s*\?\s*\[location\.origin\]\s*:\s*\[DESKTOP_ENGINE\]/.test(connection), '桌面端仍会探测历史端口');
   assert.ok(!/8849|8848|8080/.test(connection), '连接候选仍含历史引擎端口');
@@ -498,8 +514,8 @@ test('覆盖安装时 WebView 不复用旧前端缓存或历史引擎地址', ()
   const launchUrl = String(mainWindow.url || '');
   const failures = [];
   if(mainWindow.incognito !== true) failures.push('主窗口必须启用 incognito=true 隔离旧 WebView 缓存');
-  if(!/0\.19\.2/.test(launchUrl) || !/18901/.test(launchUrl))
-    failures.push('主窗口 URL 必须同时包含版本 0.19.2 与专属端口 18901 作为缓存版本戳');
+  if(!/0\.19\.3/.test(launchUrl) || !/18901/.test(launchUrl))
+    failures.push('主窗口 URL 必须同时包含版本 0.19.3 与专属端口 18901 作为缓存版本戳');
   if(!/localStorage\.removeItem\(\s*['"]bid_api['"]\s*\)/.test(html))
     failures.push('新前端启动时必须清除历史 localStorage.bid_api');
   if(/localStorage\.getItem\(\s*['"]bid_api['"]\s*\)/.test(html))

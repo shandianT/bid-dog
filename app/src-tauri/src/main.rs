@@ -20,16 +20,20 @@ use tauri::window::{ProgressBarState, ProgressBarStatus};
 use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
 
-// v0.19.2 使用版本专属端口：覆盖安装时旧 PyInstaller onefile 进程可能仍驻留，
-// 不能因历史端口“有人监听”就复用旧引擎。下一次不兼容升级也应换新端口。
+// 桌面版只连这一个明确端口。覆盖升级时若还是可验证的中标狗旧引擎，
+// 壳层会请它安全收尾后自动接管；未知进程永远不会被关闭。
 const ENGINE_PORT: u16 = 18901;
+const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+const ENGINE_AUTHOR: &str = "FDE-家涛";
 const JOB_POLL_INTERVAL: Duration = Duration::from_secs(3);
+const HANDOVER_RECHECK_INTERVAL: Duration = Duration::from_secs(3);
 const TRAY_ID: &str = "bid-dog-main";
 const TRAY_OPEN_ID: &str = "open-main-window";
 const TRAY_QUIT_ID: &str = "quit-bid-dog";
 
 struct DesktopRuntime {
     engine: Mutex<Option<Child>>,
+    trusted_engine: AtomicBool,
     primary_instance: AtomicBool,
     explicit_quit: AtomicBool,
     shutdown_sent: AtomicBool,
@@ -41,6 +45,7 @@ impl Default for DesktopRuntime {
     fn default() -> Self {
         Self {
             engine: Mutex::new(None),
+            trusted_engine: AtomicBool::new(false),
             primary_instance: AtomicBool::new(false),
             explicit_quit: AtomicBool::new(false),
             shutdown_sent: AtomicBool::new(false),
@@ -56,6 +61,103 @@ fn port_busy(port: u16) -> bool {
         Duration::from_millis(400),
     )
     .is_ok()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EngineHandover {
+    ReuseCurrent,
+    ReplaceTrustedOld,
+    BlockedForeign,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShutdownState {
+    ExitingNow,
+    Draining { running: u64 },
+}
+
+fn release_version(value: &str) -> Option<[u64; 3]> {
+    let core = value
+        .trim()
+        .strip_prefix('v')
+        .unwrap_or(value.trim())
+        .split(['-', '+'])
+        .next()?;
+    let parts = core
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    (parts.len() == 3).then(|| [parts[0], parts[1], parts[2]])
+}
+
+fn classify_engine_health(health: &serde_json::Value) -> EngineHandover {
+    let ok = health.get("ok").and_then(|value| value.as_bool()) == Some(true);
+    let version = health.get("version").and_then(|value| value.as_str());
+    let author = health.get("author").and_then(|value| value.as_str());
+    let features = health.get("features").and_then(|value| value.as_array());
+    let has_feature = |name: &str| {
+        features.is_some_and(|items| items.iter().any(|item| item.as_str() == Some(name)))
+    };
+    if !ok
+        || author != Some(ENGINE_AUTHOR)
+        || !has_feature("job_start")
+        || !has_feature("job_delete")
+    {
+        return EngineHandover::BlockedForeign;
+    }
+    if version == Some(ENGINE_VERSION) {
+        EngineHandover::ReuseCurrent
+    } else {
+        match (
+            version.and_then(release_version),
+            release_version(ENGINE_VERSION),
+        ) {
+            (Some(found), Some(current)) if found < current => EngineHandover::ReplaceTrustedOld,
+            _ => EngineHandover::BlockedForeign,
+        }
+    }
+}
+
+fn shutdown_state(reply: &serde_json::Value) -> Option<ShutdownState> {
+    if reply.get("ok").and_then(|value| value.as_bool()) != Some(true) {
+        return None;
+    }
+    let running = reply
+        .get("running")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    if reply.get("exiting").and_then(|value| value.as_bool()) == Some(true) {
+        Some(ShutdownState::ExitingNow)
+    } else {
+        Some(ShutdownState::Draining { running })
+    }
+}
+
+fn engine_http_json(port: u16, method: &str, path: &str) -> Option<serde_json::Value> {
+    let addr = format!("127.0.0.1:{port}").parse().ok()?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(700)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(700)))
+        .ok()?;
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).ok()?;
+    let header_end = response.windows(4).position(|part| part == b"\r\n\r\n")?;
+    let headers = std::str::from_utf8(&response[..header_end]).ok()?;
+    if !headers.lines().next()?.contains(" 200 ") {
+        return None;
+    }
+    serde_json::from_slice(&response[header_end + 4..]).ok()
+}
+
+fn probe_engine(port: u16) -> Option<(EngineHandover, serde_json::Value)> {
+    let health = engine_http_json(port, "GET", "/v1/health")?;
+    Some((classify_engine_health(&health), health))
 }
 
 fn data_dir() -> Option<PathBuf> {
@@ -114,7 +216,7 @@ fn append_bootstrap_log(data: Option<&Path>, message: &str) {
     }
 }
 
-// 内置引擎随应用启动;端口被占=本应用的另一个实例已在跑,不重复拉起
+// 内置引擎随应用启动；端口处理由 start_engine_with_handover 先做身份验证。
 fn spawn_engine() -> Option<Child> {
     if port_busy(ENGINE_PORT) {
         return None;
@@ -168,6 +270,134 @@ fn spawn_engine() -> Option<Child> {
     }
 }
 
+fn spawn_and_store_engine(runtime: &DesktopRuntime, data: Option<&Path>) -> bool {
+    let spawned = spawn_engine();
+    let ready = spawned.is_some();
+    if let Ok(mut child) = runtime.engine.lock() {
+        *child = spawned;
+    }
+    runtime.trusted_engine.store(ready, Ordering::Release);
+    if !ready {
+        append_bootstrap_log(data, "端口已可用，但新版引擎启动失败；请运行一键诊断。");
+    }
+    ready
+}
+
+fn wait_for_port_then_spawn(
+    runtime: Arc<DesktopRuntime>,
+    data: Option<PathBuf>,
+    refresh_trusted_shutdown: bool,
+) {
+    std::thread::spawn(move || loop {
+        if runtime.explicit_quit.load(Ordering::Acquire) {
+            return;
+        }
+        if !port_busy(ENGINE_PORT) {
+            let _ = spawn_and_store_engine(&runtime, data.as_deref());
+            return;
+        }
+
+        std::thread::sleep(HANDOVER_RECHECK_INTERVAL);
+        if !refresh_trusted_shutdown {
+            continue;
+        }
+        // 旧版 health 会把“退出后自动关闭”视为用户重新打开应用而撤销。
+        // 因此每次先重新验证身份，再恢复一次优雅退出；绝不对未知进程发关闭请求。
+        match probe_engine(ENGINE_PORT) {
+            Some((EngineHandover::ReplaceTrustedOld, _)) => {
+                if engine_http_json(ENGINE_PORT, "POST", "/v1/shutdown")
+                    .as_ref()
+                    .and_then(shutdown_state)
+                    .is_none()
+                {
+                    append_bootstrap_log(data.as_deref(), "旧引擎中止了安全退出交接；未强制结束。");
+                    return;
+                }
+            }
+            Some((EngineHandover::ReuseCurrent, _)) => {
+                runtime.trusted_engine.store(true, Ordering::Release);
+                return;
+            }
+            _ => {
+                append_bootstrap_log(
+                    data.as_deref(),
+                    "交接期间端口服务身份发生变化；为保护其他程序，只等待端口自行释放。",
+                );
+                // 不再对该进程发任何请求，但它若自行退出，仍可安全启动新引擎。
+                wait_for_port_then_spawn(runtime, data, false);
+                return;
+            }
+        }
+    });
+}
+
+fn start_engine_with_handover(runtime: Arc<DesktopRuntime>) {
+    if !port_busy(ENGINE_PORT) {
+        let _ = spawn_and_store_engine(&runtime, data_dir().as_deref());
+        return;
+    }
+
+    let data = data_dir();
+    let Some((decision, health)) = probe_engine(ENGINE_PORT) else {
+        append_bootstrap_log(
+            data.as_deref(),
+            "端口 18901 已被占用，但无法验证为中标狗引擎；不会关闭它，将等待端口自行释放。",
+        );
+        wait_for_port_then_spawn(runtime, data, false);
+        return;
+    };
+    match decision {
+        EngineHandover::ReuseCurrent => {
+            runtime.trusted_engine.store(true, Ordering::Release);
+            append_bootstrap_log(data.as_deref(), "已连接同版本本地引擎，无需重复启动。");
+        }
+        EngineHandover::BlockedForeign => {
+            append_bootstrap_log(
+                data.as_deref(),
+                "端口 18901 上的服务未通过中标狗身份验证；不会关闭它，将等待端口自行释放。",
+            );
+            wait_for_port_then_spawn(runtime, data, false);
+        }
+        EngineHandover::ReplaceTrustedOld => {
+            let old_version = health
+                .get("version")
+                .and_then(|value| value.as_str())
+                .unwrap_or("未知");
+            let Some(state) = engine_http_json(ENGINE_PORT, "POST", "/v1/shutdown")
+                .as_ref()
+                .and_then(shutdown_state)
+            else {
+                append_bootstrap_log(
+                    data.as_deref(),
+                    &format!("已识别旧版引擎 {old_version}，但它未接受安全退出请求；未强制结束。"),
+                );
+                return;
+            };
+            let status = match state {
+                ShutdownState::ExitingNow => "旧引擎已空闲，正在退出",
+                ShutdownState::Draining { running: 0 } => "旧引擎正在收尾",
+                ShutdownState::Draining { running } => {
+                    append_bootstrap_log(
+                        data.as_deref(),
+                        &format!(
+                            "旧版引擎 {old_version} 仍有 {running} 个任务；收尾后将自动启动新版。"
+                        ),
+                    );
+                    ""
+                }
+            };
+            if !status.is_empty() {
+                append_bootstrap_log(
+                    data.as_deref(),
+                    &format!("已识别旧版引擎 {old_version}；{status}，随后自动启动新版。"),
+                );
+            }
+
+            wait_for_port_then_spawn(runtime, data, true);
+        }
+    }
+}
+
 /// 关窗时先礼后兵:请引擎自己收尾。
 ///
 /// 以前这里是无条件 `child.kill()`。但 agent 是引擎用 `start_new_session=True` 起的
@@ -181,27 +411,10 @@ fn spawn_engine() -> Option<Child> {
 ///
 /// 返回 true 表示引擎收到了请求（不管它选择立刻退还是留下），此时不要再 kill。
 fn ask_engine_to_shutdown(port: u16) -> bool {
-    let addr = match format!("127.0.0.1:{}", port).parse() {
-        Ok(a) => a,
-        Err(_) => return false,
-    };
-    let mut s = match TcpStream::connect_timeout(&addr, Duration::from_millis(600)) {
-        Ok(s) => s,
-        Err(_) => return false, // 引擎已经不在了,没什么可关的
-    };
-    let _ = s.set_read_timeout(Some(Duration::from_millis(1500)));
-    let _ = s.set_write_timeout(Some(Duration::from_millis(600)));
-    let req = format!(
-        "POST /v1/shutdown HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        port
-    );
-    if s.write_all(req.as_bytes()).is_err() {
-        return false;
-    }
-    let mut buf = [0u8; 256];
-    // 读到任何响应都算送达;读不到也不强杀——宁可留一个引擎进程,也不要留一个
-    // 永远没有结局的任务(引擎自己有空闲自退逻辑)
-    matches!(s.read(&mut buf), Ok(n) if n > 0)
+    engine_http_json(port, "POST", "/v1/shutdown")
+        .as_ref()
+        .and_then(shutdown_state)
+        .is_some()
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
@@ -351,6 +564,11 @@ fn shutdown_owned_engine(runtime: &DesktopRuntime) {
         return;
     }
 
+    // 只关闭本次已启动或已校验的同版本引擎。未知端口占用者绝不发 shutdown。
+    if !runtime.trusted_engine.load(Ordering::Acquire) {
+        return;
+    }
+
     let asked = ask_engine_to_shutdown(ENGINE_PORT);
     if let Ok(mut guard) = runtime.engine.lock() {
         if let Some(child) = guard.as_mut() {
@@ -384,9 +602,7 @@ fn main() {
             setup_runtime
                 .primary_instance
                 .store(true, Ordering::Release);
-            if let Ok(mut child) = setup_runtime.engine.lock() {
-                *child = spawn_engine();
-            }
+            start_engine_with_handover(setup_runtime.clone());
             install_tray(app, setup_runtime.clone())?;
             start_job_monitor(app.handle().clone(), setup_runtime.clone());
             Ok(())
@@ -438,6 +654,7 @@ fn main() {
 #[cfg(test)]
 mod engine_sidecar_tests {
     use super::*;
+    use std::net::TcpListener;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -505,5 +722,132 @@ mod engine_sidecar_tests {
 
         assert_eq!(resolve_engine_sidecar(&app).unwrap(), expected);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn current_bundled_engine_is_reused_without_shutdown() {
+        let health = serde_json::json!({
+            "ok": true,
+            "version": ENGINE_VERSION,
+            "author": ENGINE_AUTHOR,
+            "features": ["job_start", "job_delete"]
+        });
+
+        assert_eq!(
+            classify_engine_health(&health),
+            EngineHandover::ReuseCurrent
+        );
+    }
+
+    #[test]
+    fn trusted_older_bid_dog_engine_is_gracefully_replaced() {
+        let health = serde_json::json!({
+            "ok": true,
+            "version": "0.19.1",
+            "author": ENGINE_AUTHOR,
+            "features": ["job_start", "job_delete"]
+        });
+
+        assert_eq!(
+            classify_engine_health(&health),
+            EngineHandover::ReplaceTrustedOld
+        );
+    }
+
+    #[test]
+    fn unknown_listener_is_never_asked_to_shutdown() {
+        let foreign = serde_json::json!({
+            "ok": true,
+            "version": "7.4.2",
+            "author": "another product",
+            "features": ["job_start"]
+        });
+        let malformed = serde_json::json!({"ok": true, "version": "0.19.1"});
+
+        assert_eq!(
+            classify_engine_health(&foreign),
+            EngineHandover::BlockedForeign
+        );
+        assert_eq!(
+            classify_engine_health(&malformed),
+            EngineHandover::BlockedForeign
+        );
+    }
+
+    #[test]
+    fn newer_or_non_numeric_bid_dog_engine_is_not_replaced_by_an_older_shell() {
+        for version in ["0.20.0", "1.0.0", "development-build"] {
+            let health = serde_json::json!({
+                "ok": true,
+                "version": version,
+                "author": ENGINE_AUTHOR,
+                "features": ["job_start", "job_delete"]
+            });
+            assert_eq!(
+                classify_engine_health(&health),
+                EngineHandover::BlockedForeign,
+                "must not replace {version}"
+            );
+        }
+    }
+
+    #[test]
+    fn shutdown_reply_distinguishes_idle_exit_from_active_drain() {
+        assert_eq!(
+            shutdown_state(&serde_json::json!({"ok": true, "exiting": true, "running": 0})),
+            Some(ShutdownState::ExitingNow)
+        );
+        assert_eq!(
+            shutdown_state(&serde_json::json!({"ok": true, "exiting": false, "running": 2})),
+            Some(ShutdownState::Draining { running: 2 })
+        );
+        assert_eq!(
+            shutdown_state(&serde_json::json!({"ok": false, "error": "shared service"})),
+            None
+        );
+    }
+
+    #[test]
+    fn health_probe_uses_the_real_local_http_protocol() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let size = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..size]).starts_with("GET /v1/health "));
+            let body = serde_json::json!({
+                "ok": true,
+                "version": ENGINE_VERSION,
+                "author": ENGINE_AUTHOR,
+                "features": ["job_start", "job_delete"]
+            })
+            .to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let (decision, health) = probe_engine(port).unwrap();
+
+        assert_eq!(decision, EngineHandover::ReuseCurrent);
+        assert_eq!(health["author"], ENGINE_AUTHOR);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn untrusted_port_is_not_sent_a_shutdown_on_app_exit() {
+        let runtime = DesktopRuntime::default();
+        runtime.primary_instance.store(true, Ordering::Release);
+        runtime.explicit_quit.store(true, Ordering::Release);
+
+        shutdown_owned_engine(&runtime);
+
+        assert!(!runtime.trusted_engine.load(Ordering::Acquire));
+        assert!(runtime.shutdown_sent.load(Ordering::Acquire));
     }
 }

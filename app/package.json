@@ -1,7 +1,7 @@
 {
   "name": "bid-assistant",
   "private": true,
-  "version": "0.19.2",
+  "version": "0.19.3",
   "author": "FDE-家涛",
   "scripts": {
     "tauri": "tauri",

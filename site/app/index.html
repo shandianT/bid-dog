@@ -833,7 +833,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
-const BUNDLED_ENGINE_VERSION = '0.19.2';
+const BUNDLED_ENGINE_VERSION = '0.19.3';
 /* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后，旧 PyInstaller 进程可能仍驻留；
    若继续探测历史端口，就会把旧引擎误认成新版，甚至在可执行文件被替换后返回 500。 */
 const DESKTOP_ENGINE = 'http://127.0.0.1:18901';
@@ -973,6 +973,12 @@ function modeFromModel(model){
 }
 function modeSwitchBlocked(jobs){
   return (jobs||[]).some(j=>j && (j.state === 'running' || j.state === 'paused'));
+}
+function engineConnectionGate(online, stale){
+  if(online)return {ready:true,switching:false,message:''};
+  if(stale)return {ready:false,switching:true,
+    message:'检测到旧版本地引擎，正在安全切换到新版；若旧任务仍在收尾，完成后会自动连接。Key 尚未提交或保存。'};
+  return {ready:false,switching:false,message:'本地引擎尚未连接，Key 尚未提交或保存；请先运行一键诊断。'};
 }
 const PUBLIC_TASK_LABELS = {
   preparing:'准备中', generating:'生成中', needs_input:'需要你确认', completed:'已完成', failed:'未完成'
@@ -1348,19 +1354,19 @@ function showEngineOffline(){
   el('conn').textContent = S.stale ? '本地服务需要更新' : '本地引擎未启动';
   el('demoTag').style.display = 'block';
   el('demoTag').textContent = S.stale
-    ? '检测到旧版引擎 · 请退出旧版后重开最新版'
+    ? '检测到旧版引擎 · 正在安全切换到新版'
     : '本地引擎未启动 · 当前无法生成真实文件';
   el('brandDot').style.background = 'var(--amber)';
   el('sbR').textContent = isWin ? 'C:\\Users\\me\\Documents\\中标狗\\jobs' : '~/Documents/中标狗/jobs';
   el('heroSub').textContent = S.stale
-    ? '当前引擎版本与应用不匹配，退出所有旧版中标狗后重新打开最新版'
+    ? '旧引擎若还有任务会先安全收尾；完成后应用会自动连接新版，无需手动关进程'
     : '生成环境没有启动；应用会继续重连，也可以立即运行诊断查看缺失组件和启动路径';
   renderTasks(); renderMain();
   presentProblem({
     level:'error',
     title:S.stale ? '本地生成引擎需要更新' : '本地生成引擎没有启动',
     text:S.stale
-      ? '旧版引擎仍占用端口，最新版无法接管生成任务。'
+      ? '已验证为中标狗旧引擎，正在安全收尾并自动切换；不会强制中断仍在生成的任务。'
       : '安装包内置引擎没有成功启动，可能是安装不完整、被安全软件隔离，或启动路径不可用。',
     detail:'桌面端会把启动路径和系统错误写入 engine-bootstrap.log；点击一键诊断可查看当前环境与修复建议。',
     actions:[{act:'diagnose',label:'一键诊断'}]
@@ -1385,7 +1391,14 @@ async function boot(){
     await new Promise(r=>setTimeout(r,2000));
   }
   showEngineOffline();
-  const re = setInterval(async()=>{ if(await findEngine()){ clearInterval(re); location.reload(); } }, 5000);
+  const re = setInterval(async()=>{
+    const h = await findEngine();
+    if(h){
+      clearInterval(re);
+      delete S.problems._global; renderProblem();
+      await goOnline(h);                         // 原地接管，不刷新丢掉用户尚未提交的 Key
+    }
+  }, 5000);
 }
 function setOnboardingStep(step){
   S.onboardingStep=step;
@@ -3313,6 +3326,8 @@ async function quickS2(){
   // 一串 Key 三件事:生成引擎 + 对话 + 识图,模型按所选模式自动定,识图模型自动挑
   const key = el('qkKey').value.trim();
   const m = el('qkMsg'); m.style.display='block';
+  const gate = engineConnectionGate(S.online, S.stale);
+  if(!gate.ready){ m.textContent = '✗ ' + gate.message; return; }
   if(modeSwitchBlocked(S.jobs)){
     m.textContent = '当前有任务正在运行或暂停，为避免中途换模型，接入设置未更改。'; return;
   }
