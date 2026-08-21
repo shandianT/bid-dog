@@ -319,6 +319,7 @@ def test_server_stall_after_body_never_replays_the_job(engine, job, monkeypatch)
 
 
 def test_preflight_warns_when_macos_runs_from_translocated_dmg(engine, job, monkeypatch):
+    monkeypatch.setattr(engine.sys, "platform", "darwin")
     monkeypatch.setattr(engine.sys, "executable", "/private/var/folders/x/AppTranslocation/ABC/d/中标狗.app/Contents/MacOS/bid-engine")
     monkeypatch.setattr(engine, "resolve_cli", lambda *_a, **_k: "/bundle/opencode-cli")
     engine.write_json(engine.conf_path(), {
