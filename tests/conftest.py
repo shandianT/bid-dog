@@ -39,6 +39,8 @@ def engine(tmp_path, monkeypatch):
     _engine.PROC_OWNERS.clear()
     _engine.DETACHED_CHILDREN.clear()
     _engine.RELAY_LAST.clear()
+    if hasattr(_engine, "PIPELINE_SESSIONS"):
+        _engine.PIPELINE_SESSIONS.clear()
     _engine.OC.update({"proc": None, "port": 0, "base": "", "pw": ""})
     if hasattr(_engine, "_OC_PROBED"):
         _engine._OC_PROBED.update({"ok": False, "why": "", "ts": 0.0})

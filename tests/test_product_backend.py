@@ -1,6 +1,7 @@
 import io
 import asyncio
 import json
+import os
 import threading
 import time
 import zipfile
@@ -194,6 +195,197 @@ def test_delivery_summary_cache_reuses_unchanged_docx_and_invalidates_on_change(
     changed = engine.delivery_summary(str(job))
     assert len(calls) == 2
     assert changed["toc"]["status"] == "fail"
+
+
+def test_delivery_signature_hashes_each_unchanged_artifact_only_once(engine, job, monkeypatch):
+    word = job / "投标文件_完整.docx"
+    _write_word(word, with_toc=True)
+    (job / "技术应答偏离表.md").write_text("|项|响应|\n|---|---|\n|1|满足|\n", encoding="utf-8")
+    original = engine._file_digest
+    calls = []
+    monkeypatch.setattr(engine, "_file_digest", lambda path: (calls.append(path) or original(path)))
+
+    first = engine._delivery_signature(str(job))
+    second = engine._delivery_signature(str(job))
+
+    assert first == second
+    assert len(calls) == 2
+
+
+def test_delivery_digest_cache_does_not_thrash_past_1024_live_files(engine, job, monkeypatch):
+    for index in range(1025):
+        (job / ("产物_%04d.md" % index)).write_text("稳定内容", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(engine, "_file_digest", lambda path: (calls.append(path) or Path(path).name))
+
+    first = engine._delivery_signature(str(job))
+    second = engine._delivery_signature(str(job))
+
+    assert first == second
+    assert len(calls) == 1025
+
+
+def test_delivery_digest_cleanup_is_rate_limited_batched_and_outside_lock(engine, job, monkeypatch):
+    engine._DELIVERY_DIGEST_CACHE.clear()
+    engine._DELIVERY_DIGEST_PRUNE_QUEUE.clear()
+    engine._DELIVERY_DIGEST_GENERATIONS.clear()
+    engine._DELIVERY_DIGEST_GENERATION = 4096
+    engine._DELIVERY_DIGEST_LAST_PRUNE = engine.time.monotonic() - 61
+    for index in range(4096):
+        path = "/live/%04d" % index
+        engine._DELIVERY_DIGEST_CACHE[path] = ((1, index, 1, 1, 1), "digest")
+        engine._DELIVERY_DIGEST_GENERATIONS[path] = index + 1
+        engine._DELIVERY_DIGEST_PRUNE_QUEUE.append((path, index + 1))
+    exists_calls = []
+    monkeypatch.setattr(engine.os.path, "exists", lambda path: (exists_calls.append(path) or True))
+    first = job / "新增一.md"
+    second = job / "新增二.md"
+    first.write_text("一", encoding="utf-8")
+    second.write_text("二", encoding="utf-8")
+
+    engine._delivery_file_fingerprint(str(first))
+    first_scan_count = len(exists_calls)
+    engine._delivery_file_fingerprint(str(second))
+
+    assert first_scan_count <= 256
+    assert len(exists_calls) == first_scan_count
+    assert len(engine._DELIVERY_DIGEST_CACHE) == 4098
+    engine._DELIVERY_DIGEST_CACHE.clear()
+    engine._DELIVERY_DIGEST_PRUNE_QUEUE.clear()
+    engine._DELIVERY_DIGEST_GENERATIONS.clear()
+
+
+def test_delivery_digest_cleanup_rotates_candidates_without_stale_path_starvation(engine, job, monkeypatch):
+    engine._DELIVERY_DIGEST_CACHE.clear()
+    engine._DELIVERY_DIGEST_PRUNE_QUEUE.clear()
+    engine._DELIVERY_DIGEST_GENERATIONS.clear()
+    engine._DELIVERY_DIGEST_GENERATION = 4096
+    engine._DELIVERY_DIGEST_LAST_PRUNE = engine.time.monotonic() - 61
+    for index in range(4096):
+        prefix = "live" if index < 256 else "stale"
+        path = "/%s/%04d" % (prefix, index)
+        engine._DELIVERY_DIGEST_CACHE[path] = ((1, index, 1, 1, 1), "digest")
+        engine._DELIVERY_DIGEST_GENERATIONS[path] = index + 1
+        engine._DELIVERY_DIGEST_PRUNE_QUEUE.append((path, index + 1))
+    exists_calls = []
+    monkeypatch.setattr(engine.os.path, "exists",
+                        lambda path: (exists_calls.append(path) or path.startswith("/live/")))
+    engine._remember_delivery_digest("/new/轮转一.md", (1, 5001, 1, 1, 1), "one")
+    first_candidates = tuple(exists_calls)
+    engine._DELIVERY_DIGEST_LAST_PRUNE = engine.time.monotonic() - 61
+    engine._remember_delivery_digest("/new/轮转二.md", (1, 5002, 1, 1, 1), "two")
+    second_candidates = tuple(exists_calls[len(first_candidates):])
+
+    assert len(first_candidates) == len(second_candidates) == 256
+    assert set(first_candidates).isdisjoint(second_candidates)
+    assert len(engine._DELIVERY_DIGEST_CACHE) < 4098
+    engine._DELIVERY_DIGEST_CACHE.clear()
+    engine._DELIVERY_DIGEST_PRUNE_QUEUE.clear()
+    engine._DELIVERY_DIGEST_GENERATIONS.clear()
+
+
+def test_delivery_digest_cleanup_hard_limits_invalid_token_scans(engine, monkeypatch):
+    engine._DELIVERY_DIGEST_CACHE.clear()
+    engine._DELIVERY_DIGEST_PRUNE_QUEUE.clear()
+    engine._DELIVERY_DIGEST_GENERATIONS.clear()
+    engine._DELIVERY_DIGEST_GENERATION = 104096
+    engine._DELIVERY_DIGEST_LAST_PRUNE = engine.time.monotonic() - 61
+    for index in range(100000):
+        engine._DELIVERY_DIGEST_PRUNE_QUEUE.append(("/obsolete/%06d" % index, index + 1))
+    for index in range(4096):
+        path = "/live/%04d" % index
+        generation = 100001 + index
+        engine._DELIVERY_DIGEST_CACHE[path] = ((1, index, 1, 1, 1), "digest")
+        engine._DELIVERY_DIGEST_GENERATIONS[path] = generation
+        engine._DELIVERY_DIGEST_PRUNE_QUEUE.append((path, generation))
+    before = len(engine._DELIVERY_DIGEST_PRUNE_QUEUE)
+    exists_calls = []
+    monkeypatch.setattr(engine.os.path, "exists", lambda path: (exists_calls.append(path) or True))
+
+    engine._remember_delivery_digest("/new/item", (1, 200000, 1, 1, 1), "new")
+
+    assert before + 1 - len(engine._DELIVERY_DIGEST_PRUNE_QUEUE) == 256
+    assert exists_calls == []
+    engine._DELIVERY_DIGEST_CACHE.clear()
+    engine._DELIVERY_DIGEST_PRUNE_QUEUE.clear()
+    engine._DELIVERY_DIGEST_GENERATIONS.clear()
+
+
+def test_delivery_digest_cleanup_never_deletes_a_recreated_path(engine, monkeypatch):
+    engine._DELIVERY_DIGEST_CACHE.clear()
+    engine._DELIVERY_DIGEST_PRUNE_QUEUE.clear()
+    engine._DELIVERY_DIGEST_GENERATIONS.clear()
+    engine._DELIVERY_DIGEST_GENERATION = 4097
+    engine._DELIVERY_DIGEST_LAST_PRUNE = engine.time.monotonic() - 61
+    target = "/replace/technical.md"
+    for index in range(4097):
+        path = target if index == 0 else "/live/%04d" % index
+        generation = index + 1
+        engine._DELIVERY_DIGEST_CACHE[path] = ((1, index, 1, 1, 1), "old")
+        engine._DELIVERY_DIGEST_GENERATIONS[path] = generation
+        engine._DELIVERY_DIGEST_PRUNE_QUEUE.append((path, generation))
+
+    def recreate_during_check(path):
+        if path == target:
+            engine._remember_delivery_digest(target, (1, 9999, 2, 2, 2), "new")
+            return False
+        return True
+
+    monkeypatch.setattr(engine.os.path, "exists", recreate_during_check)
+    engine._remember_delivery_digest("/new/trigger", (1, 5000, 1, 1, 1), "trigger")
+
+    assert engine._DELIVERY_DIGEST_CACHE[target][1] == "new"
+    engine._DELIVERY_DIGEST_CACHE.clear()
+    engine._DELIVERY_DIGEST_PRUNE_QUEUE.clear()
+    engine._DELIVERY_DIGEST_GENERATIONS.clear()
+
+
+def test_delivery_digest_disables_cache_when_platform_change_marker_is_unavailable(engine, job, monkeypatch):
+    artifact = job / "技术应答偏离表.md"
+    artifact.write_text("|项|响应|\n|---|---|\n|1|满足|\n", encoding="utf-8")
+    calls = []
+    original = engine._file_digest
+    monkeypatch.setattr(engine, "_delivery_change_marker", lambda *_args: (0, False))
+    monkeypatch.setattr(engine, "_file_digest", lambda path: (calls.append(path) or original(path)))
+
+    engine._delivery_signature(str(job))
+    engine._delivery_signature(str(job))
+
+    assert len(calls) == 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows file metadata semantics")
+def test_windows_change_time_detects_same_size_same_mtime_replacement(engine, job):
+    artifact = job / "技术应答偏离表.md"
+    artifact.write_bytes(b"A" * 128)
+    before = artifact.stat()
+    first = engine._windows_change_time(str(artifact))
+    artifact.write_bytes(b"B" * 128)
+    os.utime(artifact, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    assert engine._windows_change_time(str(artifact)) != first
+
+
+def test_delivery_cache_cannot_hide_same_size_same_mtime_deviation_replacement(engine, job):
+    word = job / "投标文件_完整.docx"
+    _write_word(word, with_toc=True)
+    technical = job / "技术应答偏离表.md"
+    technical.write_text("|项|响应|\n|---|---|\n|1|满足|\n", encoding="utf-8")
+    (job / "商务偏离表.md").write_text("|项|响应|\n|---|---|\n|1|满足|\n", encoding="utf-8")
+    (job / "成品质检报告.md").write_text("✅ 通过", encoding="utf-8")
+    first = engine.delivery_summary(str(job), {
+        "status": "pass", "level": "green", "summary": "关键检查已通过"})
+    assert first["ready"] is True
+    before = technical.stat()
+    original = technical.read_bytes()
+    replacement = b"x" * len(original)
+    technical.write_bytes(replacement)
+    os.utime(technical, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    changed = engine.delivery_summary(str(job))
+
+    assert changed["deviations"]["technical"]["status"] == "fail"
+    assert changed["ready"] is False
 
 
 def test_delivery_change_cannot_reuse_a_stale_green_quality_verdict(engine, job):
@@ -393,6 +585,34 @@ def test_agent_self_test_uses_the_same_managed_session_path_as_real_jobs(engine,
     assert result["ok"] is False
     assert result["execution_path"] == "opencode_server"
     assert "正式生成链路" in result["error"]
+
+
+def test_agent_self_test_records_only_models_really_called_for_standard_mode(engine, monkeypatch):
+    engine.write_json(engine.conf_path(), {
+        "engine": {
+            "kind": "s2", "s2_base_url": "https://gateway.invalid/v1",
+            "s2_key": "runtime-test-key", "s2_model": engine.S2_QUALITY_MODEL,
+            "generation_mode": "standard", "s2_verify_ssl": True, "s2_wire": "auto",
+        }
+    })
+
+    def request(_base, _key, path, payload=None, **_kwargs):
+        if path == "/models":
+            return {"data": [{"id": engine.S2_DEFAULT_MODEL}, {"id": engine.S2_QUALITY_MODEL}]}
+        return {"choices": [{"message": {"content": "pong"}}]}
+
+    monkeypatch.setattr(engine, "_openai_req", request)
+    monkeypatch.setattr(engine, "resolve_cli", lambda *_a, **_k: "/synthetic/opencode")
+    monkeypatch.setattr(engine, "oc_serve", lambda *_a, **_k: "http://127.0.0.1:12345")
+    monkeypatch.setattr(engine, "oc_probe", lambda: (True, ""))
+
+    with TestClient(engine.app) as client:
+        response = client.post("/v1/agent/test")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    stored = engine.read_json(engine.conf_path(), {})
+    assert engine._verified_model_ids(stored) == [engine.S2_DEFAULT_MODEL, engine.S2_QUALITY_MODEL]
 
 
 def test_flow_exposes_actual_expected_and_remaining_time_for_each_phase(engine, job, monkeypatch):
@@ -762,6 +982,29 @@ def test_auto_template_recommendation_compiles_scene_rules_into_job_prompt(engin
     assert "重点逐项对应评分分值" in prompt
 
 
+def test_auto_template_preview_is_not_mistaken_for_complete_pipeline_source(engine):
+    tender = (
+        "# 软件平台采购招标文件\n"
+        + "本项目采购统一业务平台，包含系统集成、数据迁移、部署培训、运维服务和验收。\n" * 12
+    ).encode("utf-8")
+
+    with TestClient(engine.app) as client:
+        response = client.post(
+            "/v1/jobs",
+            files={"tender": ("软件采购.md", tender, "text/markdown")},
+            data={"template_id": "auto", "start": "0", "name": "解析复用测试"},
+        )
+
+    assert response.status_code == 200
+    job = Path(engine.jpath(response.json()["job_id"]))
+    assert not (job / "source_manifest.json").exists()
+    manifest = engine.generation_pipeline.parse_source(job, "软件采购.md")
+    assert manifest["reused_extract"] is False
+    assert manifest["complete"] is True
+    assert manifest["char_count"] >= 80
+    assert "统一业务平台" in (job / "招标文件_解析版.md").read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("requested", ["auto", "default", ""])
 def test_default_template_aliases_all_freeze_a_real_scene_snapshot(engine, requested):
     """Regression: legacy/default clients must not create a template-less task or 400."""
@@ -951,6 +1194,28 @@ def test_setup_connect_invalid_key_is_not_saved_or_echoed(engine, monkeypatch):
     assert engine.s2_conf(engine.read_json(engine.conf_path(), {}))["api_key"] == ""
 
 
+def test_setup_connect_does_not_save_a_gateway_with_no_verified_models(engine, monkeypatch):
+    monkeypatch.setattr(engine, "setup_connection_probe", lambda _conf: (True, "", []))
+
+    with TestClient(engine.app) as client:
+        response = client.post("/v1/setup/connect", json={"key": "test-key-with-no-model-list"})
+
+    assert response.status_code == 400
+    assert response.json()["connected"] is False
+    assert engine.read_json(engine.conf_path(), {}) == {}
+
+
+def test_setup_connect_rejects_embedding_only_gateway(engine, monkeypatch):
+    monkeypatch.setattr(engine, "setup_connection_probe", lambda _conf: (True, "", ["embed-v1"]))
+
+    with TestClient(engine.app) as client:
+        response = client.post("/v1/setup/connect", json={"key": "test-key-embedding-only"})
+
+    assert response.status_code == 400
+    assert response.json()["connected"] is False
+    assert engine.read_json(engine.conf_path(), {}) == {}
+
+
 def test_first_run_recommends_fast_mode_and_flash_model(engine):
     with TestClient(engine.app) as client:
         status = client.get("/v1/setup").json()
@@ -968,7 +1233,8 @@ def test_setup_connect_complete_and_key_change_requires_retest(engine, monkeypat
     monkeypatch.setattr(
         engine,
         "setup_connection_probe",
-        lambda _conf: (True, "", [engine.S2_DEFAULT_MODEL, "qwen-vl-max"]),
+        lambda _conf: (True, "", [engine.S2_DEFAULT_MODEL, "qwen-vl-max"],
+                       [engine.S2_DEFAULT_MODEL]),
     )
 
     with TestClient(engine.app) as client:
@@ -1002,6 +1268,79 @@ def test_setup_connect_complete_and_key_change_requires_retest(engine, monkeypat
     assert provider["model"] == engine.S2_DEFAULT_MODEL
     assert provider["vision_model"] == "qwen-vl-max"
     assert stored["routing"]["default"] == "setup-s2"
+
+
+def test_setup_connection_verification_is_invalidated_by_gateway_or_transport_change(engine, monkeypatch):
+    key = "s" + "k-" + "same-key-connection-identity-123456"
+    monkeypatch.setattr(
+        engine, "setup_connection_probe",
+        lambda _conf: (True, "", [engine.S2_DEFAULT_MODEL], [engine.S2_DEFAULT_MODEL]),
+    )
+    with TestClient(engine.app) as client:
+        assert client.post("/v1/setup/connect", json={"key": key}).status_code == 200
+        assert client.post("/v1/setup/complete").status_code == 200
+        conf = engine.read_json(engine.conf_path(), {})
+        conf["engine"]["s2_base_url"] = "https://other-gateway.invalid/v1"
+        engine.write_json(engine.conf_path(), conf)
+        status = client.get("/v1/setup").json()
+
+    assert status["connected"] is False
+    assert status["needed"] is True
+
+
+def test_connection_fingerprint_includes_hidden_url_identity(engine):
+    base = {"api_key": "same-key", "base_url": "https://gateway.example/v1",
+            "verify_ssl": True, "wire": "auto"}
+    with_query = dict(base, base_url="https://gateway.example/v1?tenant=a")
+    with_userinfo = dict(base, base_url="https://user:pass@gateway.example/v1")
+
+    assert engine._connection_fingerprint(base) != engine._connection_fingerprint(with_query)
+    assert engine._connection_fingerprint(base) != engine._connection_fingerprint(with_userinfo)
+
+
+def test_setup_probe_requires_a_real_text_generation_call(engine, monkeypatch):
+    calls = []
+
+    def fake_request(_base, _key, path, payload=None, **_kwargs):
+        calls.append((path, payload))
+        if path == "/models":
+            return {"data": [{"id": engine.S2_DEFAULT_MODEL}, {"id": "embed-v1"}]}
+        return {"choices": [{"message": {"content": "pong"}}]}
+
+    monkeypatch.setattr(engine, "_openai_req", fake_request)
+    ok, why, ids, verified = engine.setup_connection_probe({
+        "engine": {"s2_key": "test-key", "s2_base_url": "https://gateway.example/v1",
+                   "s2_model": engine.S2_DEFAULT_MODEL, "s2_verify_ssl": True,
+                   "s2_wire": "auto"},
+    })
+
+    assert ok is True
+    assert why == ""
+    assert ids == [engine.S2_DEFAULT_MODEL, "embed-v1"]
+    assert verified == [engine.S2_DEFAULT_MODEL]
+    assert [path for path, _payload in calls] == ["/models", "/chat/completions"]
+    assert calls[1][1]["model"] == engine.S2_DEFAULT_MODEL
+
+
+def test_standard_setup_probes_fast_and_quality_models_separately(engine, monkeypatch):
+    calls = []
+
+    def fake_request(_base, _key, path, payload=None, **_kwargs):
+        if path == "/models":
+            return {"data": [{"id": engine.S2_DEFAULT_MODEL}, {"id": engine.S2_QUALITY_MODEL}]}
+        calls.append(payload["model"])
+        return {"choices": [{"message": {"content": "pong"}}]}
+
+    monkeypatch.setattr(engine, "_openai_req", fake_request)
+    result = engine.setup_connection_probe({
+        "engine": {"s2_key": "test-key", "s2_base_url": "https://gateway.example/v1",
+                   "s2_model": engine.S2_QUALITY_MODEL, "generation_mode": "standard",
+                   "s2_verify_ssl": True, "s2_wire": "auto"},
+    })
+
+    assert result[0] is True
+    assert result[3] == [engine.S2_DEFAULT_MODEL, engine.S2_QUALITY_MODEL]
+    assert calls == [engine.S2_DEFAULT_MODEL, engine.S2_QUALITY_MODEL]
 
 
 def test_setup_failure_leaves_entire_previous_configuration_unchanged(engine, monkeypatch):

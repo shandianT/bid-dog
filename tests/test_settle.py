@@ -1,5 +1,6 @@
 from pathlib import Path
 import hashlib
+import os
 
 import pytest
 from docx import Document
@@ -31,6 +32,7 @@ def _sha256(path):
 def test_body_word_is_the_only_direct_success(engine, job, monkeypatch):
     _write_body_docx(job / "投标文件_技术标.docx")
     monkeypatch.setattr(engine, "quality_audit", lambda *_: None)
+    monkeypatch.setattr(engine, "delivery_summary", lambda *_args, **_kwargs: {"ready": True})
 
     result = engine.settle(str(job))
 
@@ -48,6 +50,64 @@ def test_corrupt_or_fake_docx_never_opens_the_delivery_gate(engine, job, payload
 
     assert result["state"] == "stopped"
     assert engine.job_state(str(job)) == "stopped"
+
+
+def test_word_format_audit_rejects_an_unformatted_docx(engine, job):
+    _write_body_docx(job / "投标文件_技术标.docx", paragraphs=2)
+
+    result = engine.word_format_audit(str(job), "投标文件_技术标.docx")
+
+    assert result["status"] == "fail"
+    report = (job / "Word格式自检报告.md").read_text(encoding="utf-8")
+    assert "❌" in report
+
+
+def test_word_format_report_is_bound_to_the_exact_docx_bytes(engine, job):
+    word = job / "投标文件_技术标.docx"
+    _write_body_docx(word, paragraphs=10)
+    digest = engine._file_digest(str(word))
+    (job / "Word格式自检报告.md").write_text(
+        "# 格式报告\n\n- SHA-256：`%s`\n- 结论：✅ 全部通过（1 项）\n" % digest,
+        encoding="utf-8",
+    )
+    assert engine._word_format_status(str(job), word.name)["status"] == "pass"
+
+    document = Document(word)
+    document.add_paragraph("质检后改写 Word")
+    document.save(word)
+
+    assert engine._word_format_status(str(job), word.name)["status"] == "stale"
+
+
+def test_delivery_cache_cannot_hide_same_size_same_mtime_word_replacement(engine, job):
+    word = job / "投标文件_技术标.docx"
+    _write_body_docx(word, paragraphs=10)
+    digest = engine._file_digest(str(word))
+    report = job / "Word格式自检报告.md"
+    report.write_text(
+        "# 格式报告\n\n- SHA-256：`%s`\n- 结论：✅ 全部通过（1 项）\n" % digest,
+        encoding="utf-8",
+    )
+    engine.generation_pipeline.initialize(
+        job, run_id="delivery-cache", mode="fast",
+        model_routes={"fast": "fast", "quality": "quality"}, chapters=[],
+    )
+    first = engine.delivery_summary(str(job), quality={
+        "status": "pass", "level": "green", "summary": "关键检查已通过"})
+    assert first["format"]["status"] == "pass"
+    cached_signature = engine._delivery_signature(str(job))
+    original = word.read_bytes()
+    original_stat = word.stat()
+    changed = bytearray(original)
+    changed[-1] ^= 1
+    word.write_bytes(changed)
+    os.utime(word, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    assert engine._delivery_signature(str(job)) != cached_signature
+
+    second = engine.delivery_summary(str(job))
+
+    assert second["ready"] is False
+    assert second["format"]["status"] == "stale"
 
 
 def test_failed_redo_cannot_reuse_the_previous_word_as_new_success(engine, job):
@@ -107,6 +167,7 @@ def test_body_markdown_must_export_word_before_success(engine, job, monkeypatch)
 
     monkeypatch.setattr(engine, "ensure_docx", make_word)
     monkeypatch.setattr(engine, "quality_audit", lambda *_: None)
+    monkeypatch.setattr(engine, "delivery_summary", lambda *_args, **_kwargs: {"ready": True})
 
     result = engine.settle(str(job))
 

@@ -833,7 +833,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
-const BUNDLED_ENGINE_VERSION = '0.19.9';
+const BUNDLED_ENGINE_VERSION = '0.20.0';
 /* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后，旧 PyInstaller 进程可能仍驻留；
    若继续探测历史端口，就会把旧引擎误认成新版，甚至在可执行文件被替换后返回 500。 */
 const DESKTOP_ENGINE = 'http://127.0.0.1:18901';
@@ -850,7 +850,7 @@ let S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}, atts:{}
           taskBulkMode:false, taskBulkDeleting:false, taskBulkBusy:false, taskBulkMore:false, taskSelected:new Set(), taskMore:null,
           taskScope:'active', archivedJobs:[], projectFilter:'', processView:{}, problems:{}, diagnostic:null, projectTargetIds:[], templates:[], setup:null, onboardingStep:1,
           artsLoaded:{}, eventTimes:{}, esOffsets:{}, wordNotified:{}, streamState:{}, reconnectTimers:{}, pollTimers:{}, recoveredTimers:{},
-          updateInfo:null, engineVersion:'', rerunBusy:{}, rerunKeys:{} };
+          updateInfo:null, engineVersion:'', rerunBusy:{}, rerunKeys:{}, nodeRetryBusy:{}, nodeRetryKeys:{} };
 document.getElementById('sbL').textContent = isWin ? '任务栏显示进度 · 完成后系统通知' : 'Dock 显示进度 · 完成后系统通知 · 托盘常驻';
 
 /* FRONTEND_STABILITY_PURE_START */
@@ -1195,7 +1195,8 @@ async function api(p, opt){
   if(!r.ok){
     let body = null; try{ body = await r.json(); }catch(_){}
     const e = new Error((body && (body.error || body.detail)) || (p+' '+r.status));
-    e.status = r.status; e.body = body; e.requestId = requestId || (body&&body.request_id) || ''; throw e;
+    e.status = r.status; e.body = body; if(body && body.code) e.code = body.code;
+    e.requestId = requestId || (body&&body.request_id) || ''; throw e;
   }
   const data = await r.json();
   if(data && typeof data==='object' && requestId && !data.request_id) data.request_id = requestId;
@@ -2411,6 +2412,27 @@ async function errAction(act, file, param){
     return;
   }
   if(act==='resume'){ resumeJob(); return; }
+  if(act==='retry_node'){
+    if(!S.active || !S.online || !param) return;
+    const retryOp=S.active+':'+param;
+    if(S.nodeRetryBusy[retryOp]) return;
+    S.nodeRetryBusy[retryOp]=true;
+    try{
+      const retryKey=S.nodeRetryKeys[retryOp]||(S.nodeRetryKeys[retryOp]=(globalThis.crypto&&globalThis.crypto.randomUUID?globalThis.crypto.randomUUID():('retry-'+Date.now()+'-'+Math.random().toString(36).slice(2))));
+      const r=await api('/v1/jobs/'+encodeURIComponent(S.active)+'/nodes/'+encodeURIComponent(param)+'/retry',{
+        method:'POST',headers:{'Idempotency-Key':retryKey}});
+      if(r.ok) delete S.nodeRetryKeys[retryOp];
+      toast(r.ok ? '正在重试当前节点，已完成内容不会重写' : ('重试没有启动：'+(r.error||'')));
+      await loadJobs();
+    }catch(e){
+      // 后端明确确认“未派发”时才换新的操作键；网络超时的结果未知，必须
+      // 保留原键，避免用户再次点击导致同一节点重复运行。
+      if(e&&e.code==='retry_dispatch_failed') delete S.nodeRetryKeys[retryOp];
+      toast('重试没有启动：'+(e&&e.message||'请查看诊断详情'));
+    }
+    finally{ S.nodeRetryBusy[retryOp]=false; }
+    return;
+  }
   if(act==='open_redo'){ openRedo(); return; }
   if(act==='repair'){ openCheck(); repairJob(); return; }
   if(act==='open_artifact'){ openArtifact(file); return; }
@@ -3222,8 +3244,9 @@ async function loadAgent(){
     // 否则用户在这里选了模式、实际却由别的引擎在跑(SoWork 未登录 → 任务开跑才报错)
     if(a.kind === 's2'){
       const eff = a.s2_model_effective || '';
-      const actualMode = modeFromModel(eff); if(actualMode) setQkMode(actualMode);
-      el('qkNow').textContent = '当前生效:自动 · 生成模型 ' + (eff || '(默认)');
+      const actualMode = a.generation_mode === 'standard' ? 'quality' : (a.generation_mode || modeFromModel(eff));
+      if(actualMode) setQkMode(actualMode);
+      el('qkNow').textContent = '当前生效:自动 · ' + QK_MODES[QK_MODE].name + '模式';
       el('qkNow').style.color = 'var(--sub)';
       const want = QK_MODES[QK_MODE];
       if(eff && want && !(eff === want.prefer || want.pick.test(eff)))
@@ -3248,9 +3271,9 @@ async function loadAgent(){
 }
 const QK_MODES = {
   quality: {name:'标准', prefer:'senseaudio-s2', pick:/s2|pro|max|plus/i, avoid:/flash|lite|mini|turbo|nano/i,
-            hint:'标准:质量优先,篇幅与细节更足,适合关键项目和最终定稿；速度会比极速慢。'},
+            hint:'标准:解析和分章仍用极速模型，最终增加标准模型复核；适合关键项目和定稿。'},
   fast:    {name:'极速', prefer:'deepseek-v4-flash', pick:/flash|lite|turbo|mini|nano/i, avoid:null,
-            hint:'极速:优先快速起稿和节省额度,适合首次试跑、日常标书与演示；现在为默认。'}
+            hint:'极速:本地解析后用极速模型分段生成，优先速度与稳定性；现在为默认。'}
 };
 let QK_MODE = 'fast';
 let QK_SWITCH_SEQ = 0, QK_SWITCH_QUEUE = Promise.resolve();
@@ -3266,6 +3289,7 @@ function setQkBusy(on){
 }
 function agentStatusPayload(a){
   return {kind:a.kind==='env'?'custom':(a.kind||'s2'), mode:a.mode||'agents', cmd:a.cmd||'',
+          generation_mode:a.generation_mode||'fast',
           skill_dir:a.skill_dir||'',
           cli_path:a.cli_path||'', env:a.env||'', login_shell:a.login_shell!==false,
           sowork_agent:a.sowork_agent||'main', thinking:a.thinking||'off', timeout:a.timeout||1800,
@@ -3281,7 +3305,8 @@ function queueQkMode(mode){
   const seq = ++QK_SWITCH_SEQ;
   QK_SWITCH_QUEUE = QK_SWITCH_QUEUE.then(async()=>{
     if(seq !== QK_SWITCH_SEQ) return;             // 尚未开始的旧点击被新点击合并，只执行最后一次
-    const previousMode = modeFromModel(S.lastAgent&&S.lastAgent.s2_model_effective) || QK_MODE;
+    const previousMode = (S.lastAgent&&S.lastAgent.generation_mode)==='standard' ? 'quality'
+      : ((S.lastAgent&&S.lastAgent.generation_mode)||modeFromModel(S.lastAgent&&S.lastAgent.s2_model_effective)||QK_MODE);
     setQkMode(mode); setQkBusy(true);
     const ok = await qkApplyMode(mode);
     if(!ok){
@@ -3321,9 +3346,10 @@ async function qkApplyMode(mode){
     if(!models.length){ try{ models = (await api('/v1/relay/models')).models || []; }catch(e){} }
     const gen = qkPick(models, mode);
     await api('/v1/agent', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(
-      Object.assign({}, oldPayload, {kind:'s2', s2_model: gen, cli_path:''}))});
+      Object.assign({}, oldPayload, {kind:'s2', s2_model: gen,
+        generation_mode:mode==='quality'?'standard':'fast', cli_path:''}))});
     changed = true;
-    const v = await qkVerify(gen);
+    const v = await qkVerify(gen, mode);
     if(!v.ok) throw new Error(v.why);
     const probe = await api('/v1/agent/test', {method:'POST'});
     if(!probe.ok) throw new Error(probe.error || '新模型连通测试未通过');
@@ -3342,13 +3368,15 @@ async function qkApplyMode(mode){
     return false;
   }
 }
-async function qkVerify(gen){
+async function qkVerify(gen, mode){
   /* 回读校验:保存接口返回 ok 不等于真的生效(曾经出现过前端显示 ✓、配置里还是上一个引擎)。
      以引擎回读到的 kind/model 为准,对不上就当失败讲清楚。 */
   try{
     const a = await api('/v1/agent');
     if(a.kind !== 's2') return {ok:false, why:'当前生效的引擎仍是「' + kindName(a.kind) + '」,请在下面「生成引擎」里手动选「自动(默认)」'};
     if(gen && a.s2_model && a.s2_model !== gen) return {ok:false, why:'模型没写进去(仍是 ' + a.s2_model + ')'};
+    const expectedMode = mode==='quality'?'standard':'fast';
+    if(mode && a.generation_mode !== expectedMode) return {ok:false, why:'生成模式没有保存成功'};
     if(!(a.s2_key_set || a.s2_borrowed)) return {ok:false, why:'Key 没保存成功'};
     return {ok:true};
   }catch(e){ return {ok:false, why:'读不回引擎状态'}; }
@@ -3359,6 +3387,7 @@ function kindName(k){ return KIND_NAME[k] || k || '未设置'; }
 function agentPayload(){
   /* PUT /v1/agent 是整体覆盖写,漏字段等于把用户的高级设置清空——统一在这里取一次 */
   return {kind: el('agKind').value, mode: el('agMode').value, cmd: el('agCmd').value.trim(),
+          generation_mode: QK_MODE==='quality'?'standard':'fast',
           cli_path: el('agCli').value.trim(), env: el('agEnv').value.trim(),
           login_shell: el('agLogin').checked, sowork_agent: (el('agAgent').value.trim() || 'main'),
           thinking: el('agThink').value, s2_base_url: el('agS2Base').value.trim(),

@@ -25,7 +25,8 @@ def test_diagnostic_bundle_contains_evidence_and_redacts_every_key(engine, job):
                 "env": "API_KEY=" + custom_secret,
             },
             "providers": [
-                {"id": "p1", "api_key": plain_secret, "base_url": "https://example.invalid/v1"}
+                {"id": "p1", "api_key": plain_secret,
+                 "base_url": "https://user:pass@example.invalid/v1?token=query-secret"}
             ],
             "relay_token": "local-token-that-must-also-be-redacted",
         },
@@ -57,6 +58,9 @@ def test_diagnostic_bundle_contains_evidence_and_redacts_every_key(engine, job):
     assert plain_secret.encode("utf-8") not in combined
     assert custom_secret.encode("utf-8") not in combined
     assert b"local-token-that-must-also-be-redacted" not in combined
+    assert b"user:pass" not in combined
+    assert b"query-secret" not in combined
+    assert b"https://example.invalid/v1" in combined
     assert re.search(rb"sk-[A-Za-z0-9]{20,}", combined) is None
 
 

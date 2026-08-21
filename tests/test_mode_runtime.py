@@ -1,5 +1,7 @@
 import io
+from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -38,6 +40,87 @@ def test_probe_cache_is_scoped_to_effective_mode(engine, monkeypatch):
     engine.write_json(engine.conf_path(), _config("deepseek-v4-flash"))
     assert engine.oc_probe_once()[0]
     assert len(calls) == 2
+
+
+def test_opencode_provider_registers_fast_and_quality_pipeline_models(engine):
+    engine.write_json(engine.conf_path(), _config("deepseek-v4-flash"))
+
+    directory, _base, _direct = engine.opencode_home_s2()
+
+    config = engine.read_json(str(engine.Path(directory) / "opencode.json"), {}) if hasattr(engine, "Path") else engine.read_json(directory + "/opencode.json", {})
+    models = config["provider"]["biddog-s2"]["models"]
+    assert engine.S2_DEFAULT_MODEL in models
+    assert engine.S2_QUALITY_MODEL in models
+    permission = config["permission"]
+    assert permission["bash"] == "deny"
+    assert permission["task"] == "deny"
+    assert permission["external_directory"] == "deny"
+    assert permission["webfetch"] == "deny"
+
+
+def test_pipeline_routes_only_freeze_models_verified_by_setup(engine, tmp_path):
+    job = Path(engine.jpath("verified-routes"))
+    job.mkdir(parents=True)
+    meta = {"run_id": "verified", "template_snapshot": {"package": {"outline": [
+        {"title": "项目理解"}
+    ]}}}
+    conf = _config("gateway-fast")
+    conf["setup"] = {"model_ids": ["gateway-fast"], "text_verified_model_ids": ["gateway-fast"],
+                     "tested_connection_fingerprint": engine._connection_fingerprint(conf)}
+
+    state = engine._initialize_generation_pipeline(str(job), meta, conf)
+
+    assert state["model_routes"]["fast"] == "gateway-fast"
+    assert state["model_routes"]["quality"] == "gateway-fast"
+
+
+def test_pipeline_ignores_stale_selected_model_when_gateway_verified_list_changed(engine, tmp_path):
+    job = Path(engine.jpath("stale-route"))
+    job.mkdir(parents=True)
+    meta = {"run_id": "stale", "template_snapshot": {"package": {"outline": [
+        {"title": "项目理解"}
+    ]}}}
+    conf = _config("removed-old-model")
+    conf["setup"] = {"model_ids": ["verified-fast", "verified-quality"],
+                     "text_verified_model_ids": ["verified-fast", "verified-quality"],
+                     "tested_connection_fingerprint": engine._connection_fingerprint(conf)}
+
+    state = engine._initialize_generation_pipeline(str(job), meta, conf)
+
+    assert state["model_routes"]["fast"] == "verified-fast"
+    assert state["model_routes"]["quality"] == "verified-fast"
+    assert "removed-old-model" not in state["model_routes"].values()
+
+
+def test_pipeline_rejects_models_verified_for_an_old_gateway_identity(engine, tmp_path):
+    job = Path(engine.jpath("changed-gateway"))
+    job.mkdir(parents=True)
+    meta = {"run_id": "changed", "template_snapshot": {"package": {"outline": [
+        {"title": "项目理解"}
+    ]}}}
+    original = _config("gateway-fast")
+    original["setup"] = {"model_ids": ["gateway-fast"], "text_verified_model_ids": ["gateway-fast"],
+                         "tested_connection_fingerprint": engine._connection_fingerprint(original)}
+    changed = {**original, "engine": {**original["engine"],
+                                       "s2_base_url": "https://other-gateway.invalid/v1"}}
+
+    with pytest.raises(engine.generation_pipeline.PipelineError, match="重新测试连接"):
+        engine._initialize_generation_pipeline(str(job), meta, changed)
+
+
+def test_generation_mode_is_persisted_independently_from_agent_orchestration_mode(engine):
+    engine.write_json(engine.conf_path(), _config("deepseek-v4-flash"))
+
+    with TestClient(engine.app) as client:
+        response = client.put("/v1/agent", json={
+            "kind": "s2", "mode": "agents", "generation_mode": "standard",
+            "s2_model": "senseaudio-s2", "s2_key": "",
+        })
+        status = client.get("/v1/agent")
+
+    assert response.status_code == 200
+    assert status.json()["mode"] == "agents"
+    assert status.json()["generation_mode"] == "standard"
 
 
 def test_running_task_rejects_global_mode_switch(engine):

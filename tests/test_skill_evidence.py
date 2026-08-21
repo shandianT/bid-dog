@@ -173,6 +173,7 @@ def test_unverifiable_skill_completion_message_never_claims_the_skill_was_not_us
     _set_current_run(engine, job, run_id, manifest)
     _write_body_docx(job / "投标文件_技术标.docx")
     monkeypatch.setattr(engine, "quality_audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(engine, "delivery_summary", lambda *_args, **_kwargs: {"ready": True})
 
     result = engine.settle(str(job))
 
@@ -819,7 +820,7 @@ def test_delete_keeps_job_when_opencode_interrupt_is_unconfirmed(
 
     assert response.status_code == 502
     assert job.exists()
-    assert not engine._cancel_requested(job.name, owner)
+    assert engine._cancel_requested(job.name, owner)
     release.set()
     worker.join(1)
 
@@ -840,7 +841,7 @@ def test_stop_does_not_claim_success_when_opencode_interrupt_fails(
     result = engine.stop_job(job.name)
 
     assert result.status_code == 502
-    assert not engine._cancel_requested(job.name, owner)
+    assert engine._cancel_requested(job.name, owner)
     assert engine.read_json(str(job / "outcome.json"), {}) == {}
     release.set()
     worker.join(1)

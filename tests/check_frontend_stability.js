@@ -51,6 +51,16 @@ test('API 请求具备超时追踪，创建任务具备网络幂等键', () => {
   assert.match(create, /Idempotency-Key/, '创建任务没有网络重试幂等键');
 });
 
+test('节点派发失败会换重试键，网络结果不明时保留原键', () => {
+  const apiHelper = section('async function api(p, opt)', 'function el(id)');
+  assert.match(apiHelper, /e\.code\s*=\s*body\.code/, 'API 业务错误没有透传后端错误码');
+  const retry = section("if(act==='retry_node')", "if(act==='open_redo')");
+  assert.match(retry, /e\.code===['"]retry_dispatch_failed['"][\s\S]*delete S\.nodeRetryKeys\[retryOp\]/,
+    '明确派发失败后没有清除旧幂等键');
+  assert.doesNotMatch(retry, /catch\(e\)\s*\{\s*delete S\.nodeRetryKeys\[retryOp\]/,
+    '网络结果不明时不应无条件清除旧幂等键');
+});
+
 const startMark = '/* FRONTEND_STABILITY_PURE_START */';
 const endMark = '/* FRONTEND_STABILITY_PURE_END */';
 const start = html.indexOf(startMark);

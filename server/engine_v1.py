@@ -9,6 +9,8 @@
 """
 import os, re, sys, ssl, json, glob, time, signal, hashlib, hmac, secrets, base64, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error, urllib.parse, io, platform
 import xml.etree.ElementTree as ET
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock as _ThreadLock, RLock as _ThreadRLock
 from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, Request
@@ -19,6 +21,7 @@ from template_engine import (builtin_templates, compare_instruction_coverage,
                              compile_template_instructions, derive_template,
                              extract_document_structure, normalize_package,
                              recommend_template, validate_package)
+import generation_pipeline
 
 def _configure_stdio_utf8():
     """Windows GUI/重定向日志常落到 cp1252；启动横幅含中文时不能因此让整个 sidecar 崩溃。"""
@@ -32,7 +35,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.19.9'
+ENGINE_VERSION = '0.20.0'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -44,7 +47,8 @@ ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest'
                    'delivery_summary', 'job_usage', 'job_archive', 'job_projects', 'job_bulk_actions',
                    'deliverables_zip', 'task_templates', 'one_click_diagnostics', 'job_revisions',
                    'setup_onboarding', 'scene_template_packages', 'template_derivation',
-                   'incremental_model_stream', 'automatic_session_recovery']
+                   'incremental_model_stream', 'automatic_session_recovery',
+                   'checkpoint_generation_pipeline', 'local_tender_parse']
 HERE = os.path.dirname(os.path.abspath(__file__))
 def _data_root():
     env = os.environ.get('BID_HOME')
@@ -254,6 +258,18 @@ _NAMED_SECRET_RE = re.compile(
     r'(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\b(\s*[:=]\s*)["\']?([^\s,"\']+)'
 )
 _BEARER_RE = re.compile(r'(?i)\b(Bearer)(\s+)[A-Za-z0-9._~+/=-]{12,}')
+_URL_RE = re.compile(r'(?i)https?://[^\s<>"\']+')
+
+def _sanitize_urls(value):
+    """URL 只保留协议、主机、端口和路径，禁止诊断中泄露 userinfo/query token。"""
+    def replace(match):
+        raw = match.group(0)
+        suffix = ''
+        while raw and raw[-1] in '),.;]}':
+            suffix = raw[-1] + suffix
+            raw = raw[:-1]
+        return generation_pipeline.safe_base_url(raw) + suffix
+    return _URL_RE.sub(replace, str(value or ''))
 
 def redact(value):
     """事件、诊断包和用户可见错误的统一脱敏入口。配置原件和 run.log 不在这里改写。"""
@@ -261,6 +277,7 @@ def redact(value):
     if isinstance(value, list): return [redact(v) for v in value]
     if isinstance(value, tuple): return tuple(redact(v) for v in value)
     if isinstance(value, str):
+        value = _sanitize_urls(value)
         value = _SECRET_RE.sub('[API Key 已隐藏]', value)
         value = _NAMED_SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + '[凭据已隐藏]', value)
         return _BEARER_RE.sub(lambda m: m.group(1) + m.group(2) + '[凭据已隐藏]', value)
@@ -1126,24 +1143,154 @@ def _quality_result_from_disk(job, signature=''):
         return {'status': 'warning', 'level': 'yellow', 'summary': '关键检查有建议确认项', 'report': report}
     return {'status': 'pass', 'level': 'green', 'summary': '关键检查已通过', 'report': report}
 
+_DELIVERY_DIGEST_CACHE = {}
+_DELIVERY_DIGEST_LOCK = threading.Lock()
+_DELIVERY_DIGEST_LAST_PRUNE = 0.0
+_DELIVERY_DIGEST_PRUNE_QUEUE = deque()
+_DELIVERY_DIGEST_GENERATIONS = {}
+_DELIVERY_DIGEST_GENERATION = 0
+
+def _remember_delivery_digest(path, identity, digest):
+    global _DELIVERY_DIGEST_LAST_PRUNE, _DELIVERY_DIGEST_GENERATION
+    prune_candidates = []
+    with _DELIVERY_DIGEST_LOCK:
+        # Every changed digest receives a new generation. Older queued tokens then
+        # become harmless tombstones and cannot delete a recreated path.
+        _DELIVERY_DIGEST_GENERATION += 1
+        generation = _DELIVERY_DIGEST_GENERATION
+        _DELIVERY_DIGEST_GENERATIONS[path] = generation
+        _DELIVERY_DIGEST_PRUNE_QUEUE.append((path, generation))
+        _DELIVERY_DIGEST_CACHE[path] = (identity, digest)
+        current = time.monotonic()
+        if (len(_DELIVERY_DIGEST_CACHE) > 4096
+                and current - _DELIVERY_DIGEST_LAST_PRUNE >= 60):
+            _DELIVERY_DIGEST_LAST_PRUNE = current
+            scanned = 0
+            # Hard-bound total queue work, not only valid candidates: a backlog of
+            # obsolete generation tokens must not monopolize the global lock.
+            while _DELIVERY_DIGEST_PRUNE_QUEUE and scanned < 256:
+                cached_path, generation = _DELIVERY_DIGEST_PRUNE_QUEUE.popleft()
+                scanned += 1
+                if (_DELIVERY_DIGEST_GENERATIONS.get(cached_path) != generation
+                        or cached_path not in _DELIVERY_DIGEST_CACHE):
+                    continue
+                prune_candidates.append((cached_path, generation))
+                _DELIVERY_DIGEST_PRUNE_QUEUE.append((cached_path, generation))
+    # Filesystem calls are deliberately outside the global cache lock.
+    stale = [(cached_path, generation) for cached_path, generation in prune_candidates
+             if not os.path.exists(cached_path)]
+    if stale:
+        with _DELIVERY_DIGEST_LOCK:
+            for cached_path, generation in stale:
+                if _DELIVERY_DIGEST_GENERATIONS.get(cached_path) != generation:
+                    continue
+                _DELIVERY_DIGEST_CACHE.pop(cached_path, None)
+                _DELIVERY_DIGEST_GENERATIONS.pop(cached_path, None)
+
+def _windows_change_time(path):
+    """Read NTFS ChangeTime; Python st_ctime is still creation time on Windows."""
+    import ctypes
+    from ctypes import wintypes
+
+    class FILE_BASIC_INFO(ctypes.Structure):
+        _fields_ = [
+            ('CreationTime', ctypes.c_longlong), ('LastAccessTime', ctypes.c_longlong),
+            ('LastWriteTime', ctypes.c_longlong), ('ChangeTime', ctypes.c_longlong),
+            ('FileAttributes', wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.HANDLE]
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(path, 0, 0x00000007, None, 3, 0, None)
+    invalid = wintypes.HANDLE(-1).value
+    if handle == invalid:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        info = FILE_BASIC_INFO()
+        get_info = kernel32.GetFileInformationByHandleEx
+        get_info.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+        get_info.restype = wintypes.BOOL
+        if not get_info(handle, 0, ctypes.byref(info), ctypes.sizeof(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return int(info.ChangeTime)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _delivery_change_marker(path, stat):
+    if os.name != 'nt':
+        return int(getattr(stat, 'st_ctime_ns', stat.st_ctime * 1e9)), True
+    try:
+        return _windows_change_time(path), True
+    except (OSError, AttributeError, ImportError):
+        # If native metadata is unavailable, correctness wins over caching.
+        return 0, False
+
+
+def _delivery_file_fingerprint(path):
+    """Return a content identity without rereading unchanged large artifacts every poll."""
+    absolute = os.path.abspath(path)
+    for _ in range(2):
+        before = os.stat(absolute)
+        before_change, cacheable = _delivery_change_marker(absolute, before)
+        identity = (
+            int(getattr(before, 'st_dev', 0)), int(getattr(before, 'st_ino', 0)),
+            int(before.st_size),
+            int(getattr(before, 'st_mtime_ns', before.st_mtime * 1e9)),
+            before_change,
+        )
+        if cacheable:
+            with _DELIVERY_DIGEST_LOCK:
+                cached = _DELIVERY_DIGEST_CACHE.get(absolute)
+                if cached and cached[0] == identity:
+                    return identity, cached[1]
+        digest = _file_digest(absolute)
+        after = os.stat(absolute)
+        after_change, after_cacheable = _delivery_change_marker(absolute, after)
+        after_identity = (
+            int(getattr(after, 'st_dev', 0)), int(getattr(after, 'st_ino', 0)),
+            int(after.st_size),
+            int(getattr(after, 'st_mtime_ns', after.st_mtime * 1e9)),
+            after_change,
+        )
+        if identity != after_identity:
+            continue
+        if cacheable and after_cacheable:
+            # Keep live entries so fixed-order task scans keep hitting the cache. Missing
+            # paths are reclaimed through a bounded rotating queue without starvation.
+            _remember_delivery_digest(absolute, identity, digest)
+        return identity, digest
+    raise OSError('交付文件在校验期间持续变化')
+
+
 def _delivery_signature(job):
     rows = []
     for name in list_deliverables(job):
         path = os.path.join(job, name)
         try:
-            stat = os.stat(path)
-            rows.append((name, int(stat.st_size), int(getattr(stat, 'st_mtime_ns', stat.st_mtime * 1e9))))
+            identity, content_digest = _delivery_file_fingerprint(path)
+            # ready 同时依赖 Word、格式报告、偏离表与品质报告；所有交付物都绑定
+            # 内容身份，避免同大小/同 mtime 替换绕过门禁。
+            rows.append((name,) + identity + (content_digest,))
         except OSError:
-            rows.append((name, -1, -1))
+            rows.append((name, -1, -1, -1, -1, -1, ''))
     return hashlib.sha256(json.dumps(rows, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 def delivery_summary(job, quality=None):
     signature = _delivery_signature(job)
     cache_path = os.path.join(job, 'delivery.json')
     cached = read_json(cache_path, {})
+    pipeline_state = generation_pipeline.load(job)
+    format_required = pipeline_state.get('version') == generation_pipeline.PIPELINE_VERSION
+    cached_summary = cached.get('summary') if isinstance(cached, dict) else None
     if (quality is None and isinstance(cached, dict) and cached.get('signature') == signature
-            and isinstance(cached.get('summary'), dict)):
-        return cached['summary']
+            and isinstance(cached_summary, dict)
+            and (not format_required or isinstance(cached_summary.get('format'), dict))):
+        return cached_summary
     words = _body_docxs(job)
     primary = words[0] if words else ''
     jid = urllib.parse.quote(os.path.basename(job), safe='')
@@ -1157,10 +1304,15 @@ def delivery_summary(job, quality=None):
                   'technical': technical, 'business': business,
                   'total_rows': technical['rows'] + business['rows']}
     quality = quality if isinstance(quality, dict) else _quality_result_from_disk(job, signature)
+    word_format = (_word_format_status(job) if format_required else
+                   {'status': 'not_required', 'present': False, 'report': ''})
     components = [word['present'], toc['status'] == 'pass', deviations['status'] == 'pass',
-                  quality.get('status') == 'pass']
+                  quality.get('status') == 'pass',
+                  (not format_required or word_format['status'] == 'pass')]
     ready = all(components)
-    if not word['present'] or toc['status'] == 'fail' or deviations['status'] == 'fail' or quality.get('status') == 'fail':
+    if (not word['present'] or toc['status'] == 'fail' or deviations['status'] == 'fail'
+            or quality.get('status') == 'fail'
+            or (format_required and word_format['status'] != 'pass')):
         check_status = 'fail'
     elif quality.get('status') in ('unknown', 'warning'):
         check_status = quality.get('status')
@@ -1168,7 +1320,8 @@ def delivery_summary(job, quality=None):
         check_status = 'pass'
     checks = {'status': check_status, 'level': quality.get('level') or ('green' if ready else 'red'),
               'summary': quality.get('summary') or ('关键检查已通过' if ready else '关键检查仍有待确认项')}
-    summary = {'word': word, 'toc': toc, 'deviations': deviations, 'checks': checks, 'ready': ready}
+    summary = {'word': word, 'toc': toc, 'deviations': deviations, 'format': word_format,
+               'checks': checks, 'ready': ready}
     try:
         patch_json(cache_path, {'signature': signature, 'summary': summary,
                                 'quality': quality, 'quality_signature': signature,
@@ -1394,6 +1547,81 @@ def ensure_docx(job, known, force=False):
                            % '`、`'.join(made),
                    'actions': [{'act': 'open_artifact', 'label': '打开 Word', 'file': made[0]}]})
     return made
+
+
+def word_format_audit(job, word_name=''):
+    """执行技能包中的确定性 Word 格式门禁。
+
+    不调用子进程：PyInstaller 环境下 ``sys.executable script.py`` 会重启引擎。
+    这里直接调用同一脚本的检查函数，失败项与脚本退出码 1 同源。
+    """
+    words = _body_docxs(job)
+    word_name = word_name or (words[0] if words else '')
+    report_name = 'Word格式自检报告.md'
+    report_path = os.path.join(job, report_name)
+    checker = _skill_module('check_docx_format')
+    if not word_name or not checker:
+        detail = '未找到待检 Word' if not word_name else '技能包缺少 check_docx_format.py'
+        open(report_path, 'w', encoding='utf-8').write(
+            '# 投标文件格式自检报告\n\n- 结论：❌ 未通过\n- 原因：%s\n' % detail)
+        return {'status': 'fail', 'report': report_name, 'failed': 1, 'summary': detail}
+    word_path = os.path.join(job, word_name)
+    spec_path = _job_find(job, 'word_format_spec.json')
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    try:
+        spec = checker.load_spec(spec_path)
+        document = checker.Document(word_path)
+        checks = checker.Checker()
+        front = spec['cover'].get('enabled', True) or spec['toc'].get('enabled', True)
+        restart = bool(spec['page_numbering'].get('body_restart', True)) and front
+        body_index = checker.check_page_numbering(document, spec, restart, checks)
+        checker.check_page(document, spec, body_index, checks)
+        checker.check_text_style(
+            document.styles['Normal'], spec['body'], '正文', checks,
+            indent_expected=spec['body'].get('first_line_indent_chars', 2))
+        checker.check_headings(document, spec, checks)
+        checker.check_header_footer(
+            document, spec, body_index, restart, str(meta.get('name') or ''), checks)
+        checker.check_toc(document, spec, checks)
+        checker.check_cover(document, spec, str(meta.get('name') or ''), checks)
+        checker.check_tables(document, spec, checks)
+        checker.check_images(document, checks)
+        checker.check_body_direct_overrides(document, spec, checks)
+        checker.check_conventions(spec, checks, bool(spec_path))
+        checker.write_report(report_path, word_path, spec_path, checks)
+        # 格式结论必须绑定受检 Word 的确切字节；后续质检若重建
+        # Word，旧绿色报告会立即变为 stale，不得开启交付。
+        with open(report_path, 'a', encoding='utf-8') as report:
+            report.write('\n- SHA-256：`%s`\n' % _file_digest(word_path))
+        failed = len(checks.failed)
+        return {'status': 'pass' if failed == 0 else 'fail', 'report': report_name,
+                'failed': failed,
+                'summary': ('Word 格式门禁已通过' if failed == 0
+                            else 'Word 格式门禁有 %d 项不符' % failed)}
+    except Exception as exc:
+        safe = redact(str(exc))
+        open(report_path, 'w', encoding='utf-8').write(
+            '# 投标文件格式自检报告\n\n- 结论：❌ 未通过\n- 原因：格式检查执行失败：%s\n' % safe)
+        return {'status': 'fail', 'report': report_name, 'failed': 1,
+                'summary': '格式检查执行失败'}
+
+
+def _word_format_status(job, word_name=''):
+    report_name = 'Word格式自检报告.md'
+    try:
+        text = open(os.path.join(job, report_name), encoding='utf-8', errors='ignore').read()
+    except OSError:
+        return {'status': 'missing', 'present': False, 'report': report_name}
+    passed = '结论：✅ 全部通过' in text
+    digest_match = re.search(r'- SHA-256：`([0-9a-f]{64})`', text, re.I)
+    words = _body_docxs(job)
+    word_name = word_name or (words[0] if words else '')
+    current_digest = _file_digest(os.path.join(job, word_name)) if word_name else ''
+    bound = bool(digest_match and current_digest
+                 and hmac.compare_digest(digest_match.group(1).lower(), current_digest.lower()))
+    status = 'pass' if passed and bound else ('stale' if passed else 'fail')
+    return {'status': status, 'present': True, 'report': report_name,
+            'word_sha256_bound': bound}
 
 @app.post('/v1/jobs/{jid}/export_docx')
 def export_docx(jid: str):
@@ -1706,7 +1934,7 @@ def _tail_lines(path, count=8):
         return []
     return [_redact_runtime(x) for x in lines[-count:]]
 
-def settle(job, known=None, stop_reason=None):
+def settle(job, known=None, stop_reason=None, commit=True):
     """统一出件闸门。CLI、OpenCode server、mock 都只能从这里进入终态。"""
     if not os.path.isdir(job): return {'state': 'stopped', 'reason': '任务目录不存在'}
     harvest(job)
@@ -1742,7 +1970,7 @@ def settle(job, known=None, stop_reason=None):
         words = [fn for fn in words if redo_docs.get(fn) != _file_digest(os.path.join(job, fn))]
     if words:
         outcome = read_json(os.path.join(job, 'outcome.json'), {})
-        if outcome.get('state') == 'done':
+        if outcome.get('state') == 'done' and commit:
             return {'state': 'done', 'word': words[0], 'artifacts': sorted(known)}
         try:
             quality = quality_audit(job, known)
@@ -1763,6 +1991,26 @@ def settle(job, known=None, stop_reason=None):
             halt(job, why)
             return {'state': 'stopped', 'reason': why, 'word': words[0],
                     'artifacts': sorted(known), 'delivery': delivery_summary(job, quality)}
+        pipeline_state = generation_pipeline.load(job)
+        if pipeline_state.get('version') == generation_pipeline.PIPELINE_VERSION:
+            # quality_audit 可能修改 Markdown 并重建 Word；因此格式门禁必须
+            # 在所有内容修复之后重跑，并用 SHA-256 绑定最终 Word。
+            format_result = word_format_audit(job, words[0])
+            known |= set(list_deliverables(job))
+            if format_result.get('status') != 'pass':
+                why = '已停止（Word 格式门禁未通过）'
+                halt(job, why)
+                return {'state': 'stopped', 'reason': why, 'word': words[0],
+                        'artifacts': sorted(known), 'delivery': delivery_summary(job, quality)}
+        delivery = delivery_summary(job, quality)
+        if not delivery.get('ready'):
+            why = '已停止（出件检查未通过）'
+            halt(job, why)
+            return {'state': 'stopped', 'reason': why, 'word': words[0],
+                    'artifacts': sorted(known), 'delivery': delivery}
+        if not commit:
+            return {'state': 'ready', 'word': words[0], 'artifacts': sorted(known),
+                    'delivery': delivery}
         if redo:
             meta.pop('redo_baseline', None)
             write_json(os.path.join(job, '任务.json'), meta)
@@ -2177,6 +2425,8 @@ def skill_evidence(job):
 # `/session/{id}/abort` 倒是有(无 /api 前缀),但我们用 `/api/session/{id}/interrupt`。
 OC = {'proc': None, 'port': 0, 'base': '', 'pw': '', 'fingerprint': ''}     # 常驻 server 句柄
 OC_LOCK = threading.Lock()
+PIPELINE_SESSIONS = {}  # job id -> {OpenCode short-session ids}; stop/delete must interrupt all
+PIPELINE_SESSIONS_LOCK = threading.Lock()
 
 def _free_port():
     s = socket.socket(); s.bind(('127.0.0.1', 0)); p = s.getsockname()[1]; s.close(); return p
@@ -2795,6 +3045,476 @@ def oc_run(job, prompt, allow_cli_fallback=True):
         stop.set()
     return result
 
+
+def _pipeline_mode(conf=None):
+    conf = conf if isinstance(conf, dict) else read_json(conf_path(), {})
+    eng = conf.get('engine') or {}
+    explicit = str(eng.get('generation_mode') or '').lower()
+    if explicit in ('standard', 'quality'): return 'standard'
+    if explicit == 'fast': return 'fast'
+    return 'standard' if str(s2_conf(conf).get('model') or '') == S2_QUALITY_MODEL else 'fast'
+
+
+def _safe_chapter_name(index, title):
+    clean = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', '-', str(title or '')).strip(' .-_')
+    clean = re.sub(r'\s+', '', clean)[:40] or ('章节%d' % index)
+    return '章节_%02d_%s.md' % (index, clean)
+
+
+def _pipeline_chapters(meta):
+    snapshot = meta.get('template_snapshot') if isinstance(meta.get('template_snapshot'), dict) else {}
+    package = snapshot.get('package') if isinstance(snapshot.get('package'), dict) else {}
+    outline = package.get('outline') if isinstance(package.get('outline'), list) else []
+    if not outline:
+        outline = [{'title': title} for title in (
+            '资格与符合性响应', '项目理解与总体方案', '技术与服务响应',
+            '实施与验收方案', '商务响应与承诺')]
+    chapters = []
+    for index, item in enumerate(outline[:12], 1):
+        item = item if isinstance(item, dict) else {'title': str(item)}
+        chapters.append({'id': '%02d' % index,
+                         'title': str(item.get('title') or ('章节%d' % index))[:120],
+                         'purpose': str(item.get('purpose') or '')[:500],
+                         'evidence': [str(value)[:120] for value in (item.get('evidence') or [])[:12]],
+                         'output': _safe_chapter_name(index, item.get('title'))})
+    return chapters
+
+
+def _initialize_generation_pipeline(job, meta, conf):
+    up = s2_conf(conf)
+    mode = _pipeline_mode(conf)
+    verified = _verified_model_ids(conf)
+    selected = str(up.get('model') or S2_DEFAULT_MODEL)
+    if not verified:
+        raise generation_pipeline.PipelineError('没有已验证的生成模型，请先在“模型接入”重新测试连接')
+    selected_verified = selected if selected in verified else ''
+    fast_model = (S2_DEFAULT_MODEL if S2_DEFAULT_MODEL in verified else
+                  (selected_verified or verified[0]))
+    quality_model = (S2_QUALITY_MODEL if S2_QUALITY_MODEL in verified else
+                     (selected_verified or fast_model))
+    state = generation_pipeline.initialize(
+        job,
+        run_id=str(meta.get('run_id') or _new_run_id()),
+        mode=mode,
+        model_routes={'fast': fast_model, 'quality': quality_model},
+        chapters=_pipeline_chapters(meta),
+        credential_fingerprint=generation_pipeline.credential_fingerprint(up.get('api_key') or ''),
+        base_url=up.get('base_url') or '',
+    )
+    meta['pipeline_version'] = generation_pipeline.PIPELINE_VERSION
+    meta['generation_mode'] = mode
+    write_json(os.path.join(job, '任务.json'), meta)
+    return state
+
+
+def _pipeline_register_session(job, sid):
+    with PIPELINE_SESSIONS_LOCK:
+        PIPELINE_SESSIONS.setdefault(os.path.basename(job), set()).add(sid)
+
+
+def _pipeline_unregister_session(job, sid):
+    with PIPELINE_SESSIONS_LOCK:
+        sessions = PIPELINE_SESSIONS.get(os.path.basename(job))
+        if not sessions: return
+        sessions.discard(sid)
+        if not sessions: PIPELINE_SESSIONS.pop(os.path.basename(job), None)
+
+
+def _pipeline_interrupt_sessions(job):
+    with PIPELINE_SESSIONS_LOCK:
+        sessions = list(PIPELINE_SESSIONS.get(os.path.basename(job), set()))
+    results = [_interrupt_or_finished(sid) for sid in sessions]
+    return all(results) if results else True
+
+
+def _pipeline_declared_input_names(job, node, state=None):
+    """One source of truth for model-node file inputs, including DAG dependencies."""
+    node_id = str(node.get('id') or '')
+    names = ['招标文件_解析版.md', '你的要求.md']
+    if node_id != 'response_plan':
+        names.extend(['投标文件组成.md', '评分点响应矩阵.md', '废标风险清单.md',
+                      'response_plan.json'])
+    state = state or generation_pipeline.load(job)
+    names.extend(generation_pipeline.dependency_outputs(state, node_id))
+    if node_id == 'quality_review':
+        names.extend([os.path.basename(path) for path in glob.glob(os.path.join(job, '*.md'))])
+    result = []
+    for name in names:
+        safe = os.path.basename(str(name or ''))
+        if safe and safe not in result:
+            result.append(safe)
+    return result
+
+
+def _pipeline_material_paths(job):
+    materials = os.path.join(job, '素材')
+    result = []
+    if not os.path.isdir(materials):
+        return result
+    count = 0; total = 0
+    for parent, dirs, files in os.walk(materials, followlinks=False):
+        dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(parent, name))]
+        for name in sorted(files):
+            source = os.path.join(parent, name)
+            if os.path.islink(source): continue
+            size = os.path.getsize(source)
+            count += 1; total += size
+            if count > 1000 or total > 100 * 1024 * 1024:
+                raise generation_pipeline.PipelineError('本节点素材超过安全处理上限')
+            result.append(source)
+    return result
+
+
+def _pipeline_copy_inputs(job, node, target):
+    """Materialize the exact read set for one model attempt; never use symlinks."""
+    node_id = str(node.get('id') or '')
+    copied = set()
+    for name in _pipeline_declared_input_names(job, node):
+        safe = os.path.basename(str(name or ''))
+        if not safe or safe in copied: continue
+        source = os.path.join(job, safe)
+        if os.path.isfile(source) and not os.path.islink(source):
+            shutil.copy2(source, os.path.join(target, safe)); copied.add(safe)
+    skill_file = os.path.join(skill_dir_conf(read_json(conf_path(), {})), 'SKILL.md')
+    if os.path.isfile(skill_file) and not os.path.islink(skill_file):
+        shutil.copy2(skill_file, os.path.join(target, 'SKILL.md'))
+    materials = os.path.join(job, '素材')
+    if node_id.startswith('chapter_write:'):
+        for source in _pipeline_material_paths(job):
+            rel = os.path.relpath(source, materials)
+            destination = os.path.join(target, '素材', rel)
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            shutil.copy2(source, destination)
+
+
+def _pipeline_model_runner(job, node, prompt, model):
+    """Execute one bounded node in a fresh OpenCode session.
+
+    A stream failure raises a retryable node error.  It never replays the full
+    tender task and never switches the whole job to a second CLI execution.
+    """
+    base = os.path.basename(job)
+    if _cancel_requested(base):
+        raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+    if not oc_serve():
+        raise generation_pipeline.NodeExecutionError('opencode_server_unavailable', retryable=True)
+    attempt_root = generation_pipeline.attempt_directory(job, node)
+    _pipeline_copy_inputs(job, node, str(attempt_root))
+    title = '%s · %s' % (read_json(os.path.join(job, '任务.json'), {}).get('name') or base,
+                        node.get('title') or node.get('id'))
+    st, body = oc_api('/api/session?directory=%s' % urllib.parse.quote(str(attempt_root)),
+                      {'title': title[:180]}, timeout=30)
+    sid = (body or {}).get('id') if st in (200, 201) and isinstance(body, dict) else ''
+    if not sid:
+        raise generation_pipeline.NodeExecutionError('opencode_session_unavailable', retryable=True,
+                                                       detail='HTTP %s' % st)
+    _pipeline_register_session(job, sid)
+    try:
+        sent, detail = oc_send(sid, prompt, delivery='queue',
+                               model={'providerID': 'biddog-s2', 'modelID': model}, job=job)
+        if not sent:
+            raise generation_pipeline.NodeExecutionError('node_dispatch_failed', retryable=True,
+                                                           detail=str(detail)[:300])
+        started = time.time()
+        slow_after = float(os.environ.get('BIDDOG_PIPELINE_SLOW_SECONDS', 90))
+        stall_after = float(os.environ.get('BIDDOG_PIPELINE_STALL_SECONDS', 240))
+        timeout_after = float(os.environ.get('BIDDOG_PIPELINE_NODE_TIMEOUT_SECONDS', 900))
+        slow_notified = False
+        last_activity = time.time()
+        output_paths = [os.path.join(str(attempt_root), os.path.basename(str(name)))
+                        for name in (node.get('outputs') or [])]
+        output_sig = generation_pipeline.file_digest(output_paths)
+        while True:
+            if _cancel_requested(base):
+                oc_interrupt(sid)
+                raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+            time.sleep(1)
+            current_sig = generation_pipeline.file_digest(output_paths)
+            if current_sig != output_sig:
+                output_sig = current_sig
+                last_activity = time.time()
+                generation_pipeline.touch_node(job, node.get('id'))
+            done, error = oc_turn(sid)
+            quiet = time.time() - last_activity
+            if error:
+                limited = bool(re.search(r'\b429\b|rate limit|usage limit|quota', error, re.I))
+                code = ('model_rate_limited' if limited else
+                        ('stream_interrupted' if _recoverable_turn_error(error) else 'model_node_failed'))
+                raise generation_pipeline.NodeExecutionError(code, retryable=_recoverable_turn_error(error),
+                                                               detail=error)
+            if done and quiet >= OC_QUIET:
+                try:
+                    generation_pipeline.promote_outputs(job, attempt_root, node)
+                except generation_pipeline.OutputValidationError as exc:
+                    raise generation_pipeline.NodeExecutionError(
+                        'node_output_missing', retryable=True, detail=str(exc)) from exc
+                return
+            if quiet >= slow_after and not slow_notified:
+                slow_notified = True
+                emit(job, {'type': 'message', 'role': 'agent',
+                           'text': '“%s”响应偏慢，仍在检查本节点；已完成节点不会重跑。' %
+                                   (node.get('title') or node.get('id'))})
+            if quiet >= stall_after:
+                oc_interrupt(sid)
+                raise generation_pipeline.NodeExecutionError('stream_idle_timeout', retryable=True)
+            if time.time() - started >= timeout_after:
+                oc_interrupt(sid)
+                raise generation_pipeline.NodeExecutionError('node_timeout', retryable=True)
+    finally:
+        try:
+            delete_status, delete_detail = oc_api('/api/session/%s' % sid, timeout=10, method='DELETE')
+            if delete_status not in (200, 202, 204, 404):
+                append_diagnostic(job, 'pipeline_session_cleanup_failed',
+                                  'HTTP %s: %s' % (delete_status, str(delete_detail)[:160]),
+                                  level='warning', session_id=sid)
+        except Exception as exc:
+            append_diagnostic(job, 'pipeline_session_cleanup_failed', str(exc),
+                              level='warning', session_id=sid)
+        _pipeline_unregister_session(job, sid)
+
+
+def _pipeline_prompt(job, node):
+    outputs = [os.path.basename(str(name)) for name in (node.get('outputs') or [])]
+    common = (
+        '你正在执行中标狗的一个有界节点，不是整单自由发挥。工作目录是隔离的本次尝试目录。\n'
+        '先读取当前目录的 `SKILL.md`，并遵守其中事实边界。不得编造客户名称、报价、资质、案例或人员。\n'
+        '招标正文只读 `招标文件_解析版.md`；补充要求读 `你的要求.md`（若存在）。\n'
+        '只完成本节点，不要启动子 agent，不要导出 Word，不要修改 pipeline.json。\n'
+        '必须使用 write/edit 工具把内容真实写入下列指定文件；禁止只在聊天回复里给正文。'
+        '结束前用 read 工具逐个检查文件存在且正文完整，缺一项就继续写，全部落盘后才能结束。\n')
+    node_id = str(node.get('id') or '')
+    if node_id == 'response_plan':
+        return common + (
+            '任务：基于招标解析版提取响应规划。必须分别写出：\n'
+            '- `投标文件组成.md`：完整目录与每章目的；\n'
+            '- `评分点响应矩阵.md`：原要求、分值（未知则标未知）、响应位置、证据、缺口；\n'
+            '- `废标风险清单.md`：资格、签章、报价、时限、实质性条款风险。\n'
+            '- `response_plan.json`：UTF-8 JSON，顶层含 chapters 数组；每项必须有 id、title、output，'
+            '还必须有 basis（招标依据数组）、scoring_points（评分点数组）、'
+            'material_slots（素材槽位数组）和 dependencies（前置章节 id 数组）；'
+            '章节 id、输出文件必须唯一，依赖不得成环。\n'
+            '每个文件至少 200 字，所有不确定项标〔需补充〕。')
+    if node_id == 'chapter_write:technical_deviation':
+        return common + (
+            '任务：生成 `技术应答偏离表.md`。必须使用 Markdown 表格，列为“序号｜招标条款/技术要求｜'
+            '投标响应｜偏离情况｜依据/证据｜备注”。逐项从解析版提取；未发现明确偏离时也要写一行“无偏离”，'
+            '并注明核对依据，不能只写说明段落。唯一输出：`技术应答偏离表.md`。')
+    if node_id == 'chapter_write:business_deviation':
+        return common + (
+            '任务：生成 `商务偏离表.md`。必须使用 Markdown 表格，列为“序号｜招标条款/商务要求｜'
+            '投标响应｜偏离情况｜依据/证据｜备注”。逐项覆盖报价、付款、工期、质保、交付、签章等要求；'
+            '未发现明确偏离时也要写一行“无偏离”，并注明核对依据。唯一输出：`商务偏离表.md`。')
+    if node_id.startswith('chapter_write:'):
+        basis = '、'.join(str(value) for value in (node.get('basis') or [])) or '以解析版为准'
+        slots = '、'.join(str(value) for value in (node.get('material_slots') or [])) or '无指定素材槽位'
+        scores = '、'.join(str(value) for value in (node.get('scoring_points') or [])) or '未标注独立评分点'
+        dependency_files = '、'.join('`%s`' % name for name in
+                                       generation_pipeline.dependency_outputs(
+                                           generation_pipeline.load(job), node_id)) or '无'
+        return common + (
+            '任务：撰写章节“%s”。同时读取 `投标文件组成.md`、`评分点响应矩阵.md`、'
+            '`废标风险清单.md` 和素材目录。\n'
+            '本章规划依据：%s。对应评分点：%s。素材槽位：%s。'
+            '前置章节产物：%s，必须读取并保持一致。\n'
+            '唯一输出：`%s`。正文应逐项响应并标注证据来源；素材缺失写〔需补充〕，至少 800 字。' %
+            (node.get('title') or '本章', basis, scores, slots, dependency_files,
+             outputs[0] if outputs else '章节.md'))
+    if node_id == 'quality_review':
+        return common + (
+            '任务：复核 `投标文件_整册.md` 对评分点、废标项、事实依据和重复内容的覆盖。\n'
+            '唯一输出：`成品质检报告.md`。只给复核结论和明确修订建议，不改正文。')
+    raise generation_pipeline.PipelineError('没有该节点的模型提示：%s' % node_id)
+
+
+def _pipeline_event(job, event, node):
+    title = node.get('title') or node.get('id')
+    if event == 'started':
+        emit(job, {'type': 'worklog', 'lines': ['开始：%s（第 %d/%d 次）' %
+              (title, int(node.get('attempt') or 1), int(node.get('max_attempts') or 3))]})
+    elif event == 'done':
+        emit(job, {'type': 'worklog', 'lines': ['完成：%s' % title]})
+        for name in node.get('outputs') or []:
+            emit(job, {'type': 'artifact', 'name': name})
+    elif event == 'retry':
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '“%s”连接中断，将只重试这个节点（已尝试 %d/%d）；前面成果已保留。' %
+                           (title, int(node.get('attempt') or 0), int(node.get('max_attempts') or 3))})
+
+
+def _pipeline_complete_local(job, node_id, digest, action, *, retryable=True):
+    node = generation_pipeline.start_node(job, node_id, input_digest=digest)
+    if node.get('state') == 'done': return node
+    try:
+        action(node)
+        return generation_pipeline.complete_node(job, node_id, input_digest=digest)
+    except Exception as exc:
+        generation_pipeline.fail_node(job, node_id, 'local_node_failed', retryable=retryable)
+        raise
+
+
+def generation_pipeline_worker(job):
+    """Run local parse -> short model nodes -> deterministic Word, resumably."""
+    base = os.path.basename(job)
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    tender = os.path.basename(meta.get('tender') or '')
+    source = os.path.join(job, tender)
+    try:
+        state = generation_pipeline.load(job)
+        if state.get('version') != generation_pipeline.PIPELINE_VERSION:
+            state = _initialize_generation_pipeline(job, meta, read_json(conf_path(), {}))
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '已启动可恢复分段生成：本地解析一次，模型按节点执行；断线只重试当前节点。'})
+        update_runtime(job, execution_path='checkpoint_pipeline', can_pause=False,
+                       pause_disabled_reason='分段节点会自动保存；需要中止请使用停止。')
+
+        source_digest = generation_pipeline.file_digest([source])
+        def parse_action(_node):
+            manifest = read_json(os.path.join(job, 'source_manifest.json'), {})
+            if (manifest.get('sha256') != source_digest
+                    or not os.path.isfile(os.path.join(job, '招标文件_解析版.md'))):
+                generation_pipeline.parse_source(job, tender)
+        _pipeline_complete_local(job, 'source_parse', source_digest, parse_action, retryable=False)
+        emit(job, {'type': 'progress', 'stage': '招标文件已在本地解析，正在提取响应规划',
+                   'pct': 12, 'step': 2, 'total': 12})
+
+        request_file = os.path.join(job, '你的要求.md')
+        plan_digest = generation_pipeline.file_digest(
+            [os.path.join(job, '招标文件_解析版.md'), request_file])
+        generation_pipeline.run_model_node(
+            job, 'response_plan', lambda node, prompt, model: _pipeline_model_runner(job, node, prompt, model),
+            prompt=_pipeline_prompt(job, next(n for n in state['nodes'] if n['id'] == 'response_plan')),
+            input_digest=plan_digest, on_event=lambda event, node: _pipeline_event(job, event, node))
+        state = generation_pipeline.apply_response_plan(job)
+        emit(job, {'type': 'progress', 'stage': '响应规划已完成，正在分章撰写',
+                   'pct': 45, 'step': 6, 'total': 12})
+
+        chapter_nodes = [node for node in state.get('nodes') or []
+                         if str(node.get('id') or '').startswith('chapter_write:')]
+        def write_chapter(node):
+            current_state = generation_pipeline.load(job)
+            inputs = [os.path.join(job, name) for name in
+                      _pipeline_declared_input_names(job, node, current_state)]
+            inputs.extend(_pipeline_material_paths(job))
+            contract = json.dumps({key: node.get(key) for key in
+                                   ('title', 'basis', 'scoring_points', 'material_slots', 'dependencies')},
+                                  ensure_ascii=False, sort_keys=True)
+            digest = generation_pipeline.file_digest(inputs) + ':' + _sha256_text(contract)
+            return generation_pipeline.run_model_node(
+                job, node['id'], lambda current, prompt, model: _pipeline_model_runner(job, current, prompt, model),
+                prompt=_pipeline_prompt(job, node), input_digest=digest,
+                on_event=lambda event, current: _pipeline_event(job, event, current))
+        # 每次恢复都从 DAG 根节点按序校验摘要；摘要未变的 done 节点会立即复用，
+        # 依赖产物变化时下游才会被精确重做。
+        completed_ids = set()
+        remaining = {node['id']: node for node in chapter_nodes}
+        while remaining:
+            ready = [node for node in remaining.values()
+                     if set(node.get('dependencies') or []) <= completed_ids]
+            if not ready:
+                raise generation_pipeline.PipelineError('章节依赖无法继续执行')
+            batch = ready[:2]
+            with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                futures = {pool.submit(write_chapter, node): node for node in batch}
+                for future in as_completed(futures):
+                    future.result()
+                    node = futures[future]
+                    completed_ids.add(node['id'])
+                    remaining.pop(node['id'], None)
+
+        emit(job, {'type': 'progress', 'stage': '各章已完成，正在汇总整册',
+                   'pct': 78, 'step': 9, 'total': 12})
+        state = generation_pipeline.load(job)
+        chapter_outputs = [node['outputs'][0] for node in state.get('nodes') or []
+                           if str(node.get('id') or '').startswith('chapter_write:')]
+        assemble_digest = generation_pipeline.file_digest([os.path.join(job, name) for name in chapter_outputs])
+        def assemble(_node):
+            pieces = []
+            for name in chapter_outputs:
+                text = open(os.path.join(job, name), encoding='utf-8', errors='ignore').read().strip()
+                if text: pieces.append(text)
+            target = os.path.join(job, '投标文件_整册.md')
+            tmp = target + '.tmp'
+            open(tmp, 'w', encoding='utf-8').write('\n\n---\n\n'.join(pieces) + '\n')
+            os.replace(tmp, target)
+        _pipeline_complete_local(job, 'assemble', assemble_digest, assemble)
+
+        state = generation_pipeline.load(job)
+        quality_node = next(node for node in state['nodes'] if node['id'] == 'quality_review')
+        quality_digest = generation_pipeline.file_digest(
+            [os.path.join(job, '投标文件_整册.md'), os.path.join(job, '评分点响应矩阵.md'),
+             os.path.join(job, '废标风险清单.md')])
+        if quality_node.get('kind') == 'model':
+            generation_pipeline.run_model_node(
+                job, 'quality_review', lambda node, prompt, model: _pipeline_model_runner(job, node, prompt, model),
+                prompt=_pipeline_prompt(job, quality_node), input_digest=quality_digest,
+                on_event=lambda event, node: _pipeline_event(job, event, node))
+        else:
+            def local_quality(_node):
+                body = open(os.path.join(job, '投标文件_整册.md'), encoding='utf-8', errors='ignore').read()
+                report = ('# 成品质检报告\n\n- 分章数量：%d\n- 整册字符数：%d\n'
+                          '- 待补充标记：%d\n- 说明：最终 Word 导出后仍需经过确定性交付质检。\n' %
+                          (len(chapter_outputs), len(body), body.count('〔需补充〕')))
+                open(os.path.join(job, '成品质检报告.md'), 'w', encoding='utf-8').write(report)
+            _pipeline_complete_local(job, 'quality_review', quality_digest, local_quality)
+
+        emit(job, {'type': 'progress', 'stage': '整册已汇总，正在导出并检查 Word',
+                   'pct': 90, 'step': 11, 'total': 12})
+        word_digest = generation_pipeline.file_digest([os.path.join(job, '投标文件_整册.md')])
+        def export_word(_node):
+            ensure_docx(job, set(list_deliverables(job)), force=True)
+            audit = word_format_audit(job, '投标文件_整册.docx')
+            if audit.get('status') != 'pass':
+                raise generation_pipeline.OutputValidationError(
+                    audit.get('summary') or 'Word 格式门禁未通过')
+        _pipeline_complete_local(job, 'word_export', word_digest, export_word, retryable=False)
+        delivery_digest = generation_pipeline.file_digest([
+            os.path.join(job, '投标文件_整册.docx'), os.path.join(job, '成品质检报告.md'),
+            os.path.join(job, '技术应答偏离表.md'), os.path.join(job, '商务偏离表.md'),
+            os.path.join(job, 'Word格式自检报告.md')])
+        def delivery_gate(_node):
+            result = settle(job, commit=False)
+            delivery = delivery_summary(job)
+            if not isinstance(result, dict) or result.get('state') != 'ready' or not delivery.get('ready'):
+                raise generation_pipeline.OutputValidationError('最终交付门禁未通过')
+        _pipeline_complete_local(job, 'delivery_gate', delivery_digest, delivery_gate, retryable=False)
+        # 先落盘 delivery_gate=done，再提交用户可见 outcome=done。若在两者之间崩溃，
+        # 任务仍显示未完成；下次恢复会复用已完成门禁并补提交，绝不会假完成。
+        final = settle(job)
+        if not isinstance(final, dict) or final.get('state') != 'done':
+            raise generation_pipeline.OutputValidationError('交付终态提交失败')
+    except generation_pipeline.SourceParseError as exc:
+        append_diagnostic(job, 'source_parse_failed', str(exc), level='error')
+        emit(job, {'type': 'error', 'text': '招标文件本地解析失败：%s' % exc,
+                   'actions': [{'act': 'diagnose', 'label': '一键诊断'}]})
+        settle(job, stop_reason='已停止（招标文件解析失败）')
+    except generation_pipeline.NodeExecutionError as exc:
+        if exc.code == 'cancelled': return
+        append_diagnostic(job, exc.code, exc.detail, level='error')
+        problem = generation_pipeline.summary(job).get('problem') or {}
+        node_id = str(problem.get('node_id') or '当前节点')
+        title = str(problem.get('title') or node_id)
+        if exc.code == 'model_rate_limited':
+            text = ('“%s”被上游模型限流或额度拦截；这不是本地引擎卡死。任务已停在检查点，'
+                    '请稍后重试当前节点，或在模型接入中切换可用模型。' % title)
+        else:
+            text = ('“%s”连续重试后仍未完成，任务已停在可恢复检查点；已完成节点不会重跑。' % title)
+        emit(job, {'type': 'error',
+                   'text': text,
+                   'actions': [{'act': 'retry_node', 'label': '重试当前节点', 'param': node_id},
+                               {'act': 'open_log', 'label': '查看诊断详情'}]})
+        settle(job, stop_reason='已停止（当前节点连接中断）')
+    except Exception as exc:
+        append_diagnostic(job, 'pipeline_worker_exception', str(exc), level='error')
+        problem = generation_pipeline.summary(job).get('problem') or {}
+        retry_action = ({'act': 'retry_node', 'label': '重试当前节点',
+                         'param': str(problem.get('node_id') or '')}
+                        if problem.get('node_id') else
+                        {'act': 'resume', 'label': '从检查点继续'})
+        emit(job, {'type': 'error', 'text': '分段生成在当前节点停止，已完成内容均已保留。',
+                   'actions': [retry_action,
+                               {'act': 'open_log', 'label': '查看诊断详情'}]})
+        settle(job, stop_reason='已停止（分段生成异常）')
+
 _OC_PROBED = {'ok': False, 'why': '', 'ts': 0.0, 'fingerprint': ''}
 
 def oc_probe_once(ttl=600, failure_ttl=300):
@@ -3130,25 +3850,24 @@ def opencode_home_s2(eng=None):
     up = s2_conf()
     direct = (eng.get('s2_wire') or 'auto') == 'responses' and (eng.get('s2_direct') is True)
     base = (up['base_url'] if direct else relay_base())
+    routed_models = []
+    for model_id in (up['model'], S2_DEFAULT_MODEL, S2_QUALITY_MODEL):
+        if model_id and model_id not in routed_models: routed_models.append(model_id)
     conf = {
         '$schema': 'https://opencode.ai/config.json',
         'provider': {'biddog-s2': {
             'npm': '@ai-sdk/openai-compatible', 'name': '中标狗 · S2',
             'options': {'baseURL': base, 'apiKey': '{env:BIDDOG_S2_KEY}'},
-            'models': {up['model']: {'name': up['model']}}}},
-        # 标书生成要跑脚本/写文件:bash 与 edit 放行;webfetch 关掉(素材是唯一事实来源,不允许上网编)。
-        #
-        # external_directory 必须显式放行,否则**每一单都会永久挂住** ——
-        # 素材库(materialsDir)与技能包(skillDir)天生在工作目录(outDir)之外,
-        # opencode 对目录外访问默认 action=ask;而我们用的是 `run --auto` 非交互模式,
-        # 没有人能回答这个询问,进程就停在那里:0% CPU、没有报错、没有超时,
-        # 界面上永远停在「预检 8%」。真机实测:三个前置分析子 agent 全部跑完并返回后,
-        # 主控读素材库时撞上 ask,整条流程静默挂死 9 分钟以上(日志原文:
-        # `message=asking permission=external_directory action.action=ask`)。
-        # 这就是 OpenCode 一直「装上了却从没产出过一单」的真实原因。
-        'permission': {'edit': 'allow', 'bash': 'allow', 'webfetch': 'deny',
-                       'external_directory': 'allow', 'read': 'allow',
-                       'glob': 'allow', 'grep': 'allow', 'task': 'allow', 'skill': 'allow'},
+            'models': {model_id: {'name': model_id} for model_id in routed_models}}},
+        # 默认流水线把每个节点放进独立目录，并把声明输入复制进去；模型不需要访问
+        # 客户电脑的其他路径，也不需要 shell 或子 agent。旧的宽权限整单模式仅可通过
+        # 明确的本机环境开关启用，不能成为安装包默认值。
+        'permission': {
+            'edit': 'allow', 'read': 'allow', 'glob': 'allow', 'grep': 'allow',
+            'bash': ('allow' if os.environ.get('BIDDOG_UNSAFE_LEGACY_OPENCODE') == '1' else 'deny'),
+            'task': ('allow' if os.environ.get('BIDDOG_UNSAFE_LEGACY_OPENCODE') == '1' else 'deny'),
+            'external_directory': ('allow' if os.environ.get('BIDDOG_UNSAFE_LEGACY_OPENCODE') == '1' else 'deny'),
+            'webfetch': 'deny', 'skill': 'deny'},
     }
     write_json(os.path.join(d, 'opencode.json'), conf)
     return d, base, direct
@@ -3251,8 +3970,11 @@ def generation_preflight(job, conf=None):
             checks.append({'id': 'runtime', 'label': '生成组件', 'status': 'skipped',
                            'message': '演示流程无需外部生成组件'})
         else:
-            checks.append({'id': 'connection', 'label': '模型连接', 'status': 'pending',
-                           'message': '将在派发前建立模型连接'})
+            verified_models = _verified_model_ids(conf)
+            checks.append({'id': 'connection', 'label': '模型连接',
+                           'status': 'pending' if verified_models else 'fail',
+                           'message': ('将在派发前建立模型连接' if verified_models else
+                                       '当前网关或模型未验证，请先在“模型接入”测试连接')})
             shell = resolve_cli('opencode', eng)
             if shell:
                 checks.append({'id': 'runtime', 'label': '生成组件', 'status': 'pass',
@@ -3315,6 +4037,7 @@ def agent_status():
     if not os.path.isfile(os.path.join(sd, 'SKILL.md')): sd = ensure_skill()
     cl, cx, sw, oc = resolve_cli('claude', eng), resolve_cli('codex', eng), resolve_cli('sowork', eng), resolve_cli('opencode', eng)
     return {'kind': 'env' if os.environ.get('AGENT_CMD') else eng.get('kind', 's2'), 'mode': eng.get('mode', 'agents'),
+            'generation_mode': _pipeline_mode(conf),
             # 自定义命令和环境变量也可能内嵌 Key：与 s2_key 一样只写不读。
             'cmd': '', 'cmd_set': bool((eng.get('cmd') or '').strip()),
             'skill_dir': sd, 'skill_ok': os.path.isfile(os.path.join(sd, 'SKILL.md')),
@@ -3357,6 +4080,10 @@ async def set_agent(req: Request):
     conf = read_json(conf_path(), {'providers': [], 'routing': {}})
     old = conf.get('engine') or {}
     old_fingerprint = oc_config_fingerprint(conf)
+    requested_generation_mode = str(body.get('generation_mode') or '').lower()
+    if requested_generation_mode not in ('fast', 'standard'):
+        requested_generation_mode = ('standard' if str(body.get('s2_model') or '') == S2_QUALITY_MODEL
+                                     else str(old.get('generation_mode') or 'fast'))
     new_engine = {'kind': body.get('kind', 'mock'),
                       # 留空表示沿用已保存值，避免 GET 不回显后模式切换把秘密配置误清空。
                       'cmd': (body.get('cmd') or '').strip() or old.get('cmd', ''),
@@ -3367,6 +4094,7 @@ async def set_agent(req: Request):
                       'sowork_agent': body.get('sowork_agent', 'main'),
                       'thinking': body.get('thinking', 'off'),
                       'timeout': body.get('timeout', 1800),
+                      'generation_mode': requested_generation_mode,
                       's2_base_url': body.get('s2_base_url', ''), 's2_model': body.get('s2_model', ''),
                       # Key 留空 = 沿用已存的(页面不回显 Key,不能因为"没传"就把它清掉)
                       's2_key': (body.get('s2_key') or '').strip() or old.get('s2_key', ''),
@@ -3448,6 +4176,15 @@ def agent_test():
             return {'ok': False, 'execution_path': 'opencode_server', 'latency_ms': latency,
                     'model': up['model'],
                     'error': '正式生成链路测试失败：%s' % (_safe_secret_text(why, (up['api_key'],)) or '模型会话没有完整返回')}
+        # 切换极速/标准时，不能因 `/models` 里有这个名字就冻结路由。
+        # 在完整 OpenCode 会话通过后，再对该模式所需文本模型逐一直调。
+        probe_result = setup_connection_probe(conf)
+        if not probe_result[0]:
+            return {'ok': False, 'execution_path': 'opencode_server', 'latency_ms': latency,
+                    'model': up['model'],
+                    'error': _safe_secret_text(probe_result[1], (up['api_key'],)) or '文本模型直调未通过'}
+        verified_ids = (probe_result[3] if len(probe_result) > 3 else [up['model']])
+        _record_text_model_verification(conf, probe_result[2], verified_ids)
         return {'ok': True, 'execution_path': 'opencode_server', 'latency_ms': latency,
                 'model': up['model'], 'reply': '正式生成链路可用'}
     else:   # custom / env:把命令里的占位符换成临时目录,只验证能否跑起来
@@ -3545,9 +4282,10 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
         tender = fl.pop(pick); rels.pop(pick)
     template_snapshot = {}
     template_recommendation = {}
+    sample_text = ''
+    sample_metadata = {}
     requested_template_id = normalize_template_request(template_id)
     if requested_template_id == 'auto':
-        sample_text = ''
         blob = b''
         if tender and tender.filename:
             try:
@@ -3555,7 +4293,9 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
                 await tender.seek(0)
                 if len(blob) > MAX_TEMPLATE_UPLOAD_BYTES:
                     return JSONResponse({'error': '自动分析暂支持50MB以内的主件；请压缩文件或手动选择模板'}, 413)
-                _, _, sample_text = extract_document_structure(tender.filename, blob)
+                sample_headings, sample_tables, sample_text = extract_document_structure(tender.filename, blob)
+                sample_metadata = {'heading_count': len(sample_headings or []),
+                                   'table_count': len(sample_tables or [])}
             except Exception:
                 try: sample_text = blob.decode('utf-8', errors='ignore')[:120000]
                 except Exception: sample_text = ''
@@ -3579,6 +4319,8 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
     job = jpath(jid); os.makedirs(job)
     tname = os.path.basename(tender.filename or '招标文件.pdf')
     open(os.path.join(job, tname), 'wb').write(await tender.read())
+    # 模板推荐只使用有限预览，不能把被截断的预览冒充完整解析结果。
+    # 流水线会在后台对已保存主件执行一次完整、有预算的本地解析并固化结果。
     mdir = os.path.join(job, '素材')          # 注意:没有素材就不建目录,空 素材/ 会顶掉全局素材库的回落
     for i, f in enumerate(fl):
         rel = (rels[i] or f.filename or 'file').replace('\\', '/')
@@ -3731,6 +4473,14 @@ def _launch_job_reserved(jid, job, mock, owner):
     preflight = generation_preflight(job, conf_now)
     emit(job, {'type': 'worklog', 'lines': ['保存任务文件完成', '识别场景模板完成',
               '正在检查生成组件' if preflight.get('repair') else '生成环境检查完成']})
+    connection_problem = next((item for item in preflight.get('checks') or []
+                               if item.get('id') == 'connection' and item.get('status') == 'fail'), None)
+    if connection_problem:
+        emit(job, {'type': 'error', 'text': connection_problem.get('message'),
+                   'actions': [{'act': 'open_engine', 'label': '重新测试模型连接'},
+                               {'act': 'diagnose', 'label': '一键诊断'}]})
+        halt(job, '已停止（模型连接未验证）')
+        return {'job_id': jid, 'mode': 'error', 'error': connection_problem.get('message')}
     if _cancel_requested(os.path.basename(jid), owner):
         return _cancelled_before_dispatch()
     agent_cmd = config_agent_cmd()
@@ -3762,6 +4512,7 @@ def _launch_job_reserved(jid, job, mock, owner):
                               if 'SKILL.md' in str(a) or len(str(a)) > 300), ''))
         use_oc_server = bool(kind_now in ('s2', 'opencode') and oc_prompt
                              and not os.environ.get('BID_NO_OC_SERVER'))
+        use_pipeline = bool(use_oc_server and not os.environ.get('BID_NO_CHECKPOINT_PIPELINE'))
         dispatch = oc_prompt if use_oc_server else cmd
         _set_skill_manifest(job, sd_path, dispatch,
                             _dispatch_contains_skill(dispatch, sd_path),
@@ -3771,8 +4522,12 @@ def _launch_job_reserved(jid, job, mock, owner):
                 return _cancelled_before_dispatch()
             update_runtime(job, execution_path='opencode_starting', can_pause=False,
                            pause_disabled_reason='正在建立稳定连接，暂时不能暂停。')
-            _start_reserved_worker(os.path.basename(jid), owner, agent_via_server_or_cli,
-                                   job, oc_prompt, cmd)
+            if use_pipeline:
+                _initialize_generation_pipeline(job, meta, conf_now)
+                _start_reserved_worker(os.path.basename(jid), owner, generation_pipeline_worker, job)
+            else:
+                _start_reserved_worker(os.path.basename(jid), owner, agent_via_server_or_cli,
+                                       job, oc_prompt, cmd)
         else:
             if _cancel_requested(os.path.basename(jid), owner):
                 return _cancelled_before_dispatch()
@@ -3883,14 +4638,17 @@ def _interrupt_or_finished(sid):
 def _stop_running_owner(job, base, owner):
     """停止指定 owner 的 server/CLI/mock；控制 tombstone 必须由调用方持有。"""
     if not owner: return True, False
+    requested = _request_cancel(base, owner)
     sid = (read_json(os.path.join(job, '任务.json'), {}) or {}).get('oc_session')
     server_active = bool(sid and OC.get('base'))
     interrupted = _interrupt_or_finished(sid) if server_active else True
+    pipeline_interrupted = _pipeline_interrupt_sessions(job)
     proc = _take_proc(base, owner)
     # 有匹配 CLI 说明当前已走 fallback；旧 sid 中断失败不影响杀掉真正执行体。
-    if server_active and not interrupted and not proc:
-        return False, False
-    requested = _request_cancel(base, owner)
+    if ((server_active and not interrupted) or not pipeline_interrupted) and not proc:
+        # 取消信号一旦发布就必须单调保留：某个 worker 可能已经观察到它并停下，
+        # 此时“回滚取消”只会制造一个无法继续的半停状态。
+        return False, requested
     if proc: kill_tree(proc)
     return True, requested
 
@@ -3936,13 +4694,18 @@ def job_state(job, meta=None, prog=None):
     if meta.get('staged'): return 'staged'                       # 暂存,还没开跑
     if _is_running(os.path.basename(job)): return 'running'
     outcome = read_json(os.path.join(job, 'outcome.json'), {})
+    pipeline_state = generation_pipeline.load(job)
+    has_pipeline = pipeline_state.get('version') == generation_pipeline.PIPELINE_VERSION
+    delivery_done = (not has_pipeline or (pipeline_state.get('state') == 'done' and any(
+        node.get('id') == 'delivery_gate' and node.get('state') == 'done'
+        for node in pipeline_state.get('nodes') or [])))
     if outcome.get('state') == 'done':
-        return 'done' if _body_docxs(job) else 'stopped'
+        return 'done' if _body_docxs(job) and delivery_done else 'stopped'
     if outcome.get('state') == 'stopped': return 'stopped'
     stage = str(prog.get('stage') or '')
     # 老版本遗留任务的迁移兜底：100% 仍必须有正文 Word；没有就按中断展示。
     if int(prog.get('pct') or 0) >= 100:
-        return 'done' if _body_docxs(job) else 'stopped'
+        return 'done' if _body_docxs(job) and delivery_done else 'stopped'
     # 暂停要跟「停止」分开:停止是这一单结束了,暂停是它还在半路、等着被接着做
     if meta.get('paused') and meta.get('oc_session'): return 'paused'
     if stage.startswith('已停止'): return 'stopped'
@@ -3965,10 +4728,16 @@ def job_can(job, state, meta):
     can_pause = runtime.get('can_pause')
     if can_pause is None: can_pause = bool(meta.get('oc_session'))
     if state == 'running' and can_pause: can.insert(0, 'pause')
+    pipeline = generation_pipeline.summary(job)
+    pipeline_commit_pending = (pipeline.get('state') == 'done'
+                               and read_json(os.path.join(job, 'outcome.json'), {}).get('state') != 'done')
+    if (state in ('stopped', 'unknown') and pipeline.get('version') == generation_pipeline.PIPELINE_VERSION
+            and (pipeline.get('recoverable') or pipeline_commit_pending)):
+        can.insert(0, 'resume')
     # 引擎/应用异常退出时不会来得及写 stopped outcome，但已落盘的
     # OpenCode 会话仍是可恢复检查点。unknown 不能因为前端少一个按钮被迫重跑。
     if state in ('stopped', 'unknown') and meta.get('oc_session'): can.insert(0, 'resume')
-    return can
+    return list(dict.fromkeys(can))
 
 def job_runtime(job, meta=None):
     meta = meta if isinstance(meta, dict) else read_json(os.path.join(job, '任务.json'), {})
@@ -4280,6 +5049,29 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
     checkpoint_step = step
     activity_step = (0 if step == 0 and preflight and state == 'running'
                      else max(checkpoint_step, observed_activity_step(job)))
+    pipeline_state = generation_pipeline.load(job)
+    pipeline_nodes = (pipeline_state.get('nodes') or []) if (
+        pipeline_state.get('version') == generation_pipeline.PIPELINE_VERSION) else []
+    pipeline_phase = {
+        'source_parse': ('parse', 4), 'response_plan': ('plan', 6),
+        'assemble': ('assemble', 9), 'quality_review': ('deliver', 11),
+        'word_export': ('deliver', 12), 'delivery_gate': ('deliver', 12),
+    }
+    def node_phase(node):
+        node_id = str(node.get('id') or '')
+        return ('write', 8) if node_id.startswith('chapter_write:') else pipeline_phase.get(node_id, ('parse', 1))
+    if pipeline_nodes:
+        for node in pipeline_nodes:
+            if node.get('state') in ('done', 'skipped'):
+                checkpoint_step = max(checkpoint_step, node_phase(node)[1])
+        active_pipeline_node = next((node for node in pipeline_nodes
+                                     if node.get('state') in ('running', 'retry_wait', 'failed', 'blocked')), None)
+        if active_pipeline_node:
+            phase_id, phase_step = node_phase(active_pipeline_node)
+            activity_step = {'parse': 1, 'plan': 5, 'write': 7,
+                             'assemble': 9, 'deliver': 11}.get(phase_id, phase_step)
+        else:
+            activity_step = max(activity_step, checkpoint_step)
     stage_rows = (stage_stats() or {}).get('stages') or []
     timeline = _progress_timeline(job)
     clock = _parse_ts(now()) or datetime.datetime.now()
@@ -4328,6 +5120,19 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
         phase = {'id': definition['id'], 'label': definition['label'], 'state': phase_state,
                  'detail': detail, 'evidence': definition['evidence']}
         expected, estimate_source, history_count = _phase_expected(definition, stage_rows)
+        if pipeline_nodes:
+            chapter_count = sum(1 for node in pipeline_nodes
+                                if str(node.get('id') or '').startswith('chapter_write:'))
+            pipeline_expected = {
+                'environment': 60,
+                'parse': 90,
+                'plan': 240,
+                'write': max(300, ((chapter_count + 1) // 2) * 300),
+                'assemble': 120,
+                'deliver': 420 if pipeline_state.get('mode') == 'standard' else 120,
+            }
+            expected = pipeline_expected.get(definition['id'], expected)
+            estimate_source, history_count = 'pipeline_reference', 0
         if definition['id'] == 'environment':
             phase_started = created
             phase_finished = first_step_time(lambda observed: observed >= 1)
@@ -4350,6 +5155,32 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
                       'overdue_seconds': max(0, (elapsed_seconds or 0) - expected),
                       'estimate_source': estimate_source, 'history_steps': history_count})
         if definition['id'] == 'environment': phase['checks'] = checks
+        if pipeline_nodes:
+            node_checks = []
+            for node in pipeline_nodes:
+                if node_phase(node)[0] != definition['id']: continue
+                raw_node_state = str(node.get('state') or 'pending')
+                view_state = {'done': 'done', 'skipped': 'done', 'running': 'active',
+                              'retry_wait': 'attention', 'failed': 'failed',
+                              'blocked': 'failed'}.get(raw_node_state, 'pending')
+                started_at = _parse_ts(node.get('started_at'))
+                finished_at = _parse_ts(node.get('finished_at'))
+                if started_at:
+                    node_elapsed = max(0, int(((finished_at or clock) - started_at).total_seconds()))
+                else:
+                    node_elapsed = None
+                detail_parts = []
+                if node.get('attempt'): detail_parts.append('第 %d/%d 次' % (
+                    int(node.get('attempt') or 0), int(node.get('max_attempts') or 3)))
+                if node_elapsed is not None: detail_parts.append('已用 %d 秒' % node_elapsed)
+                if node.get('error_code'): detail_parts.append(str(node.get('error_code')))
+                node_checks.append({'id': str(node.get('id') or ''),
+                                    'label': str(node.get('title') or node.get('id') or ''),
+                                    'state': view_state, 'detail': ' · '.join(detail_parts),
+                                    'attempt': int(node.get('attempt') or 0),
+                                    'max_attempts': int(node.get('max_attempts') or 3),
+                                    'elapsed_seconds': node_elapsed})
+            if node_checks: phase['checks'] = node_checks
         phases.append(phase)
 
     checkpoint = {'step': checkpoint_step,
@@ -4373,12 +5204,24 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
         elif activity_step in (9, 10): reason = '正文已汇总，正在装配和检查 Word'
         elif activity_step >= 11: reason = '正在执行出件前检查'
         phases[current_index]['detail'] = reason
+    if pipeline_nodes and active_pipeline_node:
+        title = str(active_pipeline_node.get('title') or active_pipeline_node.get('id') or '当前节点')
+        if active_pipeline_node.get('state') == 'retry_wait':
+            reason = '%s连接中断，正在等待重试（%d/%d）' % (
+                title, int(active_pipeline_node.get('attempt') or 0),
+                int(active_pipeline_node.get('max_attempts') or 3))
+        elif active_pipeline_node.get('state') in ('failed', 'blocked'):
+            reason = '%s未完成，已停在可恢复检查点' % title
+        else:
+            reason = '正在执行：%s' % title
+        phases[current_index]['detail'] = reason
     if stalled and state == 'running':
         phases[current_index]['state'] = 'attention'
         phases[current_index]['detail'] = '模型响应偏慢，正在持续检查连接'
     remaining = 0 if state in ('done', 'stopped', 'unknown', 'paused') else sum(
         int(phase.get('remaining_seconds') or 0) for phase in phases)
     current_timing = phases[current_index]
+    pipeline_summary = generation_pipeline.summary(job) if pipeline_nodes else None
     return {'version': 2, 'current_phase': FLOW_PHASES[current_index]['id'],
             'current_action': phases[current_index]['detail'] if stalled else (reason or phases[current_index]['detail']),
             'checkpoint': checkpoint,
@@ -4386,7 +5229,7 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
             'stalled': stalled, 'silence_seconds': silence_seconds,
             'elapsed_seconds': current_timing.get('elapsed_seconds'),
             'expected_seconds': current_timing.get('expected_seconds'),
-            'remaining_seconds': remaining,
+            'remaining_seconds': remaining, 'pipeline': pipeline_summary,
             'phases': phases}
 
 @app.patch('/v1/jobs/{jid}')
@@ -4912,6 +5755,32 @@ async def resume_job(jid: str):
     try:
         # 先占位再读会话；否则 redo/start 可在读取后轮换 run_id/session，续做会串到旧轮。
         meta = read_json(os.path.join(job, '任务.json'), {})
+        pipeline_state = generation_pipeline.load(job)
+        if pipeline_state.get('version') == generation_pipeline.PIPELINE_VERSION:
+            # delivery_gate 已落盘、outcome 未落盘时是一个可提交的中间态。
+            # 这里只重放幂等收尾，不重启模型节点。
+            delivery_done = any(
+                node.get('id') == 'delivery_gate' and node.get('state') == 'done'
+                for node in pipeline_state.get('nodes') or [])
+            if pipeline_state.get('state') == 'done' and delivery_done:
+                final = settle(job)
+                _release_running(base, owner)
+                if isinstance(final, dict) and final.get('state') == 'done':
+                    return {'ok': True, 'pipeline': True, 'finalized': True}
+                return JSONResponse({'ok': False, 'error': '交付收尾未通过，请查看诊断详情。'}, 409)
+            recovered = generation_pipeline.recover(job)
+            if not recovered.get('recoverable'):
+                _release_running(base, owner)
+                return JSONResponse({'ok': False,
+                                     'error': '当前节点已达到重试上限或被配置问题阻断，请使用“重试当前节点”。'}, 409)
+            try: os.unlink(os.path.join(job, 'outcome.json'))
+            except FileNotFoundError: pass
+            meta['paused'] = False
+            write_json(os.path.join(job, '任务.json'), meta)
+            emit(job, {'type': 'message', 'role': 'agent',
+                       'text': '已从检查点继续：完成节点直接复用，只执行未完成或失败的当前节点。'})
+            _start_reserved_worker(base, owner, generation_pipeline_worker, job)
+            return {'ok': True, 'pipeline': True}
         sid = meta.get('oc_session')
         if not sid:
             _release_running(base, owner)
@@ -4981,6 +5850,135 @@ def job_log(jid: str, n: int = 20000):
             'skill_state': ev['state'], 'skill_used': ev['ok'],
             'hits': ev['hits'], 'why': ev['why']}
 
+@app.get('/v1/jobs/{jid}/pipeline')
+def job_pipeline(jid: str):
+    job = jpath(jid)
+    if not os.path.isdir(job):
+        return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
+    state = generation_pipeline.load(job)
+    if state.get('version') != generation_pipeline.PIPELINE_VERSION:
+        return JSONResponse({'ok': False, 'error': '该任务使用旧版生成流程，没有节点检查点'}, 404)
+    return {'ok': True, 'summary': generation_pipeline.summary(job), 'pipeline': state}
+
+
+@app.post('/v1/jobs/{jid}/nodes/{node_id:path}/retry')
+async def retry_pipeline_node(jid: str, node_id: str, request: Request):
+    job = jpath(jid)
+    if not os.path.isdir(job):
+        return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
+    raw_key = str(request.headers.get('idempotency-key') or '')[:128]
+    if not re.fullmatch(r'[A-Za-z0-9._:-]{8,128}', raw_key):
+        return JSONResponse({'ok': False, 'error': '缺少有效的重试请求标识'}, 400)
+    ledger_path = os.path.join(job, '.node_retry_requests.json')
+    ledger_key = str(node_id) + '|' + raw_key
+    base = os.path.basename(jid)
+    retry_reset_required = True
+    def lease_is_active(entry):
+        try: return float((entry or {}).get('lease_until') or 0) > time.time()
+        except (AttributeError, TypeError, ValueError): return False
+    with _json_lock(ledger_path):
+        ledger = read_json(ledger_path, {})
+        if isinstance(ledger.get(ledger_key), dict):
+            prior = ledger[ledger_key]
+            if prior.get('status') == 'rejected':
+                return JSONResponse({'ok': False, 'error': prior.get('error') or '节点不能重试',
+                                     'deduplicated': True}, int(prior.get('http_status') or 409))
+            if prior.get('status') == 'dispatch_failed':
+                return JSONResponse({'ok': False,
+                                     'code': 'retry_dispatch_failed',
+                                     'error': prior.get('error') or '上次重试派发失败，请使用新的重试操作。',
+                                     'deduplicated': True}, int(prior.get('http_status') or 500))
+            if prior.get('status') == 'accepted':
+                return {'ok': True, 'node_id': node_id, 'deduplicated': True,
+                        'accepted_at': prior.get('accepted_at') or ''}
+            # `dispatching` 可能是上次进程在写入意图后崩溃留下的。
+            # 内存中仍有 owner 才表示真正在派发；否则对账节点并继续事务。
+            if prior.get('status') == 'dispatching':
+                lease_active = lease_is_active(prior)
+                # worker 很快完成时 RUNNING owner 可能已释放，但首个 HTTP 请求尚未
+                # 把账本改成 accepted。短租约覆盖这个窗口，避免相同请求再次派发。
+                if lease_active or _is_running(base):
+                    return JSONResponse({'ok': False, 'node_id': node_id, 'deduplicated': True,
+                                         'pending': True, 'error': '重试请求正在派发'}, 202)
+            state = generation_pipeline.load(job)
+            current = next((item for item in state.get('nodes') or []
+                            if item.get('id') == node_id), None)
+            if not current:
+                return JSONResponse({'ok': False, 'error': '节点不存在',
+                                     'deduplicated': True}, 409)
+            if current.get('state') == 'pending':
+                retry_reset_required = False
+            elif current.get('state') not in ('failed', 'blocked'):
+                return JSONResponse({'ok': False, 'error': '重试意图与节点状态不一致，请刷新后重试',
+                                     'deduplicated': True}, 409)
+        active_dispatch = next((entry for key, entry in ledger.items()
+                                if key != ledger_key and isinstance(entry, dict)
+                                and entry.get('node_id') == node_id
+                                and entry.get('status') == 'dispatching'
+                                and lease_is_active(entry)), None)
+        if active_dispatch:
+            return JSONResponse({'ok': False, 'code': 'retry_dispatch_confirmation_pending',
+                                 'node_id': node_id, 'deduplicated': True, 'pending': True,
+                                 'error': '重试请求已派发，正在确认运行状态'}, 202)
+        owner, reason = _reserve_running_reason(base)
+        if not owner:
+            return _admission_failure(reason, '这一单正在跑，不用重复重试。')
+        accepted_at = (str((ledger.get(ledger_key) or {}).get('accepted_at') or '') or now())
+        ledger[ledger_key] = {'node_id': node_id, 'accepted_at': accepted_at,
+                              'status': 'dispatching', 'dispatch_token': owner,
+                              'lease_until': time.time() + 30}
+        if len(ledger) > 100:
+            ledger = dict(list(ledger.items())[-100:])
+        write_json(ledger_path, ledger)
+    try:
+        if retry_reset_required:
+            node = generation_pipeline.retry_node(job, node_id)
+        else:
+            state = generation_pipeline.load(job)
+            node = next(item for item in state.get('nodes') or [] if item.get('id') == node_id)
+        try: os.unlink(os.path.join(job, 'outcome.json'))
+        except FileNotFoundError: pass
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '已人工重试节点“%s”；只重做这一节点，已完成内容不会重写。' %
+                           (node.get('title') or node_id)})
+        _start_reserved_worker(base, owner, generation_pipeline_worker, job)
+        try:
+            with _json_lock(ledger_path):
+                ledger = read_json(ledger_path, {})
+                ledger[ledger_key] = {'node_id': node_id, 'accepted_at': accepted_at,
+                                      'status': 'accepted'}
+                write_json(ledger_path, ledger)
+        except Exception:
+            # worker 已经启动，之后的账本确认失败只能报告“结果待确认”。绝不能
+            # 释放 owner/回滚节点/让前端换 key，否则会把同一节点启动两次。
+            return JSONResponse({'ok': False, 'code': 'retry_dispatch_confirmation_pending',
+                                 'node_id': node_id, 'deduplicated': False, 'pending': True,
+                                 'error': '重试已派发，确认写入较慢，请等待状态刷新'}, 202)
+        return {'ok': True, 'node_id': node_id, 'deduplicated': False}
+    except generation_pipeline.PipelineError as exc:
+        _release_running(base, owner)
+        with _json_lock(ledger_path):
+            ledger = read_json(ledger_path, {})
+            ledger[ledger_key] = {'node_id': node_id, 'accepted_at': accepted_at,
+                                  'status': 'rejected', 'http_status': 409, 'error': str(exc)}
+            write_json(ledger_path, ledger)
+        return JSONResponse({'ok': False, 'error': str(exc)}, 409)
+    except Exception:
+        _release_running(base, owner)
+        try:
+            generation_pipeline.fail_node(job, node_id, 'node_dispatch_failed', retryable=False)
+        except Exception:
+            pass
+        with _json_lock(ledger_path):
+            ledger = read_json(ledger_path, {})
+            if isinstance(ledger.get(ledger_key), dict):
+                ledger[ledger_key]['status'] = 'dispatch_failed'
+                ledger[ledger_key]['http_status'] = 500
+                ledger[ledger_key]['error'] = '节点重试派发失败，请使用新的重试操作。'
+                write_json(ledger_path, ledger)
+        return JSONResponse({'ok': False, 'code': 'retry_dispatch_failed',
+                             'error': '节点重试派发失败，请再次点击重试。'}, 500)
+
 def _redact_config(value, key=''):
     if _sensitive_config_key(key) or str(key).lower() in ('cmd', 'env'):
         return ('s' + 'k' + '-***') if value else ''
@@ -4991,7 +5989,7 @@ def _redact_config(value, key=''):
 def diagnostic_bundle(job):
     """构建可直接交给支持人员的全脱敏诊断包；返回 zip bytes。"""
     buf = io.BytesIO()
-    meta_files = ('任务.json', 'progress.json')
+    meta_files = ('任务.json', 'progress.json', 'pipeline.json', 'source_manifest.json')
     conf = read_json(conf_path(), {})
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
         for fn in meta_files:
@@ -5068,6 +6066,7 @@ def _diagnostic_snapshot(jid=''):
                          'flow': job_flow(job, state, meta, prog,
                                           read_json(os.path.join(job, 'outcome.json'), {})),
                          'preflight': preflight, 'last_activity': last_activity,
+                         'pipeline': generation_pipeline.summary(job),
                          'recent_diagnostics': recent,
                          'bundle_url': '/v1/jobs/%s/bundle' % os.path.basename(jid)}
     return _redact_runtime(result, conf)
@@ -5673,6 +6672,52 @@ def s2_conf(conf=None):
 def _key_fingerprint(key):
     return hashlib.sha256(str(key or '').encode()).hexdigest() if key else ''
 
+def _connection_fingerprint(conf_or_up):
+    """Bind a successful model probe to the whole transport identity, not only its Key."""
+    up = (conf_or_up if isinstance(conf_or_up, dict) and 'api_key' in conf_or_up
+          else s2_conf(conf_or_up if isinstance(conf_or_up, dict) else None))
+    identity = {
+        # 完整传输身份只以摘要形式持久化；查询参数或 userinfo
+        # 变化也会使旧验证失效，同时不会把凭据写入配置摘要。
+        'base_url_identity': hashlib.sha256(
+            str(up.get('base_url') or '').strip().rstrip('/').encode('utf-8')).hexdigest(),
+        'key_fingerprint': _key_fingerprint(up.get('api_key') or ''),
+        'verify_ssl': bool(up.get('verify_ssl', True)),
+        'wire': str(up.get('wire') or 'auto'),
+        'model': str(up.get('model') or ''),
+    }
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+def _verified_model_ids(conf):
+    setup = conf.get('setup') if isinstance(conf.get('setup'), dict) else {}
+    tested = str(setup.get('tested_connection_fingerprint') or '')
+    current = _connection_fingerprint(conf)
+    if not tested or not hmac.compare_digest(current, tested):
+        return []
+    return [str(value) for value in (setup.get('text_verified_model_ids') or []) if value]
+
+
+def _record_text_model_verification(expected_conf, model_ids, verified_ids):
+    """仅在当前连接仍与测试快照一致时落盘，避免慢测试覆盖新设置。"""
+    path = conf_path()
+    expected = _connection_fingerprint(expected_conf)
+    with _json_lock(path):
+        current = read_json(path, {})
+        current_fp = _connection_fingerprint(current)
+        if not hmac.compare_digest(expected, current_fp):
+            return False
+        setup = dict(current.get('setup') or {})
+        setup.update({
+            'tested_key_fingerprint': _key_fingerprint(s2_conf(current).get('api_key') or ''),
+            'tested_connection_fingerprint': current_fp,
+            'connected_at': now(),
+            'model_ids': [str(value) for value in (model_ids or []) if value][:200],
+            'text_verified_model_ids': [str(value) for value in (verified_ids or []) if value][:20],
+        })
+        current['setup'] = setup
+        write_json(path, current)
+    return True
+
 def _has_existing_jobs():
     try:
         return any(os.path.isdir(jpath(jid)) for jid in os.listdir(jobs_dir()))
@@ -5689,8 +6734,8 @@ def setup_status_data(conf=None):
     conf = conf if isinstance(conf, dict) else read_json(conf_path(), {})
     setup = conf.get('setup') if isinstance(conf.get('setup'), dict) else {}
     key_set = bool(s2_conf(conf).get('api_key'))
-    current_fp = _key_fingerprint(s2_conf(conf).get('api_key'))
-    tested_fp = str(setup.get('tested_key_fingerprint') or '')
+    current_fp = _connection_fingerprint(conf)
+    tested_fp = str(setup.get('tested_connection_fingerprint') or '')
     legacy_skipped = not setup and (_has_existing_jobs() or _legacy_setup_configured(conf))
     connected = bool(key_set and tested_fp and hmac.compare_digest(current_fp, tested_fp))
     completed = bool(legacy_skipped or (setup.get('completed_at') and connected))
@@ -5709,7 +6754,29 @@ def setup_connection_probe(candidate_conf):
                            verify=up.get('verify_ssl', True))
         ids = [str(item.get('id')) for item in (data.get('data') or [])
                if isinstance(item, dict) and item.get('id')]
-        return True, '', ids
+        generation, _vision = _setup_models(ids, up.get('model') or S2_DEFAULT_MODEL)
+        if not generation:
+            return False, '网关只返回了向量/语音/图像模型，没有可用的文本生成模型', ids
+        targets = []
+        if _pipeline_mode(candidate_conf) == 'standard' and S2_DEFAULT_MODEL in ids:
+            targets.append(S2_DEFAULT_MODEL)
+        if generation not in targets:
+            targets.append(generation)
+        verified = []
+        for model_id in targets:
+            probe = _openai_req(
+                up['base_url'], up['api_key'], '/chat/completions',
+                {'model': model_id,
+                 'messages': [{'role': 'user', 'content': 'ping,只回复:pong'}],
+                 'max_tokens': 8, 'stream': False},
+                timeout=45, verify=up.get('verify_ssl', True))
+            choices = probe.get('choices') if isinstance(probe, dict) else None
+            reply = (((choices or [{}])[0].get('message') or {}).get('content')
+                     if choices else '')
+            if not str(reply or '').strip():
+                return False, '模型“%s”已连接，但未收到有效文本响应' % model_id, ids
+            verified.append(model_id)
+        return True, '', ids, verified
     except urllib.error.HTTPError as error:
         return False, {401: 'Key 无效或已停用', 403: 'Key 没有访问权限',
                        429: '当前请求较多，请稍后重试'}.get(error.code, '连接测试失败（HTTP %s）' % error.code), []
@@ -5719,10 +6786,13 @@ def setup_connection_probe(candidate_conf):
 def _setup_models(model_ids, preferred):
     ids = [str(value) for value in (model_ids or []) if value]
     vision = next((value for value in ids if re.search(r'vision|(?:^|[-_])vl(?:[-_]|$)|gpt-4o|gemini', value, re.I)), '')
-    excluded = re.compile(r'embedd|rerank|tts|speech|whisper|image|vision|(?:^|[-_])vl(?:[-_]|$)', re.I)
+    excluded = re.compile(r'embed(?:ding)?|rerank|tts|speech|whisper|image|vision|(?:^|[-_])vl(?:[-_]|$)', re.I)
     formal = [value for value in ids if not excluded.search(value)]
-    generation = preferred if preferred in ids or not ids else (S2_DEFAULT_MODEL if S2_DEFAULT_MODEL in ids else (formal[0] if formal else ids[0]))
-    return generation or S2_DEFAULT_MODEL, vision
+    if not ids:
+        return '', vision
+    generation = (preferred if preferred in formal else
+                  (S2_DEFAULT_MODEL if S2_DEFAULT_MODEL in formal else (formal[0] if formal else '')))
+    return generation, vision
 
 @app.get('/v1/setup')
 def setup_status():
@@ -5743,7 +6813,8 @@ async def setup_connect(req: Request):
         key = str(body.get('key') or current_up.get('api_key') or '').strip()
         if not key: return JSONResponse({'ok': False, 'error': '请先填写 Key'}, 400)
         engine = dict(current.get('engine') or {})
-        engine.update({'kind': 's2', 'mode': 'agents',
+        engine.update({'kind': 's2', 'mode': 'agents', 'generation_mode': (
+                           'standard' if requested_mode == 'quality' else 'fast'),
                        's2_key': key,
                        's2_base_url': str(body.get('base_url') or S2_DEFAULT_BASE).strip().rstrip('/'),
                        's2_model': requested_model,
@@ -5762,13 +6833,25 @@ async def setup_connect(req: Request):
         safe = _safe_secret_text(why, (key,))
         return JSONResponse({'ok': False, 'connected': False,
                              'error': safe or '连接测试没有通过'}, 400)
+    if not model_ids:
+        return JSONResponse({'ok': False, 'connected': False,
+                             'error': '网关未返回可用模型，设置未保存；请检查 base URL 或网关权限'}, 400)
+    generation_model, vision_model = _setup_models(model_ids, engine.get('s2_model') or S2_DEFAULT_MODEL)
+    if not generation_model:
+        return JSONResponse({'ok': False, 'connected': False,
+                             'error': '未验证到可用的文本生成模型，设置未保存'}, 400)
+    text_verified_model_ids = (probe_result[3] if len(probe_result) > 3 else [generation_model])
+    text_verified_model_ids = [str(value) for value in text_verified_model_ids
+                               if str(value) in model_ids]
+    if generation_model not in text_verified_model_ids:
+        return JSONResponse({'ok': False, 'connected': False,
+                             'error': '选定的生成模型没有通过真实文本调用，设置未保存'}, 400)
     with _json_lock(path):
         latest = read_json(path, {})
         latest_digest = _sha256_text(json.dumps(latest, ensure_ascii=False, sort_keys=True))
         if latest_digest != config_before_probe:
             return JSONResponse({'ok': False, 'connected': False,
                                  'error': '测试期间设置已发生变化，请重新点击连接测试'}, 409)
-        generation_model, vision_model = _setup_models(model_ids, engine.get('s2_model') or S2_DEFAULT_MODEL)
         engine['s2_model'] = generation_model
         candidate['engine'] = engine
         provider = {'id': 'setup-s2', 'name': '中标狗模型服务',
@@ -5780,9 +6863,13 @@ async def setup_connect(req: Request):
         candidate['providers'] = providers + [provider]
         candidate['routing'] = {'default': 'setup-s2', 'model': generation_model}
         fingerprint = _key_fingerprint(key)
+        connection_fingerprint = _connection_fingerprint(candidate)
         previous = current.get('setup') if isinstance(current.get('setup'), dict) else {}
         candidate['setup'] = {'tested_key_fingerprint': fingerprint,
-                              'connected_at': now(), 'completed_at': ''}
+                              'tested_connection_fingerprint': connection_fingerprint,
+                              'connected_at': now(), 'completed_at': '',
+                              'model_ids': model_ids[:200],
+                              'text_verified_model_ids': text_verified_model_ids[:20]}
         write_json(path, candidate)
     invalidate_oc_runtime()
     return {'ok': True, 'connected': True, 'key_set': True,
@@ -5797,10 +6884,10 @@ def setup_complete():
     with _json_lock(path):
         conf = read_json(path, {})
         setup = conf.get('setup') if isinstance(conf.get('setup'), dict) else {}
-        current_fp = _key_fingerprint(s2_conf(conf).get('api_key'))
-        tested_fp = str(setup.get('tested_key_fingerprint') or '')
+        current_fp = _connection_fingerprint(conf)
+        tested_fp = str(setup.get('tested_connection_fingerprint') or '')
         if not current_fp or not tested_fp or not hmac.compare_digest(current_fp, tested_fp):
-            return JSONResponse({'ok': False, 'error': 'Key 已变化，请先重新测试连接'}, 409)
+            return JSONResponse({'ok': False, 'error': '模型连接已变化，请先重新测试连接'}, 409)
         setup = dict(setup); setup['completed_at'] = now(); conf['setup'] = setup
         write_json(path, conf)
     return {'ok': True, **setup_status_data(conf)}
