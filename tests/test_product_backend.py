@@ -1,6 +1,8 @@
 import io
+import asyncio
 import json
 import threading
+import time
 import zipfile
 from pathlib import Path
 
@@ -458,6 +460,31 @@ def test_flow_advances_from_verified_analysis_files_even_without_agent_progress_
     assert flow["checkpoint"] == {"step": 5, "label": "评分废标"}
     assert flow["current_phase"] == "plan"
     assert flow["phases"][1]["state"] == "done"
+
+
+def test_flow_shows_writing_activity_when_chapters_exist_beyond_checkpoint(engine, job):
+    """当前活动与连续验收点分开：缺前置收据不能把真实撰写隐藏成招标解析。"""
+    (job / "第1章_项目理解.md").write_text("# 项目理解\n" + "响应正文。" * 100, encoding="utf-8")
+    (job / "第4章_实施方案.md").write_text("# 实施方案\n" + "实施正文。" * 100, encoding="utf-8")
+    progress = {"type": "progress", "stage": "已就绪，正在读招标文件", "step": 1,
+                "pct": 2, "total": 12, "ts": engine.now()}
+
+    flow = engine.job_flow(str(job), state="running", prog=progress)
+
+    assert flow["checkpoint"]["step"] == 1
+    assert flow["current_phase"] == "write"
+    assert "撰写" in flow["current_action"]
+    writing = next(phase for phase in flow["phases"] if phase["id"] == "write")
+    assert writing["state"] == "active"
+
+    owner = engine._reserve_running(job.name)
+    try:
+        with TestClient(engine.app) as client:
+            item = _job_by_id(client)
+    finally:
+        engine._release_running(job.name, owner)
+    assert item["flow"]["current_phase"] == "write"
+    assert "撰写" in item["current_action"]
 
 
 def test_runtime_pause_reason_uses_no_implementation_terms(engine, job):
@@ -959,6 +986,48 @@ def test_setup_failure_leaves_entire_previous_configuration_unchanged(engine, mo
         response = client.post("/v1/setup/connect", json={"key": new_key})
     assert response.status_code == 400
     assert engine.read_json(engine.conf_path(), {}) == original
+
+
+def test_setup_probe_does_not_block_the_async_server_loop(engine, monkeypatch):
+    key = "s" + "k-" + "slow-but-valid-aaaaaaaaaaaaaaaa"
+
+    def slow_probe(_candidate):
+        time.sleep(0.2)
+        return True, "", [engine.S2_DEFAULT_MODEL]
+
+    monkeypatch.setattr(engine, "setup_connection_probe", slow_probe)
+
+    class Request:
+        async def json(self):
+            return {"key": key, "mode": "fast"}
+
+    async def scenario():
+        started = time.perf_counter()
+        connect = asyncio.create_task(engine.setup_connect(Request()))
+        await asyncio.sleep(0.02)
+        heartbeat_delay = time.perf_counter() - started
+        response = await connect
+        return heartbeat_delay, response
+
+    heartbeat_delay, response = asyncio.run(scenario())
+
+    assert heartbeat_delay < 0.1
+    assert response["ok"] is True
+
+
+def test_create_job_is_idempotent_for_same_network_retry(engine):
+    headers = {"Idempotency-Key": "create-network-retry-123"}
+    upload = {"tender": ("招标文件.txt", "采购需求".encode("utf-8"), "text/plain")}
+
+    with TestClient(engine.app) as client:
+        first = client.post("/v1/jobs", files=upload, data={"start": "0"}, headers=headers)
+        second = client.post("/v1/jobs", files=upload, data={"start": "0"}, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["job_id"] == first.json()["job_id"]
+    assert second.json()["deduplicated"] is True
+    assert len([path for path in Path(engine.jobs_dir()).iterdir() if path.is_dir()]) == 1
 
 
 def test_setup_skips_legacy_user_with_jobs(engine, job):

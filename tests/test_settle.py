@@ -161,6 +161,55 @@ def test_markdown_export_failure_never_becomes_done(engine, job, monkeypatch):
     assert not any("任务完成，已整理好" in text for text in _texts(job))
 
 
+def test_partial_chapters_are_not_misclassified_as_complete_body(engine, job, monkeypatch):
+    meta = engine.read_json(str(job / "任务.json"), {})
+    meta["oc_session"] = "session-can-resume"
+    engine.write_json(str(job / "任务.json"), meta)
+    for number, title in ((1, "项目理解"), (4, "实施方案"), (5, "资格证明文件")):
+        (job / ("第%d章_%s.md" % (number, title))).write_text(
+            "# %s\n" % title + "章节正文。" * 400, encoding="utf-8"
+        )
+    (job / "run.log").write_text(
+        "\x1b[91mError:\x1b[0m Error reading stream: stream idle timeout: "
+        "no data received within configured window\n",
+        encoding="utf-8",
+    )
+
+    def unexpected_export(*_args, **_kwargs):
+        raise AssertionError("分章过程稿不得触发完整正文 Word 导出")
+
+    monkeypatch.setattr(engine, "ensure_docx", unexpected_export)
+
+    result = engine.settle(str(job), stop_reason="已停止（连接中断，内容已保留）")
+
+    assert result["state"] == "stopped"
+    assert engine.job_state(str(job)) == "stopped"
+    error = _latest(job, "error")
+    assert "已生成 3 个章节" in error["text"]
+    assert "还没有汇总成完整正文和最终 Word" in error["text"]
+    assert "正文稿已经生成" not in error["text"]
+    assert "Word 导出失败" not in error["text"]
+    assert "\x1b" not in error["text"]
+    assert {action["act"] for action in error["actions"]} >= {"resume", "open_log"}
+
+
+def test_legacy_word_export_error_is_corrected_when_only_chapters_exist(engine, job):
+    meta = engine.read_json(str(job / "任务.json"), {})
+    meta["oc_session"] = "legacy-session"
+    engine.write_json(str(job / "任务.json"), meta)
+    (job / "第5章_资格证明文件.md").write_text("章节正文。" * 400, encoding="utf-8")
+
+    safe = engine.sanitize_event(job, {
+        "type": "error",
+        "text": "正文稿已经生成，但最终 Word 导出失败，因此这单仍未完成。",
+        "actions": [{"act": "export_docx", "label": "重试导出 Word"}],
+    })
+
+    assert "已生成 1 个章节" in safe["text"]
+    assert "Word 导出失败" not in safe["text"]
+    assert {action["act"] for action in safe["actions"]} >= {"resume", "open_log"}
+
+
 @pytest.mark.parametrize("name", ["招标文件_解析版.md", "成品质检报告.md", "废标风险清单.md"])
 def test_analysis_files_are_never_offered_for_repair(engine, job, name):
     (job / name).write_text("分析依据" * 500, encoding="utf-8")

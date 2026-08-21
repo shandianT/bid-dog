@@ -32,7 +32,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.19.6'
+ENGINE_VERSION = '0.19.7'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -119,6 +119,7 @@ app.add_middleware(
     allow_origin_regex=r'^https?://(?:127\.0\.0\.1|localhost)(?::\d+)?$',
     allow_methods=['*'],
     allow_headers=['*'],
+    expose_headers=['X-Request-ID'],
     allow_credentials=True,
 )
 
@@ -152,22 +153,30 @@ async def login(request: Request):
 
 @app.middleware('http')
 async def gate(request: Request, call_next):
+    supplied_request_id = str(request.headers.get('x-request-id') or '')[:80]
+    request_id = (supplied_request_id if re.fullmatch(r'[A-Za-z0-9._:-]{8,80}', supplied_request_id)
+                  else uuid.uuid4().hex)
+    request.state.request_id = request_id
+    def tracked(response):
+        response.headers['X-Request-ID'] = request_id
+        return response
     uid = request.cookies.get('bid_uid') or (secrets.token_hex(8) if MULTIUSER else '')
     _ws.set(uid)
     origin = request.headers.get('origin', '')
     if origin and not origin_allowed(origin):
-        return JSONResponse({'error': 'forbidden origin'}, status_code=403)
+        return tracked(JSONResponse({'error': 'forbidden origin', 'request_id': request_id}, status_code=403))
     # /v1/relay/* 是给本机 Codex 用的,它没有浏览器 Cookie,自己带 relay_token 鉴权,不走口令门
     if (PASSWORD and request.url.path not in ('/login', '/v1/health')
             and not request.url.path.startswith('/v1/relay/')
             and request.cookies.get('bid_auth') != _tok(PASSWORD)):
         if request.url.path.startswith('/v1/'):
-            return JSONResponse({'error': 'unauthorized', 'login': '/'}, status_code=401)
+            return tracked(JSONResponse({'error': 'unauthorized', 'login': '/',
+                                         'request_id': request_id}, status_code=401))
         return login_page()
     resp = await call_next(request)
     if MULTIUSER and uid and not request.cookies.get('bid_uid'):
         resp.set_cookie('bid_uid', uid, max_age=365 * 86400, httponly=True, samesite='lax')
-    return resp
+    return tracked(resp)
 
 def now(): return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 def jpath(jid): return os.path.join(jobs_dir(), os.path.basename(jid))
@@ -314,9 +323,18 @@ def _redact_runtime(value, conf=None):
         if isinstance(item, dict): return {k: clean(v) for k, v in item.items()}
         if isinstance(item, list): return [clean(v) for v in item]
         if isinstance(item, tuple): return tuple(clean(v) for v in item)
-        if isinstance(item, str): return _safe_secret_text(item, secrets_to_hide)
+        if isinstance(item, str): return _strip_terminal_controls(_safe_secret_text(item, secrets_to_hide))
         return item
     return clean(value)
+
+_TERMINAL_ESCAPE_RE = re.compile(
+    r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)?)'
+)
+
+def _strip_terminal_controls(value):
+    """日志可以保留换行和制表符，但不能把 ANSI/OSC 控制码带进产品 UI。"""
+    text = _TERMINAL_ESCAPE_RE.sub('', str(value or ''))
+    return ''.join(ch for ch in text if ch in ('\n', '\r', '\t') or ord(ch) >= 32)
 
 def emit(job, ev):
     """事件即真相:UI 只消费引擎验证后的 events.jsonl。"""
@@ -986,6 +1004,19 @@ def harvest(job, depth=3):
 _NOT_BODY = ('自检', '清洗', '报告', '质检', '门禁', '矩阵', '偏离表', '解析版',
              '配图清单', '补料', '废标', '组成', '索引', '格式要求', '大纲', '定向重做说明', '.bak')
 
+_CHAPTER_FILE_RE = re.compile(
+    r'^(?:第[0-9一二三四五六七八九十百]+(?:[-—至到][0-9一二三四五六七八九十百]+)?章|章节[_\-\s]*[0-9一二三四五六七八九十百]+)'
+)
+
+def _is_chapter_fragment(name):
+    return bool(_CHAPTER_FILE_RE.match(os.path.basename(str(name or ''))))
+
+def _chapter_mds(job, known=None):
+    names = list(known) if known is not None else list_deliverables(job)
+    return [fn for fn in sorted(names)
+            if fn.lower().endswith('.md') and _is_chapter_fragment(fn)
+            and os.path.isfile(os.path.join(job, fn))]
+
 def _body_mds(job, known=None):
     """挑出「可以拿去导出 Word 的正文稿」。
 
@@ -994,7 +1025,8 @@ def _body_mds(job, known=None):
     现在放宽到常见命名,再兜底"最大的那份 md",宁可多认一份也不要漏掉正文。"""
     names = list(known) if known is not None else list_deliverables(job)
     mds = [fn for fn in sorted(names)
-           if fn.endswith('.md') and not any(k in fn for k in _NOT_BODY)]
+           if fn.endswith('.md') and not _is_chapter_fragment(fn)
+           and not any(k in fn for k in _NOT_BODY)]
     hit = [fn for fn in mds if fn.startswith('投标')]
     if not hit:
         hit = [fn for fn in mds if any(k in fn for k in ('投标文件', '技术标', '商务标', '标书', '方案'))]
@@ -1010,7 +1042,7 @@ def _body_docxs(job, known=None):
     names = list(known) if known is not None else list_deliverables(job)
     out = []
     for fn in sorted(names):
-        if not fn.lower().endswith('.docx') or any(k in fn for k in _NOT_BODY): continue
+        if not fn.lower().endswith('.docx') or _is_chapter_fragment(fn) or any(k in fn for k in _NOT_BODY): continue
         if not any(k in fn for k in ('投标', '技术标', '商务标', '标书', '方案', '响应文件')): continue
         if _valid_docx(os.path.join(job, fn)): out.append(fn)
     return out
@@ -1217,10 +1249,46 @@ def verified_step(job, claimed=12):
         done = step
     return done
 
+def observed_activity_step(job):
+    """识别正在发生的最远活动，不把它冒充连续验收通过的 checkpoint。"""
+    names = list_deliverables(job)
+    if _body_docxs(job, names): return 12
+    if _named_files(job, ('投标文件自检报告', '自检报告'), '.md', 20): return 11
+    if _named_files(job, ('成品质检报告', '配图复核', '无图'), min_size=20): return 10
+    if _body_mds(job, names): return 9
+    if (_named_files(job, ('技术应答偏离表', '技术偏离表'), min_size=20) or
+            _named_files(job, ('商务偏离表',), min_size=20)): return 8
+    if _chapter_mds(job, names): return 7
+    response_files = _named_files(job, ('响应矩阵', '响应对照'), '.md', 20)
+    if any('评分' not in name for name in response_files): return 6
+    if (_named_files(job, ('评分点响应矩阵', '评分矩阵'), min_size=20) or
+            _named_files(job, ('废标风险',), min_size=20)): return 5
+    if (_job_find(job, 'word_format_spec.json') or
+            _named_files(job, ('格式', '版式'), '.md', 20)): return 4
+    if _named_files(job, ('投标文件组成', '组成分析'), '.md', 20): return 3
+    if _named_files(job, ('图片索引', '无图片', '图片检查'), min_size=10): return 2
+    if evidence_for_step(job, 1): return 1
+    return 0
+
 def sanitize_event(job, ev):
     """净化历史/第三方写入的进度；verified 字段本身永远不构成信任。"""
     safe = redact(dict(ev or {}))
-    if safe.get('type') != 'progress': return safe
+    if safe.get('type') != 'progress':
+        # v0.19.6 及更早版本会把“若干分章稿”误认成“完整正文”，继而把连接中断
+        # 写成 Word 导出失败。SSE 回放时纠正旧结论，升级后无需用户重跑才能看懂现状。
+        if safe.get('type') == 'error' and _chapter_mds(job) and not _body_mds(job):
+            text = str(safe.get('text') or '')
+            if '正文稿已经生成' in text or 'Word 导出失败' in text:
+                suffix = ('\n\n运行日志' + text.split('\n\n运行日志', 1)[1]
+                          if '\n\n运行日志' in text else '')
+                count = len(_chapter_mds(job))
+                safe['text'] = ('分章撰写中断：已生成 %d 个章节，但还没有汇总成完整正文和最终 Word。'
+                                '已经写出的内容均已保留。' % count) + suffix
+                meta = read_json(os.path.join(job, '任务.json'), {})
+                safe['actions'] = ([{'act': 'resume', 'label': '从已保存内容继续'}]
+                                   if meta.get('oc_session') else [{'act': 'rerun', 'label': '重新生成'}])
+                safe['actions'].append({'act': 'open_log', 'label': '查看运行日志'})
+        return safe
     safe.pop('verified', None)
     try: claimed = max(0, min(12, int(safe.get('step') or 0)))
     except Exception: claimed = 0
@@ -1717,7 +1785,9 @@ def settle(job, known=None, stop_reason=None):
         return {'state': 'done', 'word': words[0], 'artifacts': sorted(known),
                 'delivery': delivery_summary(job, quality)}
 
-    # 没有 Word：最高优先级健康红灯，绝不把解析件或过程稿包装成完成。
+    # 没有 Word：最高优先级健康红灯，绝不把解析件或分章过程稿包装成完成。
+    body = _body_mds(job, known)
+    chapters = _chapter_mds(job, known)
     if redo:
         emit(job, {'type': 'health', 'level': 'red',
                    'summary': '定向重做没有更新可交付的 Word，任务未完成',
@@ -1725,10 +1795,17 @@ def settle(job, known=None, stop_reason=None):
                              'detail': '旧稿仍完整保留；请查看日志后继续或重新定向重做。',
                              'actions': [{'act': 'open_log', 'label': '查看运行日志'},
                                          {'act': 'open_redo', 'label': '重新定向重做'}]}]})
+    elif chapters and not body:
+        resume = ([{'act': 'resume', 'label': '从已保存内容继续'}]
+                  if meta.get('oc_session') else [{'act': 'rerun', 'label': '重新生成'}])
+        emit(job, {'type': 'health', 'level': 'red',
+                   'summary': '分章撰写中断，已保留 %d 个章节' % len(chapters),
+                   'gaps': [{'level': 'red', 'title': '正文尚未汇总，最终 Word 未生成',
+                             'detail': '可从已保存章节继续，不需要从招标解析重新开始。',
+                             'actions': resume + [{'act': 'open_log', 'label': '查看运行日志'}]}]})
     else:
         try: quality_audit(job, known)
         except Exception: pass
-    body = _body_mds(job, known)
     analysis = [fn for fn in known if fn.endswith(DELIVER_EXT)]
     lines = _tail_lines(os.path.join(job, 'run.log'), 8)
     if redo:
@@ -1742,6 +1819,13 @@ def settle(job, known=None, stop_reason=None):
         actions = [{'act': 'export_docx', 'label': '重试导出 Word'},
                    {'act': 'open_log', 'label': '查看运行日志'},
                    {'act': 'rerun', 'label': '重跑本任务'}]
+    elif chapters:
+        why = stop_reason or '已停止（撰写中断，内容已保留）'
+        lead = ('分章撰写中断：已生成 %d 个章节，但还没有汇总成完整正文和最终 Word。'
+                '已经写出的内容均已保留。' % len(chapters))
+        actions = ([{'act': 'resume', 'label': '从已保存内容继续'}]
+                   if meta.get('oc_session') else [{'act': 'rerun', 'label': '重新生成'}])
+        actions.append({'act': 'open_log', 'label': '查看运行日志'})
     elif analysis:
         why = '已停止（生成中断：只有分析文件）'
         lead = '生成中断：目前只有解析/分析文件，没有正文和最终 Word。'
@@ -2814,9 +2898,13 @@ def real_agent(job, cmd):
                                    {'act': 'mock_rerun', 'label': '先用内置演示跑通流程'}]})
         elif any(k in tail for k in ('连接被对端掐断',)) or \
                 any(k in low for k in ('connection reset by peer', 'unexpected_eof',
-                                       'stream disconnected before completion', 'eof occurred in violation')):
+                                       'stream disconnected before completion', 'eof occurred in violation',
+                                       'stream idle timeout', 'no data received within configured window')):
             # 上游网关把连接掐了。中转层已经自动重试过 RETRY_WAITS 次仍不通,不是配置问题,别让客户去翻设置。
             append_diagnostic(job, 'model_connection_interrupted', tail, level='error')
+            meta_now = read_json(os.path.join(job, '任务.json'), {})
+            retry_action = ({'act': 'resume', 'label': '从已保存内容继续'}
+                            if meta_now.get('oc_session') else {'act': 'rerun', 'label': '重新生成'})
             emit(job, {'type': 'error',
                        'text': '**模型服务连接多次中断**，应用已自动重试 %d 次，任务仍未能完整结束。\n\n'
                                '已经写出的章节都保留着，重新生成时会继续利用这些内容。\n\n'
@@ -2824,7 +2912,7 @@ def real_agent(job, cmd):
                                '① 换个网络试一次（手机热点最快）；\n'
                                '② 过几分钟再试；\n'
                                '③ 急着稳定出件时先切回**标准模式**；极速模式更容易受长连接抖动影响。' % len(RETRY_WAITS),
-                       'actions': [{'act': 'rerun', 'label': '重新生成'},
+                       'actions': [retry_action,
                                    {'act': 'open_engine', 'label': '切换模式'},
                                    {'act': 'open_log', 'label': '查看运行日志'}]})
         elif any(k in low for k in ('no api key found for provider', 'auth-profiles', 'auth profile',
@@ -2850,7 +2938,12 @@ def real_agent(job, cmd):
                        'text': '生成过程意外结束，已有文件都已保留。请一键诊断后重新生成。',
                        'actions': [{'act': 'diagnose', 'label': '一键诊断'},
                                    {'act': 'rerun', 'label': '重新生成'}]})
-        settle(job, known)
+        settle(job, known, stop_reason=('已停止（连接中断，内容已保留）'
+                                        if any(k in low for k in ('connection reset by peer', 'unexpected_eof',
+                                                                  'stream disconnected before completion',
+                                                                  'eof occurred in violation', 'stream idle timeout',
+                                                                  'no data received within configured window'))
+                                        else None))
 
 # ---------- 生成引擎绑定(claude / codex / 自定义;打包版通过应用内设置,无需环境变量) ----------
 AGENT_PROMPT = ('你是标书生成 agent。先完整阅读 {skill}/SKILL.md,然后严格按其流程执行:'
@@ -3353,7 +3446,7 @@ def agent_test():
     return {'ok': False, 'error': ('退出码 %s。%s' % (r.returncode, hint)).strip(), 'reply': out[-300:]}
 
 @app.post('/v1/jobs')
-async def create_job(tender: UploadFile = File(None), materials: UploadFile = File(None),
+async def create_job(request: Request, tender: UploadFile = File(None), materials: UploadFile = File(None),
                      files: List[UploadFile] = File(None), relpaths: str = Form(''),
                      prompt: str = Form(''), name: str = Form(''), mock: str = Form('auto'),
                      start: str = Form('1'), template_id: str = Form(''),
@@ -3363,6 +3456,16 @@ async def create_job(tender: UploadFile = File(None), materials: UploadFile = Fi
     - files + relpaths = 参考素材(多文件/整文件夹,保留目录结构,落 素材/;相对路径做穿越防护)
     - start='0' 只暂存(任务状态=待开始),等 /v1/jobs/{jid}/start 再跑
     兼容旧调用:只传 tender(+materials zip)行为不变。"""
+    raw_key = str(request.headers.get('idempotency-key') or '')
+    idem_key = raw_key[:128] if re.fullmatch(r'[A-Za-z0-9._:-]{8,128}', raw_key) else ''
+    create_ledger_path = os.path.join(jobs_dir(), '.create_requests.json')
+    if idem_key:
+        with _json_lock(create_ledger_path):
+            create_ledger = read_json(create_ledger_path, {})
+            prior = create_ledger.get(idem_key) if isinstance(create_ledger, dict) else None
+            if isinstance(prior, dict) and os.path.isdir(jpath(prior.get('job_id') or '')):
+                return {'job_id': prior['job_id'], 'mode': prior.get('mode', 'staged'),
+                        'deduplicated': True}
     fl = [f for f in (files or []) if f and f.filename]
     if not (tender and tender.filename) and not fl:
         return JSONResponse({'error': '至少要有一个文件(招标文件)'}, 400)
@@ -3442,6 +3545,12 @@ async def create_job(tender: UploadFile = File(None), materials: UploadFile = Fi
     write_json(os.path.join(job, 'product.json'),
                {'name': name or tname, 'project_id': str(project_id or '').strip()[:120],
                 'version': 1, 'root_job_id': jid, 'parent_job_id': '', 'created_at': now()})
+    if idem_key:
+        with _json_lock(create_ledger_path):
+            create_ledger = read_json(create_ledger_path, {})
+            if not isinstance(create_ledger, dict): create_ledger = {}
+            create_ledger[idem_key] = {'job_id': jid, 'mode': 'staged', 'created_at': now()}
+            write_json(create_ledger_path, dict(list(create_ledger.items())[-64:]))
     if prompt:
         # 落盘成文件,agent 才真的看得到(以前只发了一条聊天消息,界面写着「会作为生成指令的一部分」其实没进指令)
         open(os.path.join(job, '你的要求.md'), 'w', encoding='utf-8').write(prompt)
@@ -3457,7 +3566,14 @@ async def create_job(tender: UploadFile = File(None), materials: UploadFile = Fi
     if start == '0':
         emit(job, {'type': 'progress', 'stage': '待开始(素材已就位,点「开始生成」)', 'pct': 0, 'step': 0, 'total': 12})
         return {'job_id': jid, 'mode': 'staged'}
-    return _launch_http_result(_launch_job(jid, job, mock))
+    result = _launch_http_result(_launch_job(jid, job, mock))
+    if idem_key and isinstance(result, dict):
+        with _json_lock(create_ledger_path):
+            create_ledger = read_json(create_ledger_path, {})
+            if isinstance(create_ledger.get(idem_key), dict):
+                create_ledger[idem_key]['mode'] = str(result.get('mode') or 'staged')
+                write_json(create_ledger_path, create_ledger)
+    return result
 
 def _launch_blocked(jid, job, reason):
     """全局/控制态禁入时保留一个可见的待开始任务，绝不假报 running。"""
@@ -4099,6 +4215,9 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
     # 但显式的 step=0 环境预检期间不跨过该阶段，即使目录里还有旧轮产物。
     if not (step == 0 and preflight and state == 'running'):
         step = max(step, verified_step(job, 12))
+    checkpoint_step = step
+    activity_step = (0 if step == 0 and preflight and state == 'running'
+                     else max(checkpoint_step, observed_activity_step(job)))
     stage_rows = (stage_stats() or {}).get('stages') or []
     timeline = _progress_timeline(job)
     clock = _parse_ts(now()) or datetime.datetime.now()
@@ -4115,20 +4234,27 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
                        'detail': str(item.get('message') or '')})
 
     current_index = 0
-    if step:
+    if activity_step:
         current_index = next((idx for idx, phase in enumerate(FLOW_PHASES)
-                              if phase['first'] <= step <= phase['last']), len(FLOW_PHASES) - 1)
+                              if phase['first'] <= activity_step <= phase['last']), len(FLOW_PHASES) - 1)
     terminal_problem = state in ('paused', 'stopped', 'unknown')
     problem_state = 'attention' if state in ('paused', 'stopped') else 'failed'
-    reason = str(outcome.get('reason') or prog.get('stage') or '').strip()
+    raw_reason = str(outcome.get('reason') or prog.get('stage') or '').strip()
+    reason = _friendly_current_action(raw_reason, '') if raw_reason else ''
+    chapters_now = _chapter_mds(job)
+    if terminal_problem and chapters_now and not _body_mds(job) and 'Word 导出失败' in raw_reason:
+        reason = '撰写中断，已保留 %d 个章节；可从已保存内容继续' % len(chapters_now)
     phases = []
     for idx, definition in enumerate(FLOW_PHASES):
         if definition['id'] == 'environment':
-            phase_state = 'done' if step >= 1 or state == 'done' else 'active'
-        elif step > definition['last'] or state == 'done':
+            phase_state = 'done' if checkpoint_step >= 1 or state == 'done' else 'active'
+        elif state == 'done' or checkpoint_step > definition['last']:
             phase_state = 'done'
         elif idx == current_index:
             phase_state = 'active'
+        elif idx < current_index:
+            # 后续活动已真实落盘，但本阶段连续证据仍有缺件；必须提示补齐，不能伪装已完成。
+            phase_state = 'attention'
         else:
             phase_state = 'pending'
         if terminal_problem and idx == current_index:
@@ -4164,7 +4290,8 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
         if definition['id'] == 'environment': phase['checks'] = checks
         phases.append(phase)
 
-    checkpoint = {'step': step, 'label': (STAGES[step - 1] if step else '任务文件已保存')}
+    checkpoint = {'step': checkpoint_step,
+                  'label': (STAGES[checkpoint_step - 1] if checkpoint_step else '任务文件已保存')}
     last_activity = _parse_ts(_job_last_activity(job, meta, prog, outcome)) or created
     silence_seconds = max(0, int((clock - last_activity).total_seconds()))
     # 历史阶段可能很长，但“完全没有任何活动”的心跳警告不能因此被延后。
@@ -4173,10 +4300,17 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
     stopped_for_stall = terminal_problem and bool(re.search(r'连接中断|长时间无进展|没有响应', reason))
     stalled = bool((state == 'running' and silence_seconds >= slow_after) or stopped_for_stall)
     parsed_source_ready = bool(_named_files(job, ('解析版',), '.md', 20))
-    if state == 'running' and step <= 1 and parsed_source_ready and not stalled:
+    if state == 'running' and activity_step <= 1 and parsed_source_ready and not stalled:
         parsed_action = '招标正文已提取，正在识别目录、条款、评分项和废标条件'
         phases[current_index]['detail'] = parsed_action
         reason = parsed_action
+    if state == 'running' and activity_step > checkpoint_step:
+        if activity_step in (7, 8):
+            count = len(_chapter_mds(job))
+            reason = ('正在分章撰写，已落盘 %d 个章节' % count) if count else '正在撰写章节和逐条响应'
+        elif activity_step in (9, 10): reason = '正文已汇总，正在装配和检查 Word'
+        elif activity_step >= 11: reason = '正在执行出件前检查'
+        phases[current_index]['detail'] = reason
     if stalled and state == 'running':
         phases[current_index]['state'] = 'attention'
         phases[current_index]['detail'] = '模型响应偏慢，正在持续检查连接'
@@ -4236,6 +4370,8 @@ def list_jobs(scope: str = 'all', project_id: str = ''):
         template_snapshot = meta.get('template_snapshot') if isinstance(meta.get('template_snapshot'), dict) else {}
         presentation, current_action = job_presentation(job, st, meta, prog, delivery)
         flow = job_flow(job, st, meta, prog, outcome)
+        if st == 'running' and flow.get('current_action'):
+            current_action = flow['current_action']
         last_activity = _job_last_activity(job, meta, prog, outcome)
         elapsed = _job_elapsed(job, st, meta, outcome, last_activity)
         eta = int(flow.get('remaining_seconds') or 0)
@@ -5554,13 +5690,22 @@ async def setup_connect(req: Request):
         candidate = dict(current); candidate['engine'] = engine
         if config_locked_jobs() and oc_config_fingerprint(candidate) != oc_config_fingerprint(current):
             return JSONResponse({'ok': False, 'error': '还有任务正在生成，请结束后再更换连接'}, 409)
-        probe_result = setup_connection_probe(candidate)
-        ok, why = probe_result[:2]
-        model_ids = probe_result[2] if len(probe_result) > 2 else []
-        if not ok:
-            safe = _safe_secret_text(why, (key,))
+        config_before_probe = _sha256_text(json.dumps(current, ensure_ascii=False, sort_keys=True))
+    # 网络探测是同步 I/O，必须移出配置锁并放到工作线程；否则 Windows 上一次慢连接
+    # 会同时冻住健康检查、进度刷新和设置保存，看起来像“本地引擎断了”。
+    probe_result = await asyncio.to_thread(setup_connection_probe, candidate)
+    ok, why = probe_result[:2]
+    model_ids = probe_result[2] if len(probe_result) > 2 else []
+    if not ok:
+        safe = _safe_secret_text(why, (key,))
+        return JSONResponse({'ok': False, 'connected': False,
+                             'error': safe or '连接测试没有通过'}, 400)
+    with _json_lock(path):
+        latest = read_json(path, {})
+        latest_digest = _sha256_text(json.dumps(latest, ensure_ascii=False, sort_keys=True))
+        if latest_digest != config_before_probe:
             return JSONResponse({'ok': False, 'connected': False,
-                                 'error': safe or '连接测试没有通过'}, 400)
+                                 'error': '测试期间设置已发生变化，请重新点击连接测试'}, 409)
         generation_model, vision_model = _setup_models(model_ids, engine.get('s2_model') or S2_DEFAULT_MODEL)
         engine['s2_model'] = generation_model
         candidate['engine'] = engine
@@ -6543,7 +6688,16 @@ def _exit_when_idle(generation):
 
 @app.get('/v1/health')
 def health():
-    # 桌面壳重新打开时会复用这个还活着的引擎:把 HOST_GONE 撤回,否则它会在半路自退
+    """纯只读存活检查；监控、轮询和诊断不得悄悄改变引擎生命周期。"""
+    if EXITING:
+        return JSONResponse({'ok': False, 'error': '引擎正在退出，请等待应用自动重连'}, 503)
+    return {'ok': True, 'data_dir': DATA, 'agent': bool(config_agent_cmd()),
+            'version': ENGINE_VERSION, 'author': AUTHOR, 'features': ENGINE_FEATURES,
+            'update': dict(UPDATE_STATE)}
+
+@app.post('/v1/attach')
+def attach():
+    """桌面壳明确声明重新接管当前引擎，取消上一窗口留下的优雅退出倒计时。"""
     global HOST_GONE, SHUTTING_DOWN, SHUTDOWN_GENERATION
     with RUNNING_LOCK:
         if EXITING:
@@ -6556,9 +6710,7 @@ def health():
             try: timer.cancel()
             except Exception: pass
             _EXIT_TIMER[0] = None
-    return {'ok': True, 'data_dir': DATA, 'agent': bool(config_agent_cmd()),
-            'version': ENGINE_VERSION, 'author': AUTHOR, 'features': ENGINE_FEATURES,
-            'update': dict(UPDATE_STATE)}
+    return {'ok': True, 'attached': True, 'version': ENGINE_VERSION}
 
 def migrate_conf():
     """存量配置迁移。

@@ -160,6 +160,12 @@ fn probe_engine(port: u16) -> Option<(EngineHandover, serde_json::Value)> {
     Some((classify_engine_health(&health), health))
 }
 
+fn attach_engine(port: u16) -> bool {
+    engine_http_json(port, "POST", "/v1/attach")
+        .and_then(|reply| reply.get("ok").and_then(|value| value.as_bool()))
+        == Some(true)
+}
+
 fn data_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
     let base = PathBuf::from(home).join("Documents");
@@ -315,8 +321,11 @@ fn wait_for_port_then_spawn(
                 }
             }
             Some((EngineHandover::ReuseCurrent, _)) => {
-                runtime.trusted_engine.store(true, Ordering::Release);
-                return;
+                if attach_engine(ENGINE_PORT) {
+                    runtime.trusted_engine.store(true, Ordering::Release);
+                    return;
+                }
+                append_bootstrap_log(data.as_deref(), "同版本引擎未确认桌面接管；等待端口安全释放。");
             }
             _ => {
                 append_bootstrap_log(
@@ -348,8 +357,13 @@ fn start_engine_with_handover(runtime: Arc<DesktopRuntime>) {
     };
     match decision {
         EngineHandover::ReuseCurrent => {
-            runtime.trusted_engine.store(true, Ordering::Release);
-            append_bootstrap_log(data.as_deref(), "已连接同版本本地引擎，无需重复启动。");
+            if attach_engine(ENGINE_PORT) {
+                runtime.trusted_engine.store(true, Ordering::Release);
+                append_bootstrap_log(data.as_deref(), "已连接同版本本地引擎，无需重复启动。");
+            } else {
+                append_bootstrap_log(data.as_deref(), "同版本引擎未确认桌面接管；等待端口安全释放。");
+                wait_for_port_then_spawn(runtime, data, false);
+            }
         }
         EngineHandover::BlockedForeign => {
             append_bootstrap_log(

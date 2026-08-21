@@ -227,13 +227,13 @@ def test_shutdown_rejects_new_launches_until_desktop_reconnects(engine, monkeypa
     assert scheduled and scheduled[-1][1] == 0.3
     assert engine._reserve_running("late-job") is None
 
-    engine.health()
+    engine.attach()
     owner = engine._reserve_running("late-job")
     assert owner
     assert engine._release_running("late-job", owner) is True
 
 
-def test_stale_shutdown_generation_cannot_exit_after_health_reconnect(engine, monkeypatch):
+def test_health_is_read_only_and_explicit_attach_cancels_stale_shutdown(engine, monkeypatch):
     exits = []
     monkeypatch.setattr(engine, "_exit_process_cleanly", lambda: exits.append(1))
     with engine.RUNNING_LOCK:
@@ -244,6 +244,12 @@ def test_stale_shutdown_generation_cannot_exit_after_health_reconnect(engine, mo
     response = engine.health()
 
     assert response["ok"] is True
+    assert engine.SHUTDOWN_GENERATION == 7
+    assert engine.SHUTTING_DOWN is True
+    assert engine.HOST_GONE is True
+    attached = engine.attach()
+
+    assert attached["ok"] is True
     assert engine._exit_if_shutdown(7) is False
     assert exits == []
 

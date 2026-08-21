@@ -43,6 +43,14 @@ function section(from, to) {
   return html.slice(a, b);
 }
 
+test('API 请求具备超时追踪，创建任务具备网络幂等键', () => {
+  const apiHelper = section('async function api(p, opt)', 'function el(id)');
+  assert.match(apiHelper, /AbortController/, 'API 请求没有超时/取消控制');
+  assert.match(apiHelper, /requestId/, 'API 错误没有携带可追踪的 request id');
+  const create = section('async function njStart(startNow)', 'async function startStaged()');
+  assert.match(create, /Idempotency-Key/, '创建任务没有网络重试幂等键');
+});
+
 const startMark = '/* FRONTEND_STABILITY_PURE_START */';
 const endMark = '/* FRONTEND_STABILITY_PURE_END */';
 const start = html.indexOf(startMark);
@@ -459,7 +467,7 @@ test('所有错误动作末尾都有且只有一个诊断包入口', () => {
 test('升级信息仅在确有新版本时出现', () => {
   assert.ok(pure);
   assert.strictEqual(pure.healthUpdateInfo({update: {status: 'pending'}}), null);
-  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.6'}}), null);
+  assert.strictEqual(pure.healthUpdateInfo({update: {status: 'latest', latest: '0.19.7'}}), null);
   const info = pure.healthUpdateInfo({update: {status: 'available', latest: '0.18.3', url: 'https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.18.3'}});
   assert.strictEqual(info.version, '0.18.3');
   assert.match(info.url, /^https:\/\/github\.com\/shandianT\/bid-dog\/releases\//);

@@ -833,7 +833,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
-const BUNDLED_ENGINE_VERSION = '0.19.6';
+const BUNDLED_ENGINE_VERSION = '0.19.7';
 /* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后，旧 PyInstaller 进程可能仍驻留；
    若继续探测历史端口，就会把旧引擎误认成新版，甚至在可执行文件被替换后返回 500。 */
 const DESKTOP_ENGINE = 'http://127.0.0.1:18901';
@@ -1169,13 +1169,37 @@ function deliveryViewModel(job, artifacts){
    引擎那句「原来的会话已经不在了,只能重跑本任务」就被丢在这儿了 ——
    用户看到的是一串没用的状态码,而真正该看的话被我们自己吞掉。 */
 async function api(p, opt){
-  const r = await fetch(API + p, opt);
+  const original = opt || {}, requestOpt = Object.assign({}, original);
+  const method = String(requestOpt.method || 'GET').toUpperCase();
+  const timeoutMs = Number(original.timeoutMs ||
+    (p==='/v1/setup/connect' ? 35000 : (p==='/v1/jobs' && method==='POST' ? 600000 : (method==='GET' ? 20000 : 60000))));
+  delete requestOpt.timeoutMs;
+  const controller = typeof AbortController!=='undefined' ? new AbortController() : null;
+  let timer = null;
+  if(controller){
+    requestOpt.signal = controller.signal;
+    if(original.signal){
+      if(original.signal.aborted) controller.abort();
+      else original.signal.addEventListener('abort', ()=>controller.abort(), {once:true});
+    }
+    timer = setTimeout(()=>controller.abort(), timeoutMs);
+  }
+  let r;
+  try{ r = await fetch(API + p, requestOpt); }
+  catch(err){
+    const timedOut = !!(controller && controller.signal.aborted && !(original.signal&&original.signal.aborted));
+    const e = new Error(timedOut ? '请求等待超时，任务不会丢失；请刷新状态后重试' : '本地服务暂时没有响应，请稍后重试');
+    e.code = timedOut ? 'REQUEST_TIMEOUT' : 'NETWORK_ERROR'; e.cause = err; throw e;
+  }finally{ if(timer)clearTimeout(timer); }
+  const requestId = r.headers && r.headers.get ? (r.headers.get('X-Request-ID') || '') : '';
   if(!r.ok){
     let body = null; try{ body = await r.json(); }catch(_){}
     const e = new Error((body && (body.error || body.detail)) || (p+' '+r.status));
-    e.status = r.status; e.body = body; throw e;
+    e.status = r.status; e.body = body; e.requestId = requestId || (body&&body.request_id) || ''; throw e;
   }
-  return r.json();
+  const data = await r.json();
+  if(data && typeof data==='object' && requestId && !data.request_id) data.request_id = requestId;
+  return data;
 }
 function el(id){ return document.getElementById(id); }
 function esc(s){ const d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; }
@@ -2781,8 +2805,9 @@ async function njStart(startNow){
     fd.append('relpaths', JSON.stringify(rels));fd.append('name', tname.replace(/\.[^.]+$/,''));
     fd.append('prompt', el('njReq').value.trim());fd.append('template_id', el('njTemplate').value || 'auto');
     fd.append('project_id', el('njProject').value.trim());fd.append('start', startNow ? '1' : '0');
+    const createKey = 'create-'+(window.crypto&&crypto.randomUUID ? crypto.randomUUID() : Date.now()+'-'+Math.random().toString(16).slice(2));
     try{
-      const r = await api('/v1/jobs', {method:'POST', body:fd});
+      const r = await api('/v1/jobs', {method:'POST', headers:{'Idempotency-Key':createKey}, body:fd});
       S.jobs = await api('/v1/jobs'); closeAll(); njReset(); select(r.job_id);
       if(!startNow) toast('已暂存。想跑的时候点任务标题旁的「开始生成」');
     }catch(e){ el('njMsg').style.display='block'; el('njMsg').textContent='创建失败：'+(e&&e.message||'没连上本地服务'); }
