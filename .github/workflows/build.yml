@@ -274,7 +274,7 @@ jobs:
           app_path=$(find "$mount_dir" -maxdepth 1 -name '*.app' -print -quit)
           codesign --verify --deep --strict --verbose=2 "$app_path"
           "$app_path/Contents/MacOS/opencode-cli" --version
-          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.19.7"
+          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.19.8"
           if [ "$MAC_SIGNING_READY" = "true" ]; then
             spctl --assess --type execute --verbose=2 "$app_path"
             xcrun stapler validate "$app_path"
@@ -303,7 +303,7 @@ jobs:
           done
           test -n "$health" || { cat "$engine_log"; exit 1; }
           printf '%s' "$health" | python -c \
-            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.19.7"'
+            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.19.8"'
           word_job="$engine_data/jobs/word-smoke"
           mkdir -p "$word_job"
           printf '%s\n' '{"name":"安装包 Word 冒烟","tender":"招标文件.docx"}' >"$word_job/任务.json"
@@ -375,7 +375,7 @@ jobs:
               Get-Content $engineOut, $engineErr -ErrorAction SilentlyContinue
               throw "installed bid-engine.exe did not become healthy"
             }
-            if ($health.version -ne "0.19.7") {
+            if ($health.version -ne "0.19.8") {
               throw "installed engine version mismatch: $($health.version)"
             }
             $wordJob = Join-Path $engineData "jobs\word-smoke"
@@ -428,9 +428,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="desktop-v0.19.7"
+          tag="desktop-v0.19.8"
           release_rows=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-            --jq '.[] | select(.tag_name == "desktop-v0.19.7") | [.id, .draft, .target_commitish] | @tsv')
+            --jq '.[] | select(.tag_name == "desktop-v0.19.8") | [.id, .draft, .target_commitish] | @tsv')
           release_count=$(printf '%s\n' "$release_rows" | sed '/^$/d' | wc -l | tr -d ' ')
           if [ "$release_count" -gt 1 ]; then
             echo "Multiple releases exist for $tag; refusing an ambiguous update."
@@ -443,7 +443,7 @@ jobs:
               exit 1
             fi
             if [ "$release_target" != "$GITHUB_SHA" ]; then
-              echo "Draft release desktop-v0.19.7 belongs to another commit; refusing to mix assets."
+              echo "Draft release desktop-v0.19.8 belongs to another commit; refusing to mix assets."
               exit 1
             fi
             echo "Found an unfinished draft for the same commit; resuming its asset upload safely."
@@ -475,16 +475,16 @@ jobs:
             name="$(basename "$f" | sed -e 's/中标狗/bid-dog/g' -e 's/标书助手/bid-dog/g')"
             mv "$f" "out/$name"
           done
-          test -f out/bid-dog_0.19.7_aarch64.dmg
-          test -f out/bid-dog_0.19.7_x64-setup.exe
+          test -f out/bid-dog_0.19.8_aarch64.dmg
+          test -f out/bid-dog_0.19.8_x64-setup.exe
           test "$(find out -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
-          (cd out && sha256sum bid-dog_0.19.7_aarch64.dmg bid-dog_0.19.7_x64-setup.exe > SHA256SUMS)
+          (cd out && sha256sum bid-dog_0.19.8_aarch64.dmg bid-dog_0.19.8_x64-setup.exe > SHA256SUMS)
           ls -la out
       - id: stage_release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: desktop-v0.19.7
-          name: 中标狗桌面版 v0.19.7
+          tag_name: desktop-v0.19.8
+          name: 中标狗桌面版 v0.19.8
           target_commitish: ${{ github.sha }}
           # Only a same-commit draft reaches this step; this repairs an interrupted partial upload.
           overwrite_files: true
@@ -497,8 +497,8 @@ jobs:
             中标狗桌面应用安装包（自动构建；未配置商业证书时 macOS 为 ad-hoc、Windows 为未签名）。作者:FDE-家涛。
             官网(含在线体验、成品 Word 页面):https://bid-dog.vercel.app
 
-            - macOS Apple Silicon(M 系列): `bid-dog_0.19.7_aarch64.dmg`
-            - Windows: `bid-dog_0.19.7_x64-setup.exe`
+            - macOS Apple Silicon(M 系列): `bid-dog_0.19.8_aarch64.dmg`
+            - Windows: `bid-dog_0.19.8_x64-setup.exe`
             - 校验文件: `SHA256SUMS`
             - 需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可。
 
@@ -506,18 +506,17 @@ jobs:
             `xattr -dr com.apple.quarantine "/Applications/中标狗.app"` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。每个新下载版本都可能再次需要放行。详见 README。
             Windows SmartScreen 提示时点「更多信息 → 仍要运行」。
 
-            v0.19.7（完整说明见仓库更新日志）:
-            - 当前活动与连续验收点分开展示，章节已落盘时不再卡在“招标解析”。
-            - 分章中断不再误报 Word 导出失败；显示已保留章节并支持从会话继续。
-            - 旧任务的错误历史结论自动纠正，运行日志不再显示 ANSI 控制码。
-            - 模型接入探测不再阻塞本地服务；新建任务网络重试不会重复建单。
-            - 前端请求具备分级超时和追踪编号，健康检查改为纯只读接口。
+            v0.19.8（完整说明见仓库更新日志）:
+            - 慢模型的小段 SSE 响应立即透传，不再等待本地缓冲攒满 8KB。
+            - 流空闲超时、连接重置等瞬时断流会在同一会话内自动续做两次。
+            - 自动续做先检查已落盘章节，只补缺件，不从头覆盖已有内容。
+            - 新任务默认使用极速模型；标准模式保留给关键项目和最终定稿。
             - 发布门禁继续在最终 macOS DMG 和 Windows NSIS 载荷中实启引擎并导出 Word。
 
             完整历史版本说明见 CHANGELOG.md。
           files: |
-            out/bid-dog_0.19.7_aarch64.dmg
-            out/bid-dog_0.19.7_x64-setup.exe
+            out/bid-dog_0.19.8_aarch64.dmg
+            out/bid-dog_0.19.8_x64-setup.exe
             out/SHA256SUMS
       - name: verify staged release assets
         shell: bash
@@ -540,8 +539,8 @@ jobs:
           if release.get("draft") is not True:
               raise SystemExit("release must remain a draft until all assets are verified")
           expected = {
-              "bid-dog_0.19.7_aarch64.dmg",
-              "bid-dog_0.19.7_x64-setup.exe",
+              "bid-dog_0.19.8_aarch64.dmg",
+              "bid-dog_0.19.8_x64-setup.exe",
               "SHA256SUMS",
           }
           assets = {item.get("name"): item for item in release.get("assets", [])}
@@ -564,6 +563,6 @@ jobs:
           release = json.load(open(sys.argv[1], encoding="utf-8"))
           if release.get("draft") is not False:
               raise SystemExit("release was not published")
-          if release.get("tag_name") != "desktop-v0.19.7":
+          if release.get("tag_name") != "desktop-v0.19.8":
               raise SystemExit("published release tag mismatch")
           PY

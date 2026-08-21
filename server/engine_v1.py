@@ -32,7 +32,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.19.7'
+ENGINE_VERSION = '0.19.8'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -43,7 +43,8 @@ ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest'
                    'worklog_stream', 'stage_eta', 'job_presentation', 'runtime_capabilities',
                    'delivery_summary', 'job_usage', 'job_archive', 'job_projects', 'job_bulk_actions',
                    'deliverables_zip', 'task_templates', 'one_click_diagnostics', 'job_revisions',
-                   'setup_onboarding', 'scene_template_packages', 'template_derivation']
+                   'setup_onboarding', 'scene_template_packages', 'template_derivation',
+                   'incremental_model_stream', 'automatic_session_recovery']
 HERE = os.path.dirname(os.path.abspath(__file__))
 def _data_root():
     env = os.environ.get('BID_HOME')
@@ -2346,6 +2347,20 @@ OC_FINISH = OC_CLEAN_FINISH | OC_FAILED_FINISH
 OC_QUIET = 25      # 已 finish 且事件流再静这么多秒,才算整单收工
 OC_SLOW = float(os.environ.get('BIDDOG_OC_SLOW_SECONDS', 180))
 OC_STALL = float(os.environ.get('BIDDOG_OC_STALL_SECONDS', 8 * 60))
+OC_AUTO_RECOVER = max(0, min(3, int(os.environ.get('BIDDOG_OC_AUTO_RECOVER', 2))))
+
+AUTO_RECOVERY_PROMPT = (
+    '上一轮模型连接中断了，现在从已保存内容继续。先检查任务目录，已经写好的不要重写、'
+    '不要推翻；只补没完成的章节和表格，然后继续汇总、质检并导出最终 Word。')
+
+
+def _recoverable_turn_error(error):
+    text = str(error or '').lower()
+    return any(marker in text for marker in (
+        'stream idle timeout', 'no data received within configured window',
+        'connection reset', 'unexpected_eof', 'unexpected eof',
+        'stream disconnected before completion', 'eof occurred in violation',
+        'incompleteread', 'timed out', 'timeout'))
 
 def _server_fallback_safe(job):
     """Only replay through the stable CLI path before any bid body exists, once per job."""
@@ -2627,7 +2642,7 @@ def oc_run(job, prompt, allow_cli_fallback=True):
     if not ok:
         return fallback('opencode_probe_failed', why)
     update_runtime(job, execution_path='opencode_server', can_pause=True,
-                   pause_disabled_reason='', session_id=sid)
+                   pause_disabled_reason='', session_id=sid, auto_recovery_count=0)
     stop = threading.Event()
     beat = {'ts': time.time()}          # oc_watch 每收到一条事件就刷新
     threading.Thread(target=oc_watch, args=(job, sid, stop, beat), daemon=True).start()
@@ -2654,6 +2669,45 @@ def oc_run(job, prompt, allow_cli_fallback=True):
     step_started = time.time()
     job_sig = cli_activity_signature(job)
     slow_notified = False
+
+    auto_recoveries = 0
+    recovery_wait_cycles = 0
+
+    def auto_recover(reason, interrupt=False):
+        """Resume the same durable session after a transient slow-stream failure.
+
+        Replaying the original prompt or switching to CLI would redo expensive analysis and may
+        overwrite chapters. A bounded continuation prompt instead inspects durable artifacts and
+        resumes only the missing work.
+        """
+        nonlocal auto_recoveries, recovery_wait_cycles, slow_notified, job_sig
+        if auto_recoveries >= OC_AUTO_RECOVER: return False
+        if interrupt: oc_interrupt(sid)
+        sent_again, detail = oc_send(sid, AUTO_RECOVERY_PROMPT, delivery='queue',
+                                     model=pinned_model, job=job)
+        if not sent_again:
+            append_diagnostic(job, 'opencode_auto_recovery_dispatch_failed', detail,
+                              level='warning', session_id=sid, attempt=auto_recoveries + 1)
+            return False
+        auto_recoveries += 1
+        # OpenCode may briefly keep the failed assistant message at the top while admitting the
+        # continuation prompt. Give that durable queue five polling cycles before judging it again,
+        # otherwise one stale error can burn both retries in two seconds.
+        recovery_wait_cycles = 5
+        slow_notified = False
+        beat['ts'] = time.time()
+        job_sig = cli_activity_signature(job)
+        update_runtime(job, execution_path='opencode_server', can_pause=True,
+                       pause_disabled_reason='', session_id=sid,
+                       auto_recovery_count=auto_recoveries,
+                       last_auto_recovery_at=now())
+        append_diagnostic(job, 'opencode_auto_recovery', reason,
+                          session_id=sid, attempt=auto_recoveries)
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '模型连接刚才短暂中断，已自动从保存位置继续（第 %d/%d 次）。'
+                           '已落盘内容不会重写。' % (auto_recoveries, OC_AUTO_RECOVER)})
+        return True
+
     def drain_progress():
         nonlocal agent_line, current_step, step_started
         agent_line, accepted = drain_agent_events(job, agent_line)
@@ -2678,7 +2732,11 @@ def oc_run(job, prompt, allow_cli_fallback=True):
                 job_sig = current_sig
                 beat['ts'] = time.time()
             quiet = time.time() - beat['ts']
-            done, err = oc_turn(sid)
+            if recovery_wait_cycles:
+                recovery_wait_cycles -= 1
+                done, err = False, ''
+            else:
+                done, err = oc_turn(sid)
             # 用户可能在本轮请求等待期间点了停止。停止意图必须高于迟到的连接错误，
             # 否则会误报“已切换稳定通道继续”，甚至启动第二条执行路径。
             if _cancel_requested(base):
@@ -2686,6 +2744,8 @@ def oc_run(job, prompt, allow_cli_fallback=True):
                 result = OC_RUN_CANCELLED
                 break
             if err:
+                if _recoverable_turn_error(err) and auto_recover(err):
+                    continue
                 oc_interrupt(sid)
                 if allow_cli_fallback and _server_fallback_safe(job):
                     fallback('opencode_turn_interrupted', err)
@@ -2713,8 +2773,10 @@ def oc_run(job, prompt, allow_cli_fallback=True):
                            'text': '模型响应比平时慢，正在持续检查连接；已有内容会自动保留。'})
             # 事件流彻底没动静又没 finish:多半卡住了,当面说,别干等三小时
             if quiet >= OC_STALL:
-                oc_interrupt(sid)
                 detail = 'No meaningful session or file activity for %.1f seconds' % quiet
+                if auto_recover(detail, interrupt=True):
+                    continue
+                oc_interrupt(sid)
                 if allow_cli_fallback and _server_fallback_safe(job):
                     fallback('opencode_stalled', detail)
                     result = OC_RUN_FALLBACK
@@ -5830,6 +5892,21 @@ def _upstream(base, key, path, payload, timeout, verify):
             last = e
     raise last
 
+
+def _iter_upstream_chunks(response, streaming=False, size=8192):
+    """Yield bytes without buffering a slow SSE response to ``size`` bytes.
+
+    ``HTTPResponse.read(size)`` may wait for the whole requested amount. Models normally emit much
+    smaller SSE frames, so that behavior can hide real progress and trigger an idle timeout in the
+    caller. ``read1`` returns currently available bytes and keeps the model and UI heartbeat aligned.
+    """
+    reader = getattr(response, 'read1', None) if streaming else None
+    if not callable(reader): reader = response.read
+    while True:
+        chunk = reader(size)
+        if not chunk: return
+        yield chunk
+
 def _relay_stream(body, up):
     """一次 Codex 轮次:上游 chat 流 → Responses 事件流。
     任何一层失败都要发 response.failed,不能静默——静默失败是这个产品最贵的 bug 类型。"""
@@ -5942,9 +6019,7 @@ def _relay_passthrough(body, up):
         return
     tail = b''
     try:
-        while True:
-            chunk = r.read(8192)
-            if not chunk: break
+        for chunk in _iter_upstream_chunks(r, streaming=True):
             tail = (tail + chunk)[-65536:]
             yield chunk
     except Exception as e:
@@ -6010,9 +6085,10 @@ async def relay_chat(req: Request):
         sent = 0
         tail = b''
         reopened = 0
+        chunks = iter(_iter_upstream_chunks(r, streaming=bool(body.get('stream'))))
         while True:
             try:
-                c = r.read(8192)
+                c = next(chunks, b'')
                 if c:
                     sent += len(c); tail = (tail + c)[-256:]
                     yield c
@@ -6028,6 +6104,7 @@ async def relay_chat(req: Request):
                     try:
                         r = _upstream(up['base_url'], up['api_key'], '/chat/completions',
                                       body, 900, up['verify_ssl'])
+                        chunks = iter(_iter_upstream_chunks(r, streaming=bool(body.get('stream'))))
                         continue
                     except Exception as open_err:
                         e = open_err

@@ -259,6 +259,35 @@ def test_post_dispatch_error_is_calm_and_offers_real_resume_not_rerun(engine, jo
     assert "synthetic low-level" in diagnostic["detail"]
 
 
+def test_idle_stream_interruption_automatically_continues_same_session(engine, job, monkeypatch):
+    _prepare_running_oc(engine, monkeypatch)
+    turns = iter([
+        (True, "Error reading stream: stream idle timeout: no data received within configured window"),
+        (True, ""),
+    ])
+    sent_prompts = []
+
+    def send(_sid, text, **_kwargs):
+        sent_prompts.append(text)
+        return True, {}
+
+    monkeypatch.setattr(engine, "oc_send", send)
+    monkeypatch.setattr(engine, "oc_turn", lambda _sid: next(turns))
+    monkeypatch.setattr(engine, "OC_QUIET", 0)
+
+    result = engine.oc_run(str(job), "initial work", allow_cli_fallback=False)
+
+    assert result == engine.OC_RUN_COMPLETED
+    assert sent_prompts[0] == "initial work"
+    assert "已经写好的不要重写" in sent_prompts[1]
+    runtime = engine.read_json(str(job / "runtime.json"), {})
+    assert runtime["auto_recovery_count"] == 1
+    assert runtime["execution_path"] == "opencode_server"
+    texts = [str(event.get("text") or "") for event in events(job)]
+    assert any("已自动从保存位置继续" in text for text in texts)
+    assert not any("已安全停下" in text for text in texts)
+
+
 def test_outer_post_dispatch_exception_keeps_technical_detail_only_in_diagnostics(engine, job, monkeypatch):
     meta = engine.read_json(str(job / "任务.json"), {})
     meta["oc_session"] = "session-1"

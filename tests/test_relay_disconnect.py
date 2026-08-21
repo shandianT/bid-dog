@@ -16,6 +16,29 @@ def _chat_delta(text):
     ).replace("'", '"').encode("utf-8")
 
 
+def test_streaming_relay_flushes_each_available_upstream_chunk_without_waiting_for_8kb(engine):
+    """A slow model may emit tiny SSE frames; the relay must forward them immediately."""
+    frames = [b"data: first\n\n", b"data: second\n\n", b""]
+
+    class SlowStreamingResponse:
+        def __init__(self):
+            self.read_calls = []
+
+        def read1(self, size):
+            self.read_calls.append(("read1", size))
+            return frames.pop(0)
+
+        def read(self, size=-1):
+            self.read_calls.append(("read", size))
+            raise AssertionError("streaming relay buffered with read() instead of flushing read1()")
+
+    response = SlowStreamingResponse()
+    chunks = list(engine._iter_upstream_chunks(response, streaming=True))
+
+    assert chunks == [b"data: first\n\n", b"data: second\n\n"]
+    assert response.read_calls == [("read1", 8192), ("read1", 8192), ("read1", 8192)]
+
+
 @pytest.mark.parametrize("model", ["senseaudio-s2", "deepseek-v4-flash"])
 def test_responses_bridge_never_turns_partial_text_disconnect_into_success(engine, monkeypatch, model):
     response = ScriptedResponse(
