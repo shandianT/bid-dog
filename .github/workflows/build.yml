@@ -199,7 +199,7 @@ jobs:
           # 版本与引擎 OPENCODE_PIN 保持一致,并**钉死**不跟随 latest ——
           # 上游发版极频繁(npm 上万个版本),排队/并发编排正是 issue 最密集的区域,
           # 跟随 latest 等于把客户机当测试环境。
-          OPENCODE_PIN=1.18.13
+          OPENCODE_PIN=1.18.18
           TRIPLE=$(rustc -Vv | sed -n 's/^host: //p')
           # ⚠ x64 一律打 **baseline** 变体:打包时不可能知道客户 CPU 支不支持 AVX2,
           # 而标准版在老 CPU 上是**直接崩**,报错完全看不出是指令集的问题。
@@ -220,6 +220,36 @@ jobs:
           rm -rf oc.tgz oc_x
           "$OUT" --version || { echo "内置外壳跑不起来,不要发这个包"; exit 1; }
           ls -la src-tauri/binaries/
+      - name: smoke OpenCode server contract
+        shell: bash
+        working-directory: app
+        run: |
+          TRIPLE=$(rustc -Vv | sed -n 's/^host: //p')
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            OUT="src-tauri/binaries/opencode-cli-$TRIPLE.exe"
+          else
+            OUT="src-tauri/binaries/opencode-cli-$TRIPLE"
+          fi
+          port=$(python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+          export OPENCODE_SERVER_PASSWORD=build-smoke
+          export OPENCODE_CONFIG_CONTENT='{}'
+          "$OUT" serve --hostname 127.0.0.1 --port "$port" >opencode-contract.log 2>&1 &
+          server_pid=$!
+          cleanup() { kill "$server_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          health=''
+          for _ in $(seq 1 30); do
+            health=$(curl -fsS --user opencode:build-smoke "http://127.0.0.1:$port/global/health" 2>/dev/null || true)
+            [ -n "$health" ] && break
+            sleep 1
+          done
+          [ -n "$health" ] || { cat opencode-contract.log; exit 1; }
+          printf '%s' "$health" | python -c 'import json,sys; h=json.load(sys.stdin); assert h["healthy"] is True and h["version"] == "1.18.18"'
+          session=$(curl -fsS --user opencode:build-smoke -H 'Content-Type: application/json' \
+            -d '{"title":"build-smoke"}' "http://127.0.0.1:$port/session")
+          printf '%s' "$session" | python -c 'import json,sys; s=json.load(sys.stdin); assert str(s["id"]).startswith("ses_")'
+          status=$(curl -fsS --user opencode:build-smoke "http://127.0.0.1:$port/session/status")
+          printf '%s' "$status" | python -c 'import json,sys; assert isinstance(json.load(sys.stdin), dict)'
       - name: install deps & icons
         working-directory: app
         run: |
@@ -274,7 +304,7 @@ jobs:
           app_path=$(find "$mount_dir" -maxdepth 1 -name '*.app' -print -quit)
           codesign --verify --deep --strict --verbose=2 "$app_path"
           "$app_path/Contents/MacOS/opencode-cli" --version
-          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.19.8"
+          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.19.9"
           if [ "$MAC_SIGNING_READY" = "true" ]; then
             spctl --assess --type execute --verbose=2 "$app_path"
             xcrun stapler validate "$app_path"
@@ -303,7 +333,7 @@ jobs:
           done
           test -n "$health" || { cat "$engine_log"; exit 1; }
           printf '%s' "$health" | python -c \
-            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.19.8"'
+            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.19.9"'
           word_job="$engine_data/jobs/word-smoke"
           mkdir -p "$word_job"
           printf '%s\n' '{"name":"安装包 Word 冒烟","tender":"招标文件.docx"}' >"$word_job/任务.json"
@@ -346,8 +376,8 @@ jobs:
             throw "installed payload is incomplete: bid-engine=$($engines.Count), opencode=$($opencodes.Count)"
           }
           $ocVersion = (& $opencodes[0].FullName --version 2>&1 | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $ocVersion -notmatch "1\.18\.13") {
-            throw "installed baseline OpenCode did not run as 1.18.13: $ocVersion"
+          if ($LASTEXITCODE -ne 0 -or $ocVersion -notmatch "1\.18\.18") {
+            throw "installed baseline OpenCode did not run as 1.18.18: $ocVersion"
           }
 
           $engineData = Join-Path $env:RUNNER_TEMP "bid-engine-windows-smoke"
@@ -375,7 +405,7 @@ jobs:
               Get-Content $engineOut, $engineErr -ErrorAction SilentlyContinue
               throw "installed bid-engine.exe did not become healthy"
             }
-            if ($health.version -ne "0.19.8") {
+            if ($health.version -ne "0.19.9") {
               throw "installed engine version mismatch: $($health.version)"
             }
             $wordJob = Join-Path $engineData "jobs\word-smoke"
@@ -428,9 +458,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="desktop-v0.19.8"
+          tag="desktop-v0.19.9"
           release_rows=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-            --jq '.[] | select(.tag_name == "desktop-v0.19.8") | [.id, .draft, .target_commitish] | @tsv')
+            --jq '.[] | select(.tag_name == "desktop-v0.19.9") | [.id, .draft, .target_commitish] | @tsv')
           release_count=$(printf '%s\n' "$release_rows" | sed '/^$/d' | wc -l | tr -d ' ')
           if [ "$release_count" -gt 1 ]; then
             echo "Multiple releases exist for $tag; refusing an ambiguous update."
@@ -443,7 +473,7 @@ jobs:
               exit 1
             fi
             if [ "$release_target" != "$GITHUB_SHA" ]; then
-              echo "Draft release desktop-v0.19.8 belongs to another commit; refusing to mix assets."
+              echo "Draft release desktop-v0.19.9 belongs to another commit; refusing to mix assets."
               exit 1
             fi
             echo "Found an unfinished draft for the same commit; resuming its asset upload safely."
@@ -475,16 +505,16 @@ jobs:
             name="$(basename "$f" | sed -e 's/中标狗/bid-dog/g' -e 's/标书助手/bid-dog/g')"
             mv "$f" "out/$name"
           done
-          test -f out/bid-dog_0.19.8_aarch64.dmg
-          test -f out/bid-dog_0.19.8_x64-setup.exe
+          test -f out/bid-dog_0.19.9_aarch64.dmg
+          test -f out/bid-dog_0.19.9_x64-setup.exe
           test "$(find out -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
-          (cd out && sha256sum bid-dog_0.19.8_aarch64.dmg bid-dog_0.19.8_x64-setup.exe > SHA256SUMS)
+          (cd out && sha256sum bid-dog_0.19.9_aarch64.dmg bid-dog_0.19.9_x64-setup.exe > SHA256SUMS)
           ls -la out
       - id: stage_release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: desktop-v0.19.8
-          name: 中标狗桌面版 v0.19.8
+          tag_name: desktop-v0.19.9
+          name: 中标狗桌面版 v0.19.9
           target_commitish: ${{ github.sha }}
           # Only a same-commit draft reaches this step; this repairs an interrupted partial upload.
           overwrite_files: true
@@ -497,8 +527,8 @@ jobs:
             中标狗桌面应用安装包（自动构建；未配置商业证书时 macOS 为 ad-hoc、Windows 为未签名）。作者:FDE-家涛。
             官网(含在线体验、成品 Word 页面):https://bid-dog.vercel.app
 
-            - macOS Apple Silicon(M 系列): `bid-dog_0.19.8_aarch64.dmg`
-            - Windows: `bid-dog_0.19.8_x64-setup.exe`
+            - macOS Apple Silicon(M 系列): `bid-dog_0.19.9_aarch64.dmg`
+            - Windows: `bid-dog_0.19.9_x64-setup.exe`
             - 校验文件: `SHA256SUMS`
             - 需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可。
 
@@ -506,7 +536,9 @@ jobs:
             `xattr -dr com.apple.quarantine "/Applications/中标狗.app"` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。每个新下载版本都可能再次需要放行。详见 README。
             Windows SmartScreen 提示时点「更多信息 → 仍要运行」。
 
-            v0.19.8（完整说明见仓库更新日志）:
+            v0.19.9（完整说明见仓库更新日志）:
+            - 内置 OpenCode 执行外壳从 1.18.13 升级到 1.18.18，纳入上游流中错误保留、瞬时网络重试和重试风暴限制修复。
+            - Windows 继续内置 x64 baseline 变体，并在最终安装目录执行 `opencode-cli --version` 验证 1.18.18。
             - 慢模型的小段 SSE 响应立即透传，不再等待本地缓冲攒满 8KB。
             - 流空闲超时、连接重置等瞬时断流会在同一会话内自动续做两次。
             - 自动续做先检查已落盘章节，只补缺件，不从头覆盖已有内容。
@@ -515,8 +547,8 @@ jobs:
 
             完整历史版本说明见 CHANGELOG.md。
           files: |
-            out/bid-dog_0.19.8_aarch64.dmg
-            out/bid-dog_0.19.8_x64-setup.exe
+            out/bid-dog_0.19.9_aarch64.dmg
+            out/bid-dog_0.19.9_x64-setup.exe
             out/SHA256SUMS
       - name: verify staged release assets
         shell: bash
@@ -539,8 +571,8 @@ jobs:
           if release.get("draft") is not True:
               raise SystemExit("release must remain a draft until all assets are verified")
           expected = {
-              "bid-dog_0.19.8_aarch64.dmg",
-              "bid-dog_0.19.8_x64-setup.exe",
+              "bid-dog_0.19.9_aarch64.dmg",
+              "bid-dog_0.19.9_x64-setup.exe",
               "SHA256SUMS",
           }
           assets = {item.get("name"): item for item in release.get("assets", [])}
@@ -563,6 +595,6 @@ jobs:
           release = json.load(open(sys.argv[1], encoding="utf-8"))
           if release.get("draft") is not False:
               raise SystemExit("release was not published")
-          if release.get("tag_name") != "desktop-v0.19.8":
+          if release.get("tag_name") != "desktop-v0.19.9":
               raise SystemExit("published release tag mismatch")
           PY

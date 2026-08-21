@@ -32,7 +32,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.19.8'
+ENGINE_VERSION = '0.19.9'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -1972,7 +1972,7 @@ def _append_skill_event(job, record):
         pass
 
 def _read_output_covers_file(state, path):
-    """OpenCode 1.18.13 read 是按行返回；只有从首行连续覆盖到末行才算完整读取。"""
+    """OpenCode 1.18.13–1.18.18 read 是按行返回；只有从首行连续覆盖到末行才算完整读取。"""
     tool_input = state.get('input') or {}
     try:
         offset = int(tool_input.get('offset', 1))
@@ -2001,7 +2001,7 @@ def _observe_oc_skill_event(job, event, sid):
     """从 OpenCode SSE 观测精确的完整 read；原始路径与内容只在进程内短暂关联。"""
     if not isinstance(event, dict): return False
     event_type = str(event.get('type') or '')
-    # 内置 OpenCode 1.18.13 的单会话 event 端点回放 durable `session.next.*`，
+    # 内置 OpenCode 1.18.13–1.18.18 的单会话 event 端点回放 durable `session.next.*`，
     # called 持有 path，success 才持有完整 content，必须用 sessionID + callID 关联。
     if event_type in ('session.next.tool.called', 'session.next.tool.success',
                       'session.next.tool.failed'):
@@ -2063,7 +2063,7 @@ def _observe_oc_skill_event(job, event, sid):
         })
         return True
 
-    # 兼容标准 v2 `message.part.updated` 事件；当前 1.18.13 的 durable 端点不走此形状。
+    # 兼容标准 v2 `message.part.updated` 事件；当前 1.18.13–1.18.18 的 durable 端点不走此形状。
     if not event_type.endswith('message.part.updated'): return False
     properties = event.get('properties') or {}
     part = properties.get('part') or {}
@@ -2172,7 +2172,7 @@ def skill_evidence(job):
 
 # ==================== OpenCode server 模式 ====================
 # 以前是 `opencode run --auto`:喂一条 prompt、等进程死,中间什么都看不见、停不掉、崩了从头来。
-# server 模式把这三件事都解开了。以下端点名与请求体全部是从 1.18.13 的 /doc 实拉后跑通的,
+# server 模式把这三件事都解开了。以下端点名与请求体全部是从 1.18.13 的 /doc 实拉后跑通，并在 1.18.18 复验的,
 # 调研资料里的 `/session/{id}/prompt_async` 在这个版本根本不存在,照着写会全错;
 # `/session/{id}/abort` 倒是有(无 /api 前缀),但我们用 `/api/session/{id}/interrupt`。
 OC = {'proc': None, 'port': 0, 'base': '', 'pw': '', 'fingerprint': ''}     # 常驻 server 句柄
@@ -2371,7 +2371,7 @@ def _server_fallback_safe(job):
 def oc_turn(sid):
     """这一轮跑完了没有,返回 (done, 出错说明)。
 
-    **不要用 GET /session/status 判忙** —— 1.18.13 上它恒返回 `{}`。这不是猜:
+    **不要用 GET /session/status 判忙** —— 1.18.13 与 1.18.18 上它都恒返回 `{}`。这不是猜:
     真机连续 150 秒每 10 秒取一次,15 次全是空的。第一版 oc_run 就栽在这儿:
     busy 恒为 False,8 秒空转直接宣布「跑完了、任务目录里没有生成任何交付物」,
     而那会儿 agent 正在读素材、转招标文件,后面还有十来步要走。
@@ -2450,7 +2450,7 @@ def oc_session(job, directory):
 def oc_send(sid, text, delivery='queue', model=None, job=None):
     """给会话投一条消息。**这个接口是异步的:0 秒返回 200,不等跑完。**
 
-    delivery 是 1.18.13 的原生字段:
+    delivery 是 1.18.13–1.18.18 的原生字段:
       queue = 排队,等当前这轮跑完再处理(实测第一条完整跑完、第二条随后被回应,两条都不丢)
       steer = 立刻引导当前这轮
     产品负责人定的「想到什么先记下来、下个环节带上」就是 queue。"""
@@ -6146,7 +6146,7 @@ def relay_models():
 # ---------- 一键安装执行外壳(Codex CLI):没内置、没装 Node 的机器,点一下按钮就好 ----------
 # 版本钉死在我们测过兼容的那个:S2 中转是按它的 Responses 行为实测的,随手升级可能翻车
 CODEX_PIN = os.environ.get('BID_CODEX_VERSION', '0.146.0')
-OPENCODE_PIN = os.environ.get('BID_OPENCODE_VERSION', '1.18.13')   # 与直连实测配套的版本
+OPENCODE_PIN = os.environ.get('BID_OPENCODE_VERSION', '1.18.18')   # 与直连实测配套的版本
 # opencode 平台包是普通 npm 包名(非别名):tarball = {reg}/{pkg}/-/{pkg}-{ver}.tgz,包内 package/bin/opencode[.exe]
 OPENCODE_PLAT = {
     ('darwin', 'arm64'):  'opencode-darwin-arm64',

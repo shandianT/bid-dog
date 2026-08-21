@@ -47,7 +47,7 @@ npm run build -- --bundles nsis
 正式出包前的 CI 闸门当前会跑离线 Python 230 项、前端 Node 逻辑 44 项、官网契约 1 项和 Chromium 真实点击 10 项，合计 285 项；任一项失败都不进入 dmg/exe 构建。桌面 Rust 项数以当次 `cargo test` 输出为准。这些回归只验证发布链路与既定行为，不等同于三份独立真实招标文件的严格出件验收。
 
 产物位置(app/src-tauri/target/release/bundle/):
-- macOS:dmg/中标狗_0.19.8_aarch64.dmg(在 Mac 上构建)
+- macOS:dmg/中标狗_0.19.9_aarch64.dmg(在 Mac 上构建)
 - Windows:nsis/*-setup.exe(在 Windows 上构建)
 
 注意:Tauri 不支持跨平台交叉编译——Mac 包在 Mac 上打,Windows 包在 Windows 上打(或用 GitHub Actions 双平台流水线,tauri-action 官方模板即可)。
@@ -67,14 +67,14 @@ npm run dev   # 带热重载起桌面窗口
 - CI 在每个平台先跑 `pyinstaller -F -n bid-engine server/engine_v1.py --collect-all uvicorn --collect-all docx`，把 `python-docx` 的 XML 模板资源一起打入 sidecar，再按 Rust 目标三元组命名放入 `app/src-tauri/binaries/`；
 - `tauri.conf.json` 的 `bundle.externalBin` 声明 `binaries/bid-engine`;
 - `main.rs` 在 `127.0.0.1:18901` 拉起内置引擎：同版本直接复用，经身份校验的旧版先安全收尾再自动接管，未知进程绝不关闭；退出时请求已校验引擎安全收尾，引擎日志写到 `~/Documents/中标狗/engine.log`；
-- Tauri WebView 使用 incognito 会话，并以 `index.html?desktop=0.19.8-18901` 作为版本入口；前端启动时清除旧 `localStorage.bid_api`，避免覆盖安装继续执行历史页面缓存或连回旧引擎；
+- Tauri WebView 使用 incognito 会话，并以 `index.html?desktop=0.19.9-18901` 作为版本入口；前端启动时清除旧 `localStorage.bid_api`，避免覆盖安装继续执行历史页面缓存或连回旧引擎；
 - 首次启动会把 `~/Documents/标书助手` 中的存量数据迁移到 `~/Documents/中标狗`，Rust 壳显式设置 `BID_HOME`，保证 sidecar、任务、素材和日志始终落在同一数据目录；
 - 前端启动先等内置引擎就绪（约 8 秒）；等不到会明确显示“本地引擎未启动、无法生成真实文件”，并提供诊断入口，之后探测到引擎会自动切回真实模式。
 - macOS DMG 与 Windows NSIS 的发布校验不仅检查健康接口，还会从最终安装载荷创建正文并导出一份真实 `.docx`；缺少 `docx/templates/default-header.xml` 等运行资源时构建直接失败，不允许上传安装包。
 本机手动构建同理：必须先按上面步骤把 `bid-engine-<host triple>[.exe]` 与 `opencode-cli-<host triple>[.exe]` 都放进 `app/src-tauri/binaries/`，再运行 `npm run build`；缺任一 `externalBin` 都会直接构建失败，不能产生一个看似完整的空壳安装包。
 
 **v0.18.0 起 externalBin 默认声明 `binaries/opencode-cli`（S2 引擎执行外壳）**：CI 会从 npm registry 下载
-OpenCode 1.18.13 对应平台包，抽出 `package/bin/opencode[.exe]`，重命名为
+OpenCode 1.18.18 对应平台包，抽出 `package/bin/opencode[.exe]`，重命名为
 `opencode-cli-<host triple>[.exe]` 放进 `binaries/`（见 `build.yml` 的「bundle OpenCode CLI」步骤）。
 Windows x64 固定使用 `opencode-windows-x64-baseline`，兼容不支持 AVX2 的旧 CPU；macOS 使用
 `opencode-darwin-arm64`。CI 会在打包前运行 `--version`，外壳不能执行就立即失败，不发布安装包。

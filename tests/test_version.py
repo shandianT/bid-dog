@@ -6,7 +6,7 @@ from conftest import ROOT
 
 def test_release_version_is_consistent(engine):
     version = engine.ENGINE_VERSION
-    assert version == "0.19.8"
+    assert version == "0.19.9"
     assert json.loads((ROOT / "app" / "package.json").read_text())["version"] == version
     assert json.loads((ROOT / "app" / "package-lock.json").read_text())["version"] == version
     assert json.loads((ROOT / "app" / "src-tauri" / "tauri.conf.json").read_text())["version"] == version
@@ -44,6 +44,20 @@ def test_windows_installer_has_a_real_packaged_sidecar_smoke_gate(engine):
     assert 'version -ne "%s"' % engine.ENGINE_VERSION in workflow
 
 
+def test_bundled_opencode_is_pinned_and_verified_at_1_18_18(engine):
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text()
+    build_guide = (ROOT / "BUILD.md").read_text()
+
+    assert engine.OPENCODE_PIN == "1.18.18"
+    assert "OPENCODE_PIN=1.18.18" in workflow
+    assert "installed baseline OpenCode did not run as 1.18.18" in workflow
+    assert "OpenCode 1.18.18" in build_guide
+    assert "smoke OpenCode server contract" in workflow
+    assert '"$OUT" serve --hostname 127.0.0.1' in workflow
+    assert "/global/health" in workflow
+    assert "/session/status" in workflow
+
+
 def test_release_assets_are_explicit_and_published_releases_are_immutable(engine):
     version = engine.ENGINE_VERSION
     workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text()
@@ -56,7 +70,7 @@ def test_release_assets_are_explicit_and_published_releases_are_immutable(engine
     assert "releases are immutable" in workflow
     assert "same commit" in workflow
     assert 'releases?per_page=100' in workflow
-    assert "Draft release desktop-v0.19.8 belongs to another commit" in workflow
+    assert "Draft release desktop-v0.19.9 belongs to another commit" in workflow
     assert "verify staged release assets" in workflow
     # A newly-created draft tag is briefly not discoverable through the
     # /releases/tags/{tag} endpoint. Verify and publish by the action's stable
