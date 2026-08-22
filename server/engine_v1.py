@@ -35,7 +35,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.20.0'
+ENGINE_VERSION = '0.20.1'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -48,7 +48,8 @@ ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest'
                    'deliverables_zip', 'task_templates', 'one_click_diagnostics', 'job_revisions',
                    'setup_onboarding', 'scene_template_packages', 'template_derivation',
                    'incremental_model_stream', 'automatic_session_recovery',
-                   'checkpoint_generation_pipeline', 'local_tender_parse']
+                   'checkpoint_generation_pipeline', 'local_tender_parse',
+                   'bootstrap_health']
 HERE = os.path.dirname(os.path.abspath(__file__))
 def _data_root():
     env = os.environ.get('BID_HOME')
@@ -1307,7 +1308,7 @@ def delivery_summary(job, quality=None):
     word_format = (_word_format_status(job) if format_required else
                    {'status': 'not_required', 'present': False, 'report': ''})
     components = [word['present'], toc['status'] == 'pass', deviations['status'] == 'pass',
-                  quality.get('status') == 'pass',
+                  quality.get('status') in ('pass', 'warning'),
                   (not format_required or word_format['status'] == 'pass')]
     ready = all(components)
     if (not word['present'] or toc['status'] == 'fail' or deviations['status'] == 'fail'
@@ -2420,9 +2421,9 @@ def skill_evidence(job):
 
 # ==================== OpenCode server 模式 ====================
 # 以前是 `opencode run --auto`:喂一条 prompt、等进程死,中间什么都看不见、停不掉、崩了从头来。
-# server 模式把这三件事都解开了。以下端点名与请求体全部是从 1.18.13 的 /doc 实拉后跑通，并在 1.18.18 复验的,
-# 调研资料里的 `/session/{id}/prompt_async` 在这个版本根本不存在,照着写会全错;
-# `/session/{id}/abort` 倒是有(无 /api 前缀),但我们用 `/api/session/{id}/interrupt`。
+# server 模式把这三件事都解开了。以下端点名与请求体全部从固定版本的 /doc
+# 实拉并跑通。1.18.18 的正式接口（/session）与兼容接口（/api/session）
+# 不能混用：兼容创建接口会静默忽略 directory，导致节点在数据根目录里执行。
 OC = {'proc': None, 'port': 0, 'base': '', 'pw': '', 'fingerprint': ''}     # 常驻 server 句柄
 OC_LOCK = threading.Lock()
 PIPELINE_SESSIONS = {}  # job id -> {OpenCode short-session ids}; stop/delete must interrupt all
@@ -2462,6 +2463,24 @@ def oc_api(path, data=None, timeout=60, method=None):
 def oc_model(conf=None):
     up = s2_conf(conf or read_json(conf_path(), {}))
     return {'providerID': 'biddog-s2', 'modelID': up['model']}
+
+
+def oc_create_session(directory, title):
+    """Create a 1.18.18 session whose working directory is provably isolated."""
+    expected = os.path.abspath(str(directory or DATA))
+    path = '/session?directory=%s' % urllib.parse.quote(expected, safe='')
+    status, body = oc_api(path, {'title': str(title or '')[:180]}, timeout=30)
+    if status not in (200, 201) or not isinstance(body, dict) or not body.get('id'):
+        return ''
+    actual = str(body.get('directory') or '')
+    # OpenCode canonicalizes platform aliases (macOS: /tmp -> /private/tmp;
+    # Windows can also normalize drive-letter case). Compare filesystem identity,
+    # while still sending the caller's absolute directory to the formal API.
+    expected_identity = os.path.normcase(os.path.realpath(expected))
+    actual_identity = os.path.normcase(os.path.realpath(os.path.abspath(actual))) if actual else ''
+    if actual_identity and actual_identity != expected_identity:
+        return ''
+    return str(body['id'])
 
 def oc_config_fingerprint(conf=None):
     """常驻外壳/探活缓存的配置身份；只存 Key 摘要，不存秘密。"""
@@ -2557,11 +2576,11 @@ def oc_serve(eng=None):
 
 def oc_probe():
     """真调一次模型确认整条链路通(healthy 骗不了这一步)。返回 (ok, 说明)。"""
-    st, ses = oc_api('/api/session', {'title': '连通性探活'}, timeout=30)
-    sid = (ses or {}).get('id') if isinstance(ses, dict) else None
-    if not sid: return False, '建不出会话(HTTP %s)' % st
-    pst, _reply = oc_api('/api/session/%s/prompt' % sid,
-                         {'model': oc_model(), 'prompt': {'text': '只回两个字:可用'}}, timeout=90)
+    sid = oc_create_session(DATA, '连通性探活')
+    if not sid: return False, '建不出目录隔离会话'
+    pst, _reply = oc_api('/session/%s/prompt_async' % sid,
+                         {'model': oc_model(),
+                          'parts': [{'type': 'text', 'text': '只回两个字:可用'}]}, timeout=90)
     if pst not in (200, 201, 202, 204):
         return False, '执行外壳探活请求失败(HTTP %s)' % pst
     # 必须等它真的答完再看有没有报错。以前这里用 oc_busy 判,而 oc_busy 恒为 False,
@@ -2574,17 +2593,18 @@ def oc_probe():
         if turn_error: return False, turn_error
         if done: break
     if not done: return False, '执行外壳探活 90 秒没有完整回复'
-    st, ms = oc_api('/api/session/%s/message' % sid, timeout=30)
-    if st != 200 or not isinstance(ms, list) or not ms:
-        return False, '执行外壳探活没有拿到有效回复(HTTP %s)' % st
-    for m in (ms or []) if isinstance(ms, list) else []:
-        err = (m.get('error') or {}).get('message') or ''
+    ms, order = oc_messages(sid)
+    if not ms:
+        return False, '执行外壳探活没有拿到有效回复'
+    for m in ms:
+        info = oc_message_info(m)
+        err = oc_message_error(info)
         if err:
             if '401' in err or 'incorrect API key' in err:
                 return False, 'Key 没送到执行外壳或 Key 无效(原文:%s)' % err[:120]
             return False, err[:160]
-    top = ms[0]
-    if top.get('type') != 'assistant' or top.get('finish') not in OC_CLEAN_FINISH:
+    top = oc_latest_assistant(ms, order)
+    if not top or top.get('finish') not in OC_CLEAN_FINISH:
         return False, '执行外壳探活没有干净收尾'
     return True, ''
 
@@ -2618,6 +2638,45 @@ def _server_fallback_safe(job):
     if int(runtime.get('fallback_count') or 0) >= 1: return False
     return not _body_mds(job) and not _body_docxs(job)
 
+
+def oc_message_info(message):
+    if isinstance(message, dict) and isinstance(message.get('info'), dict):
+        return message['info']
+    return message if isinstance(message, dict) else {}
+
+
+def oc_message_error(info):
+    error = info.get('error') if isinstance(info, dict) else None
+    if not isinstance(error, dict): return str(error or '')
+    if error.get('message'): return str(error['message'])
+    data = error.get('data') if isinstance(error.get('data'), dict) else {}
+    return str(data.get('message') or '')
+
+
+def oc_messages(sid):
+    """Return message rows plus ordering for the pinned OpenCode contract.
+
+    1.18.18's standard endpoint returns chronological ``{info, parts}`` rows.
+    The legacy compatibility endpoint may still be present and returns newest
+    first.  Empty standard results are not proof of an empty session, so fall
+    back before declaring the turn unfinished.
+    """
+    st, rows = oc_api('/session/%s/message' % sid, timeout=30)
+    if st == 200 and isinstance(rows, list) and rows:
+        order = 'chronological' if any(isinstance(row, dict) and isinstance(row.get('info'), dict)
+                                       for row in rows) else 'legacy'
+        return rows, order
+    st, rows = oc_api('/api/session/%s/message' % sid, timeout=30)
+    return (rows, 'legacy') if st == 200 and isinstance(rows, list) else ([], 'legacy')
+
+
+def oc_latest_assistant(rows, order):
+    infos = [oc_message_info(row) for row in rows]
+    assistants = [info for info in infos
+                  if (info.get('role') or info.get('type')) == 'assistant']
+    if not assistants: return {}
+    return assistants[-1] if order == 'chronological' else assistants[0]
+
 def oc_turn(sid):
     """这一轮跑完了没有,返回 (done, 出错说明)。
 
@@ -2627,17 +2686,17 @@ def oc_turn(sid):
     而那会儿 agent 正在读素材、转招标文件,后面还有十来步要走。
     schema 里那个 session.idle 事件也指望不上,这版**一次都不发**(实测整轮 0 次)。
 
-    真正能判的是消息列表:数组按时间**倒序**,[0] 就是最新一条 ——
+    真正能判的是消息列表；适配层会兼容新版正序与旧版倒序返回 ——
         finish=None          还在生成
         finish='tool-calls'  这段说完了,后面还要调工具,没完
         finish='stop'        这一轮真收工了
     """
-    st, ms = oc_api('/api/session/%s/message' % sid, timeout=30)
-    if st != 200 or not isinstance(ms, list) or not ms:
+    ms, order = oc_messages(sid)
+    if not ms:
         return False, ''          # 取不到就当没跑完:宁可多等,也不能误判成「没产出」
-    top = ms[0]
-    if top.get('type') != 'assistant': return False, ''
-    err = ((top.get('error') or {}).get('message') or '') if isinstance(top.get('error'), dict) else ''
+    top = oc_latest_assistant(ms, order)
+    if not top: return False, ''
+    err = oc_message_error(top)
     if err: return True, str(err)[:300]
     finish = top.get('finish')
     if finish in OC_CLEAN_FINISH: return True, ''
@@ -2654,8 +2713,8 @@ def collect_oc_usage(job, sid):
     makes this idempotent across resume/reconnect instead of double-counting calls.
     """
     if not sid or not os.path.isdir(job): return _job_usage(job)
-    st, messages = oc_api('/api/session/%s/message' % sid, timeout=30)
-    if st != 200 or not isinstance(messages, list): return _job_usage(job)
+    messages, _order = oc_messages(sid)
+    if not messages: return _job_usage(job)
     calls = input_tokens = output_tokens = 0
     estimated_cost = 0.0
     has_cost = False
@@ -2689,9 +2748,7 @@ def oc_session(job, directory):
     if sid:
         st, s = oc_api('/api/session/%s' % sid, timeout=20)
         if st == 200 and isinstance(s, dict) and s.get('id'): return sid
-    st, s = oc_api('/api/session?directory=%s' % urllib.parse.quote(directory),
-                   {'title': meta.get('name') or os.path.basename(job)}, timeout=30)
-    sid = (s or {}).get('id') if isinstance(s, dict) else None
+    sid = oc_create_session(directory, meta.get('name') or os.path.basename(job))
     if sid:
         meta['oc_session'] = sid
         write_json(os.path.join(job, '任务.json'), meta)
@@ -2700,12 +2757,22 @@ def oc_session(job, directory):
 def oc_send(sid, text, delivery='queue', model=None, job=None):
     """给会话投一条消息。**这个接口是异步的:0 秒返回 200,不等跑完。**
 
-    delivery 是 1.18.13–1.18.18 的原生字段:
+    无显式 model 时使用兼容接口，delivery 控制运行中补充要求:
       queue = 排队,等当前这轮跑完再处理(实测第一条完整跑完、第二条随后被回应,两条都不丢)
       steer = 立刻引导当前这轮
     产品负责人定的「想到什么先记下来、下个环节带上」就是 queue。"""
-    st, b = oc_api('/api/session/%s/prompt' % sid,
-                   {'model': model or oc_model(), 'delivery': delivery, 'prompt': {'text': text}}, timeout=60)
+    if model:
+        # 1.18.18 的正式异步端点才接受 model + parts。旧
+        # /api/.../prompt 的 schema 只收 prompt/delivery，把 model 静默丢掉后
+        # 会回落到 OpenCode 默认模型，最终误报 Missing API key。
+        path = '/session/%s/prompt_async' % sid
+        payload = {'model': model, 'parts': [{'type': 'text', 'text': text}]}
+    else:
+        # 运行中补充要求继承该会话已固定的模型，并保留
+        # 兼容端点的 queue/steer 交付语义。
+        path = '/api/session/%s/prompt' % sid
+        payload = {'delivery': delivery, 'prompt': {'text': text}}
+    st, b = oc_api(path, payload, timeout=60)
     ok = st in (200, 201, 202, 204)
     if ok and job: _mark_skill_accepted(job, 'opencode')
     return ok, b
@@ -3187,90 +3254,618 @@ def _pipeline_copy_inputs(job, node, target):
             shutil.copy2(source, destination)
 
 
-def _pipeline_model_runner(job, node, prompt, model):
-    """Execute one bounded node in a fresh OpenCode session.
+def _pipeline_model_file_text(path, budget):
+    """Return bounded text for a model node; binary office files are parsed locally."""
+    try:
+        suffix = os.path.splitext(path)[1].lower()
+        if suffix in ('.md', '.txt', '.json', '.csv'):
+            return open(path, encoding='utf-8', errors='ignore').read(max(0, budget))
+        if suffix in ('.docx', '.pdf'):
+            blob = open(path, 'rb').read(MAX_TEMPLATE_UPLOAD_BYTES + 1)
+            if len(blob) > MAX_TEMPLATE_UPLOAD_BYTES: return ''
+            _headings, _tables, text = extract_document_structure(os.path.basename(path), blob)
+            return str(text or '')[:max(0, budget)]
+    except Exception:
+        return ''
+    return ''
 
-    A stream failure raises a retryable node error.  It never replays the full
-    tender task and never switches the whole job to a second CLI execution.
+
+def _pipeline_json_object(text):
+    raw = str(text or '').strip()
+    candidates = []
+    try:
+        value = json.loads(raw)
+        if isinstance(value, dict): candidates.append(value)
+    except (TypeError, ValueError):
+        pass
+    for match in re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.I | re.S):
+        try:
+            value = json.loads(match.group(1))
+            if isinstance(value, dict): candidates.append(value)
+        except (TypeError, ValueError):
+            pass
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r'\{', raw):
+        try:
+            value, _end = decoder.raw_decode(raw[match.start():])
+            if isinstance(value, dict): candidates.append(value)
+        except (TypeError, ValueError):
+            continue
+    if not candidates: return None
+    expected = {'files', 'composition', 'scoring_points', 'risks', 'chapter_guidance'}
+    return max(candidates, key=lambda value: (len(expected & set(value)), len(value)))
+
+
+def _pipeline_skill_contract(text, limit=6000):
+    """Compile prose rules from the full Skill without sending tool scripts."""
+    kept, fenced, priority, before_sections = [], False, False, True
+    keywords = re.compile(r'必须|不得|严禁|事实|证据|评分|废标|偏离|质量|格式|字数|需补充|人工确认')
+    for raw in str(text or '').splitlines():
+        if raw.strip().startswith('```'):
+            fenced = not fenced
+            continue
+        if fenced: continue
+        line = raw.rstrip()
+        if line.startswith('## '):
+            before_sections = False
+            priority = bool(re.search(r'成本控制|人工确认|边界', line))
+        keep = (before_sections or priority or line.startswith('#') or keywords.search(line))
+        if keep:
+            kept.append(line[:800] if len(line) > 800 else line)
+    value = '\n'.join(kept).strip()
+    if len(value) <= limit: return value
+    head = max(1, int(limit * 0.65)); tail = max(1, limit - head)
+    return value[:head] + '\n\n[中间工具脚本已由引擎省略]\n\n' + value[-tail:]
+
+
+def _pipeline_direct_task(job, node):
+    node_id = str(node.get('id') or '')
+    if node_id == 'response_plan':
+        return ('分析招标要求，提取文件组成、评分点、废标风险和各模板章节的写作依据。'
+                '只做响应规划，不写章节正文。')
+    if node_id == 'chapter_write:technical_deviation':
+        return ('生成技术应答偏离表，使用 Markdown 表格，列为“序号｜招标条款/技术要求｜'
+                '投标响应｜偏离情况｜依据/证据｜备注”；逐项覆盖，未知事实标记〔需补充〕。')
+    if node_id == 'chapter_write:business_deviation':
+        return ('生成商务偏离表，使用 Markdown 表格，覆盖报价、付款、工期、质保、交付、签章等；'
+                '列为“序号｜招标条款/商务要求｜投标响应｜偏离情况｜依据/证据｜备注”。')
+    if node_id.startswith('chapter_write:'):
+        return ('撰写章节“%s”。逐项响应招标要求并标注依据；素材缺失写〔需补充〕。'
+                '本章依据：%s；评分点：%s；素材槽位：%s。正文至少 2500 个中文字符。'
+                '表格必须按具体用途命名列，同一章内禁止反复使用“信息项｜内容”等泛化表头。' % (
+                    node.get('title') or '本章', '、'.join(node.get('basis') or []) or '招标解析版',
+                    '、'.join(node.get('scoring_points') or []) or '按响应矩阵核对',
+                    '、'.join(node.get('material_slots') or []) or '无指定素材槽位'))
+    if node_id == 'quality_review':
+        return ('复核整册对评分点、废标风险、偏离表和事实边界的覆盖情况，输出明确的质检结论、'
+                '缺口和提交前人工确认项；不改写正文。')
+    return '完成节点“%s”，只输出本节点指定文件。' % (node.get('title') or node_id)
+
+
+def _record_direct_skill_use(job, skill_path):
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    manifest = meta.get('skill_manifest') if isinstance(meta.get('skill_manifest'), dict) else {}
+    if (manifest.get('run_id') != meta.get('run_id')
+            or manifest.get('path_sha256') != _sha256_text(os.path.realpath(skill_path))
+            or manifest.get('manifest_sha256') != _file_digest(skill_path)):
+        return False
+    _mark_skill_accepted(job, 'direct_model_completion')
+    _append_skill_event(job, {
+        'run_id': meta.get('run_id'), 'type': 'read_manifest', 'status': 'completed',
+        'path_sha256': manifest.get('path_sha256'),
+        'manifest_sha256': manifest.get('manifest_sha256'), 'ts': now(),
+    })
+    return True
+
+
+def _pipeline_cell(value):
+    return str(value if value not in (None, '') else '〔需补充〕').replace('|', '｜').replace('\n', ' ')
+
+
+def _pipeline_write_response_plan(job, attempt_root, compact):
+    """Expand a small model analysis into the four deterministic planning artifacts."""
+    if not isinstance(compact, dict):
+        raise generation_pipeline.NodeExecutionError('model_plan_invalid', retryable=True)
+    state = generation_pipeline.load(job)
+    provisional = [item for item in (state.get('nodes') or [])
+                   if str(item.get('id') or '').startswith('chapter_write:')
+                   and not str(item.get('id') or '').endswith(
+                       (':technical_deviation', ':business_deviation'))]
+    guidance = {}
+    for item in compact.get('chapter_guidance') or []:
+        if isinstance(item, dict) and item.get('title'):
+            guidance[str(item['title']).strip()] = item
+    chapters = []
+    for item in provisional:
+        title = str(item.get('title') or '')
+        guide = guidance.get(title, {})
+        chapters.append({
+            'id': str(item.get('id') or '').split(':', 1)[-1],
+            'title': title,
+            'output': os.path.basename(str((item.get('outputs') or ['章节.md'])[0])),
+            'basis': [str(value) for value in (guide.get('basis') or ['招标文件_解析版.md'])][:20],
+            'scoring_points': [str(value) for value in (guide.get('scoring_points') or [])][:20],
+            'material_slots': [str(value) for value in (guide.get('material_slots') or [])][:20],
+            'dependencies': [str(value).split(':', 1)[-1]
+                             for value in (item.get('dependencies') or [])][:20],
+        })
+    if not chapters:
+        raise generation_pipeline.NodeExecutionError('model_plan_has_no_chapters', retryable=False)
+
+    composition = [str(value) for value in (compact.get('composition') or []) if str(value).strip()][:40]
+    composition_lines = [
+        '# 投标文件组成', '',
+        '> 本目录根据场景模板与招标文件解析结果生成；客户专属事实和最终装订顺序须在提交前人工核对。', '',
+        '## 文件组成建议', '',
+    ]
+    composition_lines.extend('- %s' % _pipeline_cell(value) for value in composition)
+    composition_lines.extend(['', '## 正文章节与目的', '', '| 序号 | 章节 | 目的与依据 |', '|---|---|---|'])
+    for index, chapter in enumerate(chapters, 1):
+        basis = '；'.join(chapter['basis']) or '依据招标文件逐项响应'
+        composition_lines.append('| %d | %s | %s |' % (index, _pipeline_cell(chapter['title']), _pipeline_cell(basis)))
+    composition_lines.extend(['', '## 提交前人工确认', '',
+                              '- 核对投标人名称、报价、资质、案例、人员、签章和日期。',
+                              '- 所有〔需补充〕项完成后，方可作为正式投标文件提交。'])
+
+    score_lines = ['# 评分点响应矩阵', '',
+                   '> 分值或证据未在原文中明确时保留〔需补充〕，不得推测。', '',
+                   '| 序号 | 原要求/评分点 | 分值 | 响应位置 | 证据 | 缺口 |',
+                   '|---|---|---:|---|---|---|']
+    scores = [item for item in (compact.get('scoring_points') or []) if isinstance(item, dict)][:120]
+    if not scores:
+        scores = [{'requirement': '未识别到独立评分点', 'score': '未知',
+                   'location': '全册复核', 'evidence': '招标文件_解析版.md',
+                   'gap': '〔需补充〕人工核对评分办法'}]
+    for index, item in enumerate(scores, 1):
+        score_lines.append('| %d | %s | %s | %s | %s | %s |' % (
+            index, _pipeline_cell(item.get('requirement')), _pipeline_cell(item.get('score') or '未知'),
+            _pipeline_cell(item.get('location')), _pipeline_cell(item.get('evidence')),
+            _pipeline_cell(item.get('gap'))))
+    score_lines.extend(['', '## 使用说明', '',
+                        '- 正文撰写按本矩阵逐项落位，质检阶段再次核对响应位置与证据。',
+                        '- 评分分值、证明材料或客户事实缺失时必须保留〔需补充〕。'])
+
+    risk_lines = ['# 废标风险清单', '',
+                  '> 本清单用于提交前逐项人工核验，不替代招标文件原文和法律审查。', '',
+                  '| 序号 | 类别 | 招标要求 | 风险 | 提交前动作 |', '|---|---|---|---|---|']
+    risks = [item for item in (compact.get('risks') or []) if isinstance(item, dict)][:160]
+    if not risks:
+        risks = [{'category': '完整性', 'requirement': '逐项核对招标文件',
+                  'risk': '遗漏实质性要求可能导致无效投标', 'action': '〔需补充〕人工复核'}]
+    for index, item in enumerate(risks, 1):
+        risk_lines.append('| %d | %s | %s | %s | %s |' % (
+            index, _pipeline_cell(item.get('category')), _pipeline_cell(item.get('requirement')),
+            _pipeline_cell(item.get('risk')), _pipeline_cell(item.get('action'))))
+    risk_lines.extend(['', '## 门禁原则', '',
+                       '- 资格、签章、报价、时限和实质性条款必须由投标负责人最终确认。',
+                       '- 未取得证据的资质、案例、人员和承诺不得由模型补写。'])
+
+    artifacts = {
+        '投标文件组成.md': '\n'.join(composition_lines) + '\n',
+        '评分点响应矩阵.md': '\n'.join(score_lines) + '\n',
+        '废标风险清单.md': '\n'.join(risk_lines) + '\n',
+        'response_plan.json': json.dumps({'chapters': chapters}, ensure_ascii=False, indent=2) + '\n',
+    }
+    for name, text in artifacts.items():
+        target = os.path.join(attempt_root, name)
+        tmp = target + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as handle: handle.write(text)
+        os.replace(tmp, target)
+
+
+def _pipeline_local_response_plan(job, attempt_root):
+    """Build the non-creative response index locally and deterministically.
+
+    The response plan is an index over the tender and the selected template.  It
+    must never be a long-form generation dependency: a truncated model response
+    used to strand the whole run before chapter writing had even begun.
+    """
+    parsed_path = os.path.join(attempt_root, '招标文件_解析版.md')
+    parse_limit = max(300000, min(3000000, int(
+        os.environ.get('BIDDOG_LOCAL_PLAN_MAX_CHARS', 1500000))))
+    parsed = _pipeline_model_file_text(parsed_path, parse_limit)
+    try:
+        if os.path.getsize(parsed_path) > len(parsed.encode('utf-8')):
+            append_diagnostic(
+                job, 'local_plan_source_capped',
+                '解析文本超过本地索引上限，已索引前 %d 字；交付前需人工核对尾部附件。' % parse_limit,
+                level='warning')
+    except OSError:
+        pass
+    lines = []
+    for raw in parsed.splitlines():
+        value = re.sub(r'\s+', ' ', str(raw or '')).strip(' #\t')
+        if 8 <= len(value) <= 260 and value not in lines:
+            lines.append(value)
+
+    state = generation_pipeline.load(job)
+    chapter_nodes = [node for node in (state.get('nodes') or [])
+                     if str(node.get('id') or '').startswith('chapter_write:')]
+    composition = ['投标函、资格证明及签章文件']
+    composition.extend(str(node.get('title') or '') for node in chapter_nodes
+                       if str(node.get('title') or '').strip())
+
+    score_pattern = re.compile(r'(评分|评审|分值|得分|满分|\d+(?:\.\d+)?\s*分(?:\D|$))')
+    risk_pattern = re.compile(r'(废标|无效投标|否决|取消.{0,12}资格|不得|必须|须提供|应提供)')
+    all_score_lines = [line for line in lines if score_pattern.search(line)]
+    all_risk_lines = [line for line in lines if risk_pattern.search(line)]
+    score_lines = all_score_lines[:120]
+    risk_lines = all_risk_lines[:160]
+    if len(all_score_lines) > len(score_lines) or len(all_risk_lines) > len(risk_lines):
+        append_diagnostic(
+            job, 'local_plan_items_capped',
+            '评分点或风险条目超过索引上限（评分 %d、风险 %d），已保留前 120/160 项。' %
+            (len(all_score_lines), len(all_risk_lines)), level='warning')
+
+    scores = [{
+        'requirement': line,
+        'score': (re.search(r'\d+(?:\.\d+)?\s*分', line).group(0)
+                  if re.search(r'\d+(?:\.\d+)?\s*分', line) else '未知'),
+        'location': '评分证据与对应章节',
+        'evidence': '招标文件_解析版.md',
+        'gap': '〔需补充〕提交前核对分值、响应位置和证据',
+    } for line in score_lines]
+
+    def risk_category(line):
+        if re.search(r'(资格|资质|证明|案例)', line): return '资格与证据'
+        if re.search(r'(签章|密封|报价|投标函)', line): return '形式与商务'
+        if re.search(r'(工期|时限|日期|验收|质保)', line): return '交付与时限'
+        return '实质性要求'
+
+    risks = [{
+        'category': risk_category(line),
+        'requirement': line,
+        'risk': '未逐项响应或缺少证据可能导致扣分、无效投标或取消资格',
+        'action': '提交前由投标负责人对照原文核对；客户事实或证据缺失时保留〔需补充〕',
+    } for line in risk_lines]
+
+    guidance = []
+    for node in chapter_nodes:
+        title = str(node.get('title') or '')
+        keywords = [word for word in re.split(r'[与、及/\s]+', title) if len(word) >= 2]
+        basis = [line for line in lines if any(word in line for word in keywords)][:8]
+        guidance.append({
+            'title': title,
+            'basis': basis or ['招标文件_解析版.md'],
+            'scoring_points': [line for line in score_lines
+                               if any(word in line for word in keywords)][:8],
+            'material_slots': ['与本章要求对应的资质、案例、人员或承诺证据〔需补充〕'],
+        })
+    _pipeline_write_response_plan(job, attempt_root, {
+        'composition': composition,
+        'scoring_points': scores,
+        'risks': risks,
+        'chapter_guidance': guidance,
+    })
+
+
+def _pipeline_complete_truncated_markdown(content, min_chars=0):
+    """Keep a substantial Markdown response at its last complete boundary."""
+    text = str(content or '').strip()
+    required = max(600, int(min_chars or 0) * 2)
+    if len(text) < required:
+        return ''
+    sentence_end = max(text.rfind(mark) for mark in ('。', '！', '？', '；'))
+    table_end = -1
+    offset = 0
+    for line in text.splitlines(True):
+        offset += len(line)
+        if line.strip().endswith('|') and line.strip().count('|') >= 2:
+            table_end = offset - (0 if line.endswith('\n') else len(line) - len(line.rstrip()))
+    boundary = max(sentence_end + 1 if sentence_end >= 0 else -1, table_end)
+    if boundary < required:
+        return ''
+    return text[:boundary].rstrip()
+
+
+def _pipeline_merge_markdown_continuation(body, continuation):
+    """Append a continuation while removing a small exact overlap at the join."""
+    head, tail = str(body or '').rstrip(), str(continuation or '').strip()
+    if tail.startswith('```'):
+        tail = re.sub(r'^```(?:markdown|md)?\s*', '', tail, flags=re.I)
+        tail = re.sub(r'\s*```$', '', tail).strip()
+    if not head or not tail:
+        return head or tail
+    for size in range(min(len(head), len(tail), 800), 31, -1):
+        if head[-size:] == tail[:size]:
+            tail = tail[size:].lstrip()
+            break
+    return head + ('\n\n' + tail if tail else '')
+
+
+_UNVERIFIED_BIDDER_FACT = re.compile(
+    r'(我方(?:具备|具有|拥有|持有|已(?:建立|取得|完成|通过|获得|成功)|'
+    r'在.{0,30}(?:拥有|具备|有成功|完成|实施)|近三年.{0,30}(?:完成|实施)|'
+    r'为依法|注册资本(?:为|不低于)|产品在.{0,30}(?:案例|应用))|'
+    r'(?:上述|以上).{0,30}均为我方直接实施|'
+    r'本公司(?:具备|拥有|通过|获得)|公司(?:具备|拥有|通过|获得)|上述人员全部为)'
+)
+
+
+def _pipeline_mark_unverified_claims(content):
+    """Make unsupported bidder facts explicit without changing Markdown shape."""
+    marker = '〔需补充：请核实本项投标人事实并提供证据〕'
+    safe_lines = []
+    for line in str(content or '').splitlines():
+        matches = list(_UNVERIFIED_BIDDER_FACT.finditer(line))
+        # 从右向左处理，避免插入标记后破坏后续匹配位置。只检查当前事实所在
+        # 子句；前一事实已有标记，不能替后一事实背书。
+        for match in reversed(matches):
+            clause_start = max(
+                line.rfind(mark, 0, match.start()) for mark in ('。', '；', ';', '，', ',', '|', '\n')
+            ) + 1
+            if '〔需补充' not in line[clause_start:match.start()]:
+                line = line[:match.start()] + marker + line[match.start():]
+        safe_lines.append(line)
+    return '\n'.join(safe_lines)
+
+
+def _pipeline_specialize_repeated_table_headers(content):
+    """Replace repeated generic two-column headers with section-specific labels."""
+    lines = str(content or '').splitlines()
+    generic = re.compile(r'^\|\s*信息项\s*\|\s*内容\s*\|\s*$')
+    if sum(1 for line in lines if generic.match(line.strip())) <= 2:
+        return '\n'.join(lines)
+    heading = '本节'
+    used = {}
+    for index, line in enumerate(lines):
+        match = re.match(r'^#{2,6}\s+(.+?)\s*$', line.strip())
+        if match:
+            heading = re.sub(r'[`*_〔〕]', '', match.group(1)).strip()
+            heading = re.sub(r'^\d+(?:\.\d+)*\s*', '', heading)[:18] or '本节'
+        if not generic.match(line.strip()):
+            continue
+        used[heading] = used.get(heading, 0) + 1
+        label = heading if used[heading] == 1 else '%s%d' % (heading, used[heading])
+        lines[index] = '| %s信息项 | 待补充/响应内容 |' % label
+    return '\n'.join(lines)
+
+
+def _pipeline_validate_execution_contract(job, upstream):
+    """Prevent a resumed job from silently switching gateway credentials."""
+    state = generation_pipeline.load(job)
+    routes = state.get('model_routes') if isinstance(state, dict) else {}
+    if not isinstance(routes, dict) or not routes:
+        return
+    frozen_key = str(routes.get('credential_fingerprint') or '')
+    current_key = generation_pipeline.credential_fingerprint(
+        upstream.get('api_key') or '')
+    frozen_base = str(routes.get('base_url') or '')
+    current_base = generation_pipeline.safe_base_url(upstream.get('base_url') or '')
+    if ((frozen_key and not hmac.compare_digest(frozen_key, current_key))
+            or (frozen_base and frozen_base != current_base)):
+        raise generation_pipeline.NodeExecutionError(
+            'execution_contract_changed', retryable=False,
+            detail='任务运行期间模型网关或 Key 已变化；请重新测试连接后从当前检查点继续')
+
+
+def _pipeline_model_runner(job, node, prompt, model):
+    """Run a bounded node as one non-stream completion, then atomically promote files.
+
+    The previous OpenCode tool loop repeatedly stalled after reading inputs.  A
+    node already has a deterministic read/write contract, so giving the model
+    filesystem tools only adds long-stream failure points.  The engine now reads
+    the exact inputs, injects the Skill contract, and owns all writes itself.
     """
     base = os.path.basename(job)
     if _cancel_requested(base):
         raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
-    if not oc_serve():
-        raise generation_pipeline.NodeExecutionError('opencode_server_unavailable', retryable=True)
+    conf = read_json(conf_path(), {})
+    up = s2_conf(conf)
+    if not up.get('api_key'):
+        raise generation_pipeline.NodeExecutionError('model_auth_missing', retryable=False)
+    _pipeline_validate_execution_contract(job, up)
     attempt_root = generation_pipeline.attempt_directory(job, node)
     _pipeline_copy_inputs(job, node, str(attempt_root))
-    title = '%s · %s' % (read_json(os.path.join(job, '任务.json'), {}).get('name') or base,
-                        node.get('title') or node.get('id'))
-    st, body = oc_api('/api/session?directory=%s' % urllib.parse.quote(str(attempt_root)),
-                      {'title': title[:180]}, timeout=30)
-    sid = (body or {}).get('id') if st in (200, 201) and isinstance(body, dict) else ''
-    if not sid:
-        raise generation_pipeline.NodeExecutionError('opencode_session_unavailable', retryable=True,
-                                                       detail='HTTP %s' % st)
-    _pipeline_register_session(job, sid)
-    try:
-        sent, detail = oc_send(sid, prompt, delivery='queue',
-                               model={'providerID': 'biddog-s2', 'modelID': model}, job=job)
-        if not sent:
-            raise generation_pipeline.NodeExecutionError('node_dispatch_failed', retryable=True,
-                                                           detail=str(detail)[:300])
-        started = time.time()
-        slow_after = float(os.environ.get('BIDDOG_PIPELINE_SLOW_SECONDS', 90))
-        stall_after = float(os.environ.get('BIDDOG_PIPELINE_STALL_SECONDS', 240))
-        timeout_after = float(os.environ.get('BIDDOG_PIPELINE_NODE_TIMEOUT_SECONDS', 900))
-        slow_notified = False
-        last_activity = time.time()
-        output_paths = [os.path.join(str(attempt_root), os.path.basename(str(name)))
-                        for name in (node.get('outputs') or [])]
-        output_sig = generation_pipeline.file_digest(output_paths)
-        while True:
-            if _cancel_requested(base):
-                oc_interrupt(sid)
-                raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
-            time.sleep(1)
-            current_sig = generation_pipeline.file_digest(output_paths)
-            if current_sig != output_sig:
-                output_sig = current_sig
-                last_activity = time.time()
-                generation_pipeline.touch_node(job, node.get('id'))
-            done, error = oc_turn(sid)
-            quiet = time.time() - last_activity
-            if error:
-                limited = bool(re.search(r'\b429\b|rate limit|usage limit|quota', error, re.I))
-                code = ('model_rate_limited' if limited else
-                        ('stream_interrupted' if _recoverable_turn_error(error) else 'model_node_failed'))
-                raise generation_pipeline.NodeExecutionError(code, retryable=_recoverable_turn_error(error),
-                                                               detail=error)
-            if done and quiet >= OC_QUIET:
-                try:
-                    generation_pipeline.promote_outputs(job, attempt_root, node)
-                except generation_pipeline.OutputValidationError as exc:
-                    raise generation_pipeline.NodeExecutionError(
-                        'node_output_missing', retryable=True, detail=str(exc)) from exc
-                return
-            if quiet >= slow_after and not slow_notified:
-                slow_notified = True
-                emit(job, {'type': 'message', 'role': 'agent',
-                           'text': '“%s”响应偏慢，仍在检查本节点；已完成节点不会重跑。' %
-                                   (node.get('title') or node.get('id'))})
-            if quiet >= stall_after:
-                oc_interrupt(sid)
-                raise generation_pipeline.NodeExecutionError('stream_idle_timeout', retryable=True)
-            if time.time() - started >= timeout_after:
-                oc_interrupt(sid)
-                raise generation_pipeline.NodeExecutionError('node_timeout', retryable=True)
-    finally:
+    skill_path = os.path.join(str(attempt_root), 'SKILL.md')
+    if not os.path.isfile(skill_path):
+        raise generation_pipeline.NodeExecutionError('skill_contract_missing', retryable=False)
+    skill_text = _pipeline_model_file_text(skill_path, 50000)
+    if not skill_text.strip():
+        raise generation_pipeline.NodeExecutionError('skill_contract_empty', retryable=False)
+    skill_contract = _pipeline_skill_contract(skill_text)
+
+    budget = max(30000, int(os.environ.get('BIDDOG_PIPELINE_CONTEXT_CHARS', 140000)))
+    sections = []
+    for parent, dirs, files in os.walk(str(attempt_root), followlinks=False):
+        dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(parent, name))]
+        for name in sorted(files):
+            path = os.path.join(parent, name)
+            if os.path.realpath(path) == os.path.realpath(skill_path) or os.path.islink(path): continue
+            if budget <= 0: break
+            text = _pipeline_model_file_text(path, min(budget, 60000))
+            if not text.strip(): continue
+            rel = os.path.relpath(path, str(attempt_root)).replace(os.sep, '/')
+            sections.append('## 输入文件：%s\n%s' % (rel, text))
+            budget -= len(text)
+
+    outputs = [os.path.basename(str(name)) for name in (node.get('outputs') or [])]
+    is_plan = node.get('id') == 'response_plan'
+    if is_plan:
+        _pipeline_local_response_plan(job, str(attempt_root))
         try:
-            delete_status, delete_detail = oc_api('/api/session/%s' % sid, timeout=10, method='DELETE')
-            if delete_status not in (200, 202, 204, 404):
-                append_diagnostic(job, 'pipeline_session_cleanup_failed',
-                                  'HTTP %s: %s' % (delete_status, str(delete_detail)[:160]),
-                                  level='warning', session_id=sid)
-        except Exception as exc:
-            append_diagnostic(job, 'pipeline_session_cleanup_failed', str(exc),
-                              level='warning', session_id=sid)
-        _pipeline_unregister_session(job, sid)
+            with RUNNING_LOCK:
+                owner = RUNNING.get(base)
+                if owner and CANCEL.get(base) == owner:
+                    raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+                generation_pipeline.promote_outputs(job, attempt_root, node)
+        except generation_pipeline.OutputValidationError as exc:
+            raise generation_pipeline.NodeExecutionError(
+                'node_output_invalid', retryable=True, detail=str(exc)) from exc
+        _record_direct_skill_use(job, os.path.join(skill_dir_conf(conf), 'SKILL.md'))
+        return
+    single_markdown = bool(not is_plan and len(outputs) == 1
+                           and os.path.splitext(outputs[0])[1].lower() in ('.md', '.txt'))
+    output_contract = (
+        '只返回严格 JSON：{"composition":["文件组成"],'
+        '"scoring_points":[{"requirement":"原要求","score":"分值或未知",'
+        '"location":"建议响应章节","evidence":"所需证据","gap":"缺口"}],'
+        '"risks":[{"category":"类别","requirement":"要求","risk":"风险",'
+        '"action":"提交前动作"}],"chapter_guidance":[{"title":"模板章节原名",'
+        '"basis":["招标依据"],"scoring_points":["评分点"],'
+        '"material_slots":["所需素材"]}]}。每类最多 20 项，不要返回章节正文。'
+        if is_plan else (
+        '只返回文件“%s”的完整 Markdown 正文，不要 JSON，不要代码围栏，不要解释。' % outputs[0]
+        if single_markdown else
+        '只返回一个严格 JSON 对象，格式为 {"files":{"文件名":"完整文件正文"}}。'
+        'files 必须且只能包含：%s。Markdown 文件值必须是完整 Markdown 字符串；'
+        'JSON 文件值可以是对象。' % '、'.join(outputs)))
+    system = (
+        '你是中标狗的有界投标文件节点。以下 SKILL 是本轮必须遵守的写作契约。\n'
+        '<SKILL>\n%s\n</SKILL>\n不要调用工具，不要解释过程。%s'
+        '未知客户事实必须标记〔需补充〕，不得编造。' % (skill_contract, output_contract))
+    user = _pipeline_direct_task(job, node) + '\n\n# 已由引擎确定性读取的输入\n' + '\n\n'.join(sections)
+    chapter_tokens = max(1200, min(8000, int(
+        os.environ.get('BIDDOG_CHAPTER_MAX_TOKENS', 4800))))
+    payload = {
+        'model': model, 'stream': False,
+        'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
+        'max_tokens': 3200 if is_plan else (
+            2500 if node.get('id') == 'quality_review' else chapter_tokens),
+        'temperature': 0.2,
+    }
+    try:
+        response = _openai_req(up['base_url'], up['api_key'], '/chat/completions', payload,
+                               timeout=float(os.environ.get('BIDDOG_MODEL_NODE_TIMEOUT_SECONDS', 240)),
+                               verify=up.get('verify_ssl', True))
+    except urllib.error.HTTPError as exc:
+        detail = _http_error_detail(exc, (up.get('api_key'),), 240)
+        retryable = exc.code in (408, 409, 425, 429) or 500 <= exc.code < 600
+        raise generation_pipeline.NodeExecutionError(
+            'model_rate_limited' if exc.code == 429 else 'model_request_failed',
+            retryable=retryable, detail='HTTP %s %s' % (exc.code, detail)) from exc
+    except Exception as exc:
+        raise generation_pipeline.NodeExecutionError(
+            'model_request_interrupted', retryable=True,
+            detail=net_hint(exc, (up.get('api_key'),))) from exc
+    if _cancel_requested(base):
+        raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+    choices = response.get('choices') if isinstance(response, dict) else None
+    if not choices:
+        detail = ((response.get('error') or {}).get('message')
+                  if isinstance(response, dict) and isinstance(response.get('error'), dict) else '')
+        append_diagnostic(job, 'model_response_without_choices', str(detail or 'empty choices')[:240],
+                          level='warning', node_id=node.get('id'), model=model)
+        raise generation_pipeline.NodeExecutionError('model_response_empty', retryable=True,
+                                                       detail=str(detail or '')[:240])
+    choice = (choices or [{}])[0]
+    content = ((choice.get('message') or {}).get('content') if isinstance(choice, dict) else '')
+    finish = str(choice.get('finish_reason') or '') if isinstance(choice, dict) else ''
+    if finish and finish != 'stop':
+        truncation_minimum = node.get('min_chars') or 0
+        if (str(node.get('id') or '').startswith('chapter_write:')
+                and node.get('id') not in (
+                    'chapter_write:technical_deviation',
+                    'chapter_write:business_deviation')):
+            # 触顶后的首段必须足够完整，续写失败时也不能把几百字短稿晋升为
+            # 已完成节点。正常 stop 响应仍由后续确定性质检按章节检查。
+            truncation_minimum = max(1250, int(truncation_minimum or 0))
+        accepted = (_pipeline_complete_truncated_markdown(content, truncation_minimum)
+                    if single_markdown and finish == 'length' else '')
+        if accepted:
+            content = accepted
+            continued = False
+            if str(node.get('id') or '').startswith('chapter_write:'):
+                continuation_tokens = max(800, min(4000, int(
+                    os.environ.get('BIDDOG_CHAPTER_CONTINUATION_TOKENS', 2400))))
+                continuation_payload = dict(payload)
+                continuation_payload['max_tokens'] = continuation_tokens
+                continuation_payload['messages'] = list(payload['messages']) + [
+                    {'role': 'assistant', 'content': accepted},
+                    {'role': 'user', 'content': (
+                        '上文因单次输出容量结束。请从最后一个完整句之后继续，'
+                        '不要重复已经完成的内容、标题或表格。补齐尚未覆盖的小节和验收内容；'
+                        '只输出续写的 Markdown 正文。')},
+                ]
+                try:
+                    _pipeline_validate_execution_contract(job, s2_conf(read_json(conf_path(), {})))
+                    followup = _openai_req(
+                        up['base_url'], up['api_key'], '/chat/completions',
+                        continuation_payload,
+                        timeout=float(os.environ.get(
+                            'BIDDOG_MODEL_NODE_TIMEOUT_SECONDS', 240)),
+                        verify=up.get('verify_ssl', True))
+                    if _cancel_requested(base):
+                        raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+                    follow_choice = ((followup.get('choices') or [{}])[0]
+                                     if isinstance(followup, dict) else {})
+                    follow_content = ((follow_choice.get('message') or {}).get('content')
+                                      if isinstance(follow_choice, dict) else '')
+                    follow_finish = str(follow_choice.get('finish_reason') or '')
+                    if follow_finish == 'length':
+                        follow_content = _pipeline_complete_truncated_markdown(
+                            follow_content, 0)
+                    if str(follow_content or '').strip():
+                        content = _pipeline_merge_markdown_continuation(
+                            accepted, follow_content)
+                        continued = True
+                        append_diagnostic(
+                            job, 'model_output_continued',
+                            '首段触及容量后已从断点续写，合计保留 %d 字。' % len(content),
+                            level='info', node_id=node.get('id'), model=model)
+                except Exception as exc:
+                    append_diagnostic(
+                        job, 'model_continuation_failed_but_preserved',
+                        '续写未返回，但首段 %d 字已保留：%s' % (
+                            len(accepted), net_hint(exc, (up.get('api_key'),))[:160]),
+                        level='warning', node_id=node.get('id'), model=model)
+            if not continued:
+                append_diagnostic(job, 'model_output_truncated_but_accepted',
+                                  '已保留 %d 字完整正文，并移除末尾不完整句。' % len(content),
+                                  level='warning', node_id=node.get('id'), model=model)
+        else:
+            raise generation_pipeline.NodeExecutionError('model_output_truncated', retryable=True,
+                                                           detail='finish_reason=%s' % finish)
+    if is_plan:
+        envelope = _pipeline_json_object(content)
+        if not isinstance(envelope, dict):
+            append_diagnostic(job, 'model_output_invalid_json',
+                              '返回 %d 字，未形成节点 JSON' % len(str(content or '')),
+                              level='warning', node_id=node.get('id'), model=model)
+            raise generation_pipeline.NodeExecutionError('model_output_invalid_json', retryable=True)
+        _pipeline_write_response_plan(job, str(attempt_root), envelope)
+    elif single_markdown:
+        text = str(content or '').strip()
+        if text.startswith('```'):
+            text = re.sub(r'^```(?:markdown|md)?\s*', '', text, flags=re.I)
+            text = re.sub(r'\s*```$', '', text).strip()
+        if str(node.get('id') or '').startswith('chapter_write:'):
+            text = _pipeline_mark_unverified_claims(text)
+            text = _pipeline_specialize_repeated_table_headers(text)
+        target = os.path.join(str(attempt_root), outputs[0]); tmp = target + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as handle: handle.write(text.rstrip() + '\n')
+        os.replace(tmp, target)
+    else:
+        envelope = _pipeline_json_object(content)
+        if not isinstance(envelope, dict):
+            raise generation_pipeline.NodeExecutionError('model_output_invalid_json', retryable=True)
+        files = envelope.get('files')
+        if not isinstance(files, dict):
+            raise generation_pipeline.NodeExecutionError('model_output_invalid_json', retryable=True)
+        if set(files) != set(outputs):
+            raise generation_pipeline.NodeExecutionError(
+                'model_output_contract_mismatch', retryable=True,
+                detail='期望 %s，实际 %s' % (outputs, sorted(str(key) for key in files)))
+        for name in outputs:
+            value = files.get(name)
+            text = (json.dumps(value, ensure_ascii=False, indent=2) if isinstance(value, (dict, list))
+                    else str(value or ''))
+            target = os.path.join(str(attempt_root), name)
+            tmp = target + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as handle: handle.write(text.rstrip() + '\n')
+            os.replace(tmp, target)
+    try:
+        # 与 _request_cancel 共用 RUNNING_LOCK，使“最后一次取消检查 + 文件晋升”
+        # 成为一个原子区间；停止请求先拿到锁时，迟到结果绝不会晋升。
+        with RUNNING_LOCK:
+            owner = RUNNING.get(base)
+            if owner and CANCEL.get(base) == owner:
+                raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+            generation_pipeline.promote_outputs(job, attempt_root, node)
+    except generation_pipeline.OutputValidationError as exc:
+        raise generation_pipeline.NodeExecutionError(
+            'node_output_invalid', retryable=True, detail=str(exc)) from exc
+    _record_direct_skill_use(job, os.path.join(skill_dir_conf(conf), 'SKILL.md'))
 
 
 def _pipeline_prompt(job, node):
@@ -3320,9 +3915,10 @@ def _pipeline_prompt(job, node):
             (node.get('title') or '本章', basis, scores, slots, dependency_files,
              outputs[0] if outputs else '章节.md'))
     if node_id == 'quality_review':
+        output = outputs[0] if outputs else '模型复核报告.md'
         return common + (
             '任务：复核 `投标文件_整册.md` 对评分点、废标项、事实依据和重复内容的覆盖。\n'
-            '唯一输出：`成品质检报告.md`。只给复核结论和明确修订建议，不改正文。')
+            '唯一输出：`%s`。只给复核结论和明确修订建议，不改正文。' % output)
     raise generation_pipeline.PipelineError('没有该节点的模型提示：%s' % node_id)
 
 
@@ -3336,9 +3932,20 @@ def _pipeline_event(job, event, node):
         for name in node.get('outputs') or []:
             emit(job, {'type': 'artifact', 'name': name})
     elif event == 'retry':
+        error_code = str(node.get('error_code') or '')
+        if error_code == 'model_output_truncated':
+            reason = '模型输出过长，已缩小本节范围并重试'
+        elif error_code in ('model_output_invalid_json', 'model_output_contract_mismatch',
+                            'node_output_invalid', 'output_validation_failed'):
+            reason = '模型返回格式不符合本节交付要求，正在重试'
+        elif error_code in ('model_rate_limited', 'model_request_failed', 'model_response_empty'):
+            reason = '上游模型暂时未完整响应，正在重试'
+        else:
+            reason = '连接暂时中断，正在重试'
         emit(job, {'type': 'message', 'role': 'agent',
-                   'text': '“%s”连接中断，将只重试这个节点（已尝试 %d/%d）；前面成果已保留。' %
-                           (title, int(node.get('attempt') or 0), int(node.get('max_attempts') or 3))})
+                   'text': '“%s”%s（已尝试 %d/%d）；前面成果已保留。' %
+                           (title, reason, int(node.get('attempt') or 0),
+                            int(node.get('max_attempts') or 3))})
 
 
 def _pipeline_complete_local(job, node_id, digest, action, *, retryable=True):
@@ -3360,6 +3967,8 @@ def generation_pipeline_worker(job):
     source = os.path.join(job, tender)
     try:
         state = generation_pipeline.load(job)
+        if state.get('version') == 1:
+            state = generation_pipeline.migrate(job)
         if state.get('version') != generation_pipeline.PIPELINE_VERSION:
             state = _initialize_generation_pipeline(job, meta, read_json(conf_path(), {}))
         emit(job, {'type': 'message', 'role': 'agent',
@@ -3995,6 +4604,115 @@ def generation_preflight(job, conf=None):
     except Exception: pass
     return result
 
+
+def _bootstrap_repair(kind='none', action='', label='无需处理'):
+    return {'kind': kind, 'action': action, 'label': label}
+
+
+def _bootstrap_item(item_id, label, status, message, estimate_seconds, repair=None):
+    return {'id': item_id, 'label': label, 'status': status, 'message': message,
+            'estimate_seconds': list(estimate_seconds),
+            'repair': repair or _bootstrap_repair()}
+
+
+def bootstrap_checks(conf=None):
+    """Return a fast, non-billing startup health report.
+
+    This deliberately checks the exact local capabilities needed before a task
+    starts.  It does not call the paid model path; a prior end-to-end probe is
+    accepted only while its connection fingerprint still matches the current
+    gateway, key, transport and model.
+    """
+    conf = conf or read_json(conf_path(), {})
+    eng = conf.get('engine') if isinstance(conf.get('engine'), dict) else {}
+    checks = []
+
+    storage_ok = False
+    try:
+        root = _mk(ws_root())
+        probe = os.path.join(root, '.bootstrap-write-%s' % secrets.token_hex(4))
+        with open(probe, 'w', encoding='utf-8') as f:
+            f.write('ok')
+        os.remove(probe)
+        storage_ok = True
+    except OSError:
+        storage_ok = False
+    checks.append(_bootstrap_item(
+        'storage', '保存位置', 'pass' if storage_ok else 'manual',
+        '任务和结果可以保存' if storage_ok else '数据目录不可写，请检查磁盘和文件夹权限',
+        (0, 1), None if storage_ok else
+        _bootstrap_repair('manual', 'open_storage_help', '查看权限处理办法')))
+
+    try:
+        import docx as _docx  # noqa: F401
+        import pypdf as _pypdf  # noqa: F401
+        parsers_ok = True
+    except ImportError:
+        parsers_ok = False
+    checks.append(_bootstrap_item(
+        'parsers', '文档解析', 'pass' if parsers_ok else 'manual',
+        'DOCX 和 PDF 解析能力已就绪' if parsers_ok else '安装包缺少文档解析组件，需要重新安装完整应用',
+        (0, 2), None if parsers_ok else
+        _bootstrap_repair('reinstall', 'reinstall_app', '重新安装完整组件')))
+
+    skill = skill_dir_conf(conf)
+    skill_ok = os.path.isfile(os.path.join(skill, 'SKILL.md'))
+    checks.append(_bootstrap_item(
+        'skill', '标书写作规则', 'pass' if skill_ok else 'repairable',
+        '标书技能包已内置' if skill_ok else '标书技能包缺失，可以从安装包恢复',
+        (0, 1), None if skill_ok else
+        _bootstrap_repair('automatic', 'repair_skill', '一键恢复写作规则')))
+
+    kind = str(eng.get('kind') or 's2')
+    if kind in ('s2', 'opencode'):
+        runtime_ok = bool(resolve_cli('opencode', eng))
+        checks.append(_bootstrap_item(
+            'runtime', '本地生成组件', 'pass' if runtime_ok else 'repairable',
+            '内置 OpenCode 已就绪' if runtime_ok else '生成组件缺失或不可运行，可以在线恢复',
+            (1, 3), None if runtime_ok else
+            _bootstrap_repair('automatic', 'repair_opencode', '一键修复生成组件')))
+        up = s2_conf(conf)
+        if not up['api_key']:
+            connection_status = 'manual'
+            connection_message = '尚未填写模型 Key'
+            connection_repair = _bootstrap_repair('manual', 'open_model_settings', '去接入模型')
+        elif not _verified_model_ids(conf):
+            connection_status = 'manual'
+            connection_message = '模型设置尚未通过完整生成链路测试'
+            connection_repair = _bootstrap_repair('manual', 'test_model', '测试模型连接')
+        else:
+            connection_status = 'pass'
+            connection_message = '模型与完整生成链路已验证'
+            connection_repair = None
+        checks.append(_bootstrap_item('connection', '模型连接', connection_status,
+                                      connection_message, (5, 20), connection_repair))
+    else:
+        cli_name = {'codex': 'codex', 'claude': 'claude', 'sowork': 'sowork'}.get(kind)
+        runtime_ok = bool(resolve_cli(cli_name, eng)) if cli_name else bool(config_agent_cmd())
+        checks.append(_bootstrap_item(
+            'runtime', '本地生成组件', 'pass' if runtime_ok else 'manual',
+            '所选生成方式已就绪' if runtime_ok else '所选生成方式不可用', (1, 3),
+            None if runtime_ok else _bootstrap_repair('manual', 'open_model_settings', '检查生成方式')))
+        checks.append(_bootstrap_item('connection', '模型连接', 'pass' if runtime_ok else 'manual',
+                                      '生成方式已验证' if runtime_ok else '请先验证所选生成方式', (5, 20),
+                                      None if runtime_ok else
+                                      _bootstrap_repair('manual', 'test_model', '测试模型连接')))
+
+    statuses = {item['status'] for item in checks}
+    if 'manual' in statuses:
+        status = 'manual'
+    elif 'repairable' in statuses:
+        status = 'repairable'
+    else:
+        status = 'ready'
+    return {'status': status, 'ready_for_generation': status == 'ready',
+            'checks': checks, 'checked_at': now()}
+
+
+@app.get('/v1/bootstrap/checks')
+def get_bootstrap_checks():
+    return bootstrap_checks()
+
 def ensure_default_shell(job, eng):
     """Repair the managed OpenCode shell in-place, with visible task progress."""
     if str((eng or {}).get('kind') or 's2') not in ('s2', 'opencode'):
@@ -4523,7 +5241,11 @@ def _launch_job_reserved(jid, job, mock, owner):
             update_runtime(job, execution_path='opencode_starting', can_pause=False,
                            pause_disabled_reason='正在建立稳定连接，暂时不能暂停。')
             if use_pipeline:
-                _initialize_generation_pipeline(job, meta, conf_now)
+                # `_set_skill_manifest` has just persisted a run-bound dispatch receipt.
+                # Reusing the earlier in-memory metadata here would overwrite that receipt
+                # and make a genuinely used Skill appear missing in diagnostics.
+                pipeline_meta = read_json(os.path.join(job, '任务.json'), {})
+                _initialize_generation_pipeline(job, pipeline_meta, conf_now)
                 _start_reserved_worker(os.path.basename(jid), owner, generation_pipeline_worker, job)
             else:
                 _start_reserved_worker(os.path.basename(jid), owner, agent_via_server_or_cli,
@@ -5756,7 +6478,17 @@ async def resume_job(jid: str):
         # 先占位再读会话；否则 redo/start 可在读取后轮换 run_id/session，续做会串到旧轮。
         meta = read_json(os.path.join(job, '任务.json'), {})
         pipeline_state = generation_pipeline.load(job)
+        if pipeline_state.get('version') == 1:
+            pipeline_state = generation_pipeline.migrate(job)
         if pipeline_state.get('version') == generation_pipeline.PIPELINE_VERSION:
+            try:
+                _pipeline_validate_execution_contract(job, s2_conf(read_json(conf_path(), {})))
+            except generation_pipeline.NodeExecutionError:
+                _release_running(base, owner)
+                return JSONResponse({
+                    'ok': False,
+                    'error': '任务运行所用的模型网关或 Key 已变化；请重新测试连接后再继续。'
+                }, 409)
             # delivery_gate 已落盘、outcome 未落盘时是一个可提交的中间态。
             # 这里只重放幂等收尾，不重启模型节点。
             delivery_done = any(
@@ -7128,6 +7860,8 @@ def _relay_passthrough(body, up):
 @app.post('/v1/relay/responses')
 async def relay_responses(req: Request):
     if (req.headers.get('authorization') or '').replace('Bearer ', '').strip() != relay_token():
+        RELAY_LAST.update({'ts': now(), 'mode': 'auth',
+                           'error': '执行外壳未携带本机中继凭据'})
         return JSONResponse({'error': 'relay token 不匹配'}, 401)
     body = await req.json()
     up = s2_conf()
@@ -7160,6 +7894,8 @@ async def relay_chat(req: Request):
     """纯直通(零翻译):opencode 等原生 OpenAI 兼容外壳 → 这里 → S2 网关。
     存在的唯一理由是 Key 托管:子进程只拿本机随机口令,真 Key 不出引擎进程;顺带统一记账 RELAY_LAST。"""
     if (req.headers.get('authorization') or '').replace('Bearer ', '').strip() != relay_token():
+        RELAY_LAST.update({'ts': now(), 'mode': 'auth',
+                           'error': '执行外壳未携带本机中继凭据'})
         return JSONResponse({'error': {'message': 'relay token 不匹配', 'type': 'auth_error'}}, 401)
     body = await req.json()
     up = s2_conf()

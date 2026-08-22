@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
 PIPELINE_FILE = "pipeline.json"
 MAX_ATTEMPTS = 3
 SOURCE_MIN_CHARS = 80
@@ -443,7 +443,9 @@ def initialize(
             _node(
                 "quality_review",
                 "model" if mode == "standard" else "local",
-                ["成品质检报告.md"],
+                # 标准模式的模型复核是独立证据；后续确定性质检仍会生成
+                # 《成品质检报告.md》，两份报告不能互相覆盖。
+                ["模型复核报告.md" if mode == "standard" else "成品质检报告.md"],
                 model_tier="quality" if mode == "standard" else "",
                 title="交付质检",
                 min_chars=40,
@@ -803,6 +805,38 @@ def _mutate(job: os.PathLike[str] | str, callback):
         _refresh_state(state)
         _write(path, state)
         return result, state
+
+
+def migrate(job: os.PathLike[str] | str) -> Dict[str, Any]:
+    """Upgrade durable v1 state without replaying completed chapter nodes."""
+    root = Path(job)
+    path = _pipeline_path(root)
+    with _lock(path):
+        state = _read(path)
+        version = int(state.get("version") or 0)
+        if version == PIPELINE_VERSION:
+            return state
+        if version != 1:
+            raise PipelineError("任务没有可迁移的流水线状态")
+        if state.get("mode") == "standard":
+            for node in state.get("nodes") or []:
+                if node.get("id") != "quality_review":
+                    continue
+                if node.get("outputs") == ["成品质检报告.md"]:
+                    node["outputs"] = ["模型复核报告.md"]
+                    if node.get("state") == "done":
+                        # 旧文件可能已被后续确定性质检覆盖，无法证明仍是 S2
+                        # 原始复核。只重跑这一节点，绝不把脚本报告冒充模型证据。
+                        node.update({
+                            "state": "pending", "attempt": 0,
+                            "input_digest": "", "started_at": "",
+                            "finished_at": "", "last_activity_at": "",
+                            "error_code": "", "retry_after_seconds": 0,
+                        })
+        state["version"] = PIPELINE_VERSION
+        _refresh_state(state)
+        _write(path, state)
+        return state
 
 
 def start_node(job: os.PathLike[str] | str, node_id: str, *, input_digest: str) -> Dict[str, Any]:

@@ -179,6 +179,53 @@ test('generation flow console shows evidence, checkpoint, and polling recovery w
   await expect(page.locator('#flowHost')).toContainText('连接已恢复');
 });
 
+test('flow console keeps long node content readable and lets users inspect every phase', async ({ page }) => {
+  await page.goto('/?demo=1');
+  await page.setViewportSize({width: 920, height: 900});
+  await page.evaluate(() => {
+    const id='flow-readable';
+    S.jobs=[{job_id:id,name:'长节点展示测试',state:'running',current_action:'正在分章撰写',
+      last_activity_at:new Date().toISOString(),flow:{version:2,current_phase:'write',recoverable:true,
+        current_action:'正在撰写第三章技术方案，同时核对评分点、废标条款、人员配置和交付验收证据',
+        checkpoint:{step:6,label:'响应矩阵已完成'},phases:[
+          {id:'environment',label:'环境准备',state:'done',detail:'已验证完成',evidence:'preflight.json'},
+          {id:'parse',label:'招标解析',state:'done',detail:'已识别 248 页正文、16 张表格与 37 个评分点',evidence:'招标文件、图片索引、组成与格式规范'},
+          {id:'plan',label:'响应规划',state:'done',detail:'评分点、废标项、偏离表和章节责任已绑定到具体交付位置',evidence:'评分废标索引与响应矩阵'},
+          {id:'write',label:'并行撰写',state:'active',detail:'正在撰写第三章技术方案，同时核对评分点、废标条款、人员配置和交付验收证据',
+            evidence:'章节稿、逐条响应记录、技术偏离表、商务偏离表',elapsed_seconds:371,expected_seconds:600,remaining_seconds:229,
+            checks:[
+              {id:'chapter_write:1',label:'第一章 投标响应总体设计与项目理解',state:'done',detail:'已完成 · 实际 2分17秒'},
+              {id:'chapter_write:2',label:'第二章 系统功能、架构与接口方案',state:'done',detail:'已完成 · 实际 3分41秒'},
+              {id:'chapter_write:3',label:'第三章 实施交付、进度、质量和安全保障方案',state:'active',detail:'第 1/3 次 · 已用 71 秒 · 正在持续写入检查点'},
+              {id:'chapter_write:4',label:'第四章 运维服务、应急响应与验收保障',state:'attention',detail:'第 1/3 次 · 等待同批节点释放连接'}]},
+          {id:'assemble',label:'Word 装配',state:'pending',detail:'等待汇总和装配',evidence:'正文与配图复核记录'},
+          {id:'deliver',label:'交付质检',state:'pending',detail:'等待交付检查',evidence:'自检报告与最终 Word'}]}}];
+    S.active=id;S.processView[id]=true;S.streamState[id]={mode:'connected',failures:0};
+    renderMain();renderFlowConsole();
+  });
+
+  const detail=page.locator('#flowHost .flow-detail');
+  await expect(detail).toBeVisible();
+  await expect(detail.locator('.flow-detail-title')).toContainText('并行撰写');
+  await expect(detail.locator('.flow-detail-summary')).toHaveText('正在撰写第三章技术方案，同时核对评分点、废标条款、人员配置和交付验收证据');
+  await expect(detail).toContainText('章节稿、逐条响应记录、技术偏离表、商务偏离表');
+  await expect(detail.locator('.flow-node-row')).toHaveCount(4);
+  await expect(detail).toContainText('第三章 实施交付、进度、质量和安全保障方案');
+  const summaryLayout=await detail.locator('.flow-detail-summary').evaluate(node=>({
+    clamp:getComputedStyle(node).getPropertyValue('-webkit-line-clamp'),
+    hidden:node.scrollHeight>node.clientHeight+1,
+  }));
+  expect(summaryLayout.clamp).toBe('none');
+  expect(summaryLayout.hidden).toBe(false);
+
+  await page.locator('#flowHost .flow-phase[data-phase="plan"]').click();
+  await expect(detail.locator('.flow-detail-title')).toContainText('响应规划');
+  await expect(detail.locator('.flow-detail-summary')).toContainText('偏离表和章节责任已绑定到具体交付位置');
+  await expect(detail).toContainText('评分废标索引与响应矩阵');
+  const box=await detail.boundingBox();
+  expect(box.x+box.width).toBeLessThanOrEqual(920);
+});
+
 test('stable mode explains disabled pause and runtime fallback keeps technical text in diagnostics', async ({ page }) => {
   await page.goto('/?demo=1');
   await page.evaluate(() => {

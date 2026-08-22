@@ -790,7 +790,7 @@ mod engine_sidecar_tests {
 
     #[test]
     fn newer_or_non_numeric_bid_dog_engine_is_not_replaced_by_an_older_shell() {
-        for version in ["0.20.1", "1.0.0", "development-build"] {
+        for version in ["0.20.2", "1.0.0", "development-build"] {
             let health = serde_json::json!({
                 "ok": true,
                 "version": version,

@@ -16,6 +16,18 @@ def _chat_delta(text):
     ).replace("'", '"').encode("utf-8")
 
 
+def test_relay_records_when_execution_shell_drops_local_authorization(engine):
+    with TestClient(engine.app) as client:
+        result = client.post(
+            "/v1/relay/chat/completions",
+            json={"model": "senseaudio-s2", "messages": []},
+        )
+
+    assert result.status_code == 401
+    assert engine.RELAY_LAST["mode"] == "auth"
+    assert "未携带本机中继凭据" in engine.RELAY_LAST["error"]
+
+
 def test_streaming_relay_flushes_each_available_upstream_chunk_without_waiting_for_8kb(engine):
     """A slow model may emit tiny SSE frames; the relay must forward them immediately."""
     frames = [b"data: first\n\n", b"data: second\n\n", b""]

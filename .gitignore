@@ -10,6 +10,7 @@ tests/acceptance-results-*.md
 dist/
 build/
 *.spec
+!server/bid-engine.spec
 app/src-tauri/binaries/
 server/dist/
 server/build/

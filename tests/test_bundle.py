@@ -111,3 +111,10 @@ def test_desktop_release_opener_is_allowlisted(engine, monkeypatch):
     assert bad.status_code == 400
     assert good.status_code == 200
     assert opened == ["https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.18.2"]
+
+
+def test_local_pyinstaller_spec_bundles_skill_archive_like_ci():
+    root = Path(__file__).resolve().parents[1]
+    spec = (root / "server" / "bid-engine.spec").read_text(encoding="utf-8")
+
+    assert "bidmultiagenttao_v5.3.zip" in spec

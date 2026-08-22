@@ -2,6 +2,7 @@ from pathlib import Path
 import threading
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from conftest import events
@@ -38,6 +39,53 @@ def test_default_generation_preflight_checks_opencode_without_sowork(engine, job
     assert result["repair"] == "opencode"
     assert result["checks"][-1]["id"] == "runtime"
     assert result["checks"][-1]["status"] == "repairing"
+
+
+def test_bootstrap_checks_report_generation_ready_with_estimates_and_actions(engine, tmp_path, monkeypatch):
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# rules\n", encoding="utf-8")
+    conf = _checkpoint_config(engine)
+    conf["engine"]["skill_dir"] = str(skill)
+    engine.write_json(engine.conf_path(), conf)
+    monkeypatch.setattr(engine, "resolve_cli", lambda name, _eng=None: "/managed/opencode" if name == "opencode" else None)
+
+    with TestClient(engine.app) as client:
+        response = client.get("/v1/bootstrap/checks")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["ready_for_generation"] is True
+    assert [item["id"] for item in body["checks"]] == [
+        "storage", "parsers", "skill", "runtime", "connection"
+    ]
+    assert all(item["status"] == "pass" for item in body["checks"])
+    assert all(item["estimate_seconds"][0] <= item["estimate_seconds"][1] for item in body["checks"])
+    assert all(set(item["repair"]) == {"kind", "action", "label"} for item in body["checks"])
+
+
+def test_bootstrap_checks_make_missing_opencode_repairable_without_hiding_other_results(engine, tmp_path, monkeypatch):
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# rules\n", encoding="utf-8")
+    conf = _checkpoint_config(engine)
+    conf["engine"]["skill_dir"] = str(skill)
+    engine.write_json(engine.conf_path(), conf)
+    monkeypatch.setattr(engine, "resolve_cli", lambda *_args, **_kwargs: None)
+
+    with TestClient(engine.app) as client:
+        body = client.get("/v1/bootstrap/checks").json()
+
+    by_id = {item["id"]: item for item in body["checks"]}
+    assert body["status"] == "repairable"
+    assert body["ready_for_generation"] is False
+    assert by_id["runtime"]["status"] == "repairable"
+    assert by_id["runtime"]["repair"] == {
+        "kind": "automatic", "action": "repair_opencode", "label": "一键修复生成组件"
+    }
+    assert by_id["storage"]["status"] == "pass"
+    assert by_id["connection"]["status"] == "pass"
 
 
 def test_missing_default_shell_repairs_inside_job_and_rechecks_path(engine, job, monkeypatch):
@@ -249,9 +297,362 @@ def test_s2_launch_uses_checkpoint_pipeline_instead_of_legacy_long_session(engin
     assert started and started[0][2] is engine.generation_pipeline_worker
     state = engine.generation_pipeline.load(job)
     assert state["mode"] == "fast"
+    manifest = engine.read_json(str(job / "任务.json"), {}).get("skill_manifest") or {}
+    assert manifest.get("run_id") == engine.read_json(str(job / "任务.json"), {}).get("run_id")
+    assert manifest.get("manifest_sha256")
+    assert manifest.get("execution_path") == "opencode"
     assert [node["title"] for node in state["nodes"] if node["id"].startswith("chapter_write:")] == [
         "项目理解", "实施方案", "技术应答偏离表", "商务偏离表",
     ]
+
+
+def test_model_node_uses_non_stream_completion_and_injects_skill_contract(
+    engine, tmp_path, monkeypatch
+):
+    job = Path(engine.jpath("direct-model-node"))
+    job.mkdir(parents=True)
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "# 投标写作规则\n\n不得编造资质；未知事实标记为需补充。\n", encoding="utf-8"
+    )
+    conf = _checkpoint_config(engine)
+    conf["engine"]["skill_dir"] = str(skill_dir)
+    engine.write_json(engine.conf_path(), conf)
+    engine.write_json(str(job / "任务.json"), {
+        "name": "直连节点", "run_id": "run-direct", "tender": "采购文件.md",
+    })
+    engine._set_skill_manifest(
+        str(job), str(skill_dir), "direct-model", True, "direct_model_completion"
+    )
+    (job / "招标文件_解析版.md").write_text(
+        "# 采购要求\n\n必须提供实施、验收与运维方案。", encoding="utf-8"
+    )
+    captured = {}
+
+    def fake_openai(base, key, path, payload=None, **kwargs):
+        captured.update({"base": base, "key": key, "path": path,
+                         "payload": payload, "kwargs": kwargs})
+        return {"choices": [{"finish_reason": "stop", "message": {"content": (
+            '# 实施方案\n\n' + '逐项响应招标文件并提供实施、验收和运维安排。' * 20
+        )}}]}
+
+    monkeypatch.setattr(engine, "_openai_req", fake_openai)
+    monkeypatch.setattr(
+        engine, "_pipeline_declared_input_names",
+        lambda *_args, **_kwargs: ["招标文件_解析版.md"],
+    )
+    monkeypatch.setattr(
+        engine, "oc_serve", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("direct model nodes must not start OpenCode")
+        )
+    )
+    node = {
+        "id": "chapter_write:01", "title": "实施方案", "outputs": ["章节_01.md"],
+        "min_chars": 120, "attempt": 1, "attempt_serial": 1,
+    }
+
+    engine._pipeline_model_runner(
+        str(job), node, "必须使用 write/edit 工具写文件。", engine.S2_DEFAULT_MODEL
+    )
+
+    assert captured["path"] == "/chat/completions"
+    assert captured["payload"]["stream"] is False
+    assert captured["payload"]["model"] == engine.S2_DEFAULT_MODEL
+    assert captured["payload"]["max_tokens"] == 4800
+    assert "不得编造资质" in captured["payload"]["messages"][0]["content"]
+    assert "至少 2500 个中文字符" in captured["payload"]["messages"][1]["content"]
+    assert "禁止反复使用“信息项｜内容”" in captured["payload"]["messages"][1]["content"]
+    assert "write/edit" not in captured["payload"]["messages"][1]["content"]
+    assert (job / "章节_01.md").is_file()
+    assert engine.skill_evidence(str(job))["state"] == "verified"
+
+
+def test_truncated_chapter_continues_once_without_discarding_first_response(
+    engine, tmp_path, monkeypatch
+):
+    job = Path(engine.jpath("continued-model-node"))
+    job.mkdir(parents=True)
+    skill_dir = tmp_path / "continued-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "# 投标写作规则\n\n逐项响应，未知事实标记为需补充。\n", encoding="utf-8"
+    )
+    conf = _checkpoint_config(engine)
+    conf["engine"]["skill_dir"] = str(skill_dir)
+    engine.write_json(engine.conf_path(), conf)
+    engine.write_json(str(job / "任务.json"), {
+        "name": "断点续写", "run_id": "run-continued", "tender": "采购文件.md",
+    })
+    engine._set_skill_manifest(
+        str(job), str(skill_dir), "continued-model", True, "direct_model_completion"
+    )
+    (job / "招标文件_解析版.md").write_text(
+        "# 采购要求\n\n必须提供完整实施、验收与运维方案。", encoding="utf-8"
+    )
+    calls = []
+    first = "# 实施方案\n\n" + "第一部分逐项响应招标要求，并给出验收依据。" * 140
+    second = "## 运维与验收\n\n第二部分补齐运维安排和量化验收标准。" * 12
+
+    def fake_openai(_base, _key, _path, payload=None, **_kwargs):
+        calls.append(payload)
+        if len(calls) == 1:
+            return {"choices": [{"finish_reason": "length", "message": {"content": first}}]}
+        return {"choices": [{"finish_reason": "stop", "message": {"content": second}}]}
+
+    monkeypatch.setattr(engine, "_openai_req", fake_openai)
+    monkeypatch.setattr(
+        engine, "_pipeline_declared_input_names",
+        lambda *_args, **_kwargs: ["招标文件_解析版.md"],
+    )
+    node = {
+        "id": "chapter_write:01", "title": "实施方案", "outputs": ["章节_01.md"],
+        "min_chars": 120, "attempt": 1, "attempt_serial": 1,
+    }
+
+    engine._pipeline_model_runner(
+        str(job), node, "撰写完整实施方案。", engine.S2_DEFAULT_MODEL
+    )
+
+    body = (job / "章节_01.md").read_text(encoding="utf-8")
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 4800
+    assert calls[1]["max_tokens"] == 2400
+    assert "第一部分逐项响应" in body
+    assert "第二部分补齐" in body
+    assert "不要重复已经完成的内容" in calls[1]["messages"][-1]["content"]
+
+
+def test_response_plan_is_built_locally_without_calling_the_model(
+    engine, tmp_path, monkeypatch
+):
+    job = Path(engine.jpath("local-response-plan"))
+    job.mkdir(parents=True)
+    skill_dir = tmp_path / "local-plan-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "# 投标写作规则\n\n评分点和废标风险必须逐项核对，不得编造资质。\n", encoding="utf-8"
+    )
+    conf = _checkpoint_config(engine)
+    conf["engine"]["skill_dir"] = str(skill_dir)
+    engine.write_json(engine.conf_path(), conf)
+    engine.write_json(str(job / "任务.json"), {
+        "name": "本地响应规划", "run_id": "run-local-plan", "tender": "采购文件.md",
+    })
+    engine.generation_pipeline.initialize(
+        job, run_id="run-local-plan", mode="fast",
+        model_routes={"fast": engine.S2_DEFAULT_MODEL, "quality": engine.S2_QUALITY_MODEL},
+        chapters=[
+            {"id": "01", "title": "项目理解", "output": "章节_01_项目理解.md"},
+            {"id": "02", "title": "实施验收", "output": "章节_02_实施验收.md"},
+        ],
+    )
+    (job / "招标文件_解析版.md").write_text(
+        "# 采购要求\n\n必须提供实施和验收方案。\n\n如弄虚作假，将取消投标资格。\n",
+        encoding="utf-8",
+    )
+    engine._set_skill_manifest(
+        str(job), str(skill_dir), "local-plan", True, "direct_model_completion"
+    )
+    node = next(
+        item for item in engine.generation_pipeline.load(job)["nodes"]
+        if item["id"] == "response_plan"
+    )
+    node.update({"attempt": 1, "attempt_serial": 1})
+    monkeypatch.setattr(
+        engine, "_openai_req",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("response planning must be deterministic and local")
+        ),
+    )
+
+    engine._pipeline_model_runner(
+        str(job), node, "提取响应规划", engine.S2_DEFAULT_MODEL
+    )
+
+    plan = engine.read_json(str(job / "response_plan.json"), {})
+    assert [item["title"] for item in plan["chapters"]] == ["项目理解", "实施验收"]
+    assert "取消投标资格" in (job / "废标风险清单.md").read_text(encoding="utf-8")
+    assert (job / "评分点响应矩阵.md").is_file()
+    assert engine.skill_evidence(str(job))["state"] == "verified"
+
+
+def test_pipeline_retry_message_reports_output_contract_failure_instead_of_connection(
+    engine, monkeypatch
+):
+    emitted = []
+    monkeypatch.setattr(engine, "emit", lambda _job, event: emitted.append(event))
+
+    engine._pipeline_event("/tmp/job", "retry", {
+        "id": "chapter_write:01", "title": "项目理解", "attempt": 1,
+        "max_attempts": 3, "error_code": "model_output_truncated",
+    })
+
+    assert "输出过长" in emitted[0]["text"]
+    assert "连接中断" not in emitted[0]["text"]
+
+
+def test_truncated_markdown_keeps_complete_body_and_drops_incomplete_tail(engine):
+    body = (
+        "# 实施方案\n\n"
+        + "本节逐项响应招标要求，明确实施动作与验收依据。" * 50
+        + "\n\n## 未完成的小节\n\n这是被长度上限截断的半句"
+    )
+
+    accepted = engine._pipeline_complete_truncated_markdown(body, min_chars=120)
+
+    assert accepted.endswith("。")
+    assert "这是被长度上限截断的半句" not in accepted
+    assert engine._pipeline_complete_truncated_markdown("内容过短", min_chars=120) == ""
+
+
+def test_unverified_bidder_fact_claims_are_marked_without_breaking_tables(engine):
+    body = (
+        "我方具备大型系统集成经验，近三年完成三项类似工程。\n\n"
+        "| 序号 | 响应 | 证据 |\n|---|---|---|\n"
+        "| 1 | 我方拥有广泛的金融客户群 | 案例证明 |\n"
+        "| 2 | 我方在过去三年完成三项类似项目 | 合同与验收材料〔需补充〕 |\n"
+        "我方注册资本为〔需补充〕万元。\n"
+    )
+
+    safe = engine._pipeline_mark_unverified_claims(body)
+
+    assert safe.count("〔需补充：请核实本项投标人事实并提供证据〕") == 4
+    assert "| 1 | 〔需补充：请核实本项投标人事实并提供证据〕我方拥有" in safe
+    assert "| 2 | 〔需补充：请核实本项投标人事实并提供证据〕我方在过去三年" in safe
+    assert "〔需补充：请核实本项投标人事实并提供证据〕我方注册资本为〔需补充〕万元" in safe
+
+
+def test_later_unverified_claim_is_not_protected_by_earlier_marker(engine):
+    body = "客户资料〔需补充〕；我方具有一级资质，公司拥有全国服务网络，我方持有安全认证。"
+
+    safe = engine._pipeline_mark_unverified_claims(body)
+
+    assert "〔需补充：请核实本项投标人事实并提供证据〕我方具有一级资质" in safe
+    assert "〔需补充：请核实本项投标人事实并提供证据〕公司拥有全国服务网络" in safe
+    assert "〔需补充：请核实本项投标人事实并提供证据〕我方持有安全认证" in safe
+
+
+def test_standard_pipeline_preserves_model_review_as_separate_artifact(engine, job):
+    state = engine.generation_pipeline.initialize(
+        job, run_id="standard-review", mode="standard",
+        model_routes={"fast": engine.S2_DEFAULT_MODEL, "quality": engine.S2_QUALITY_MODEL},
+        chapters=[{"id": "01", "title": "项目理解", "output": "章节_01.md"}],
+    )
+
+    review = next(node for node in state["nodes"] if node["id"] == "quality_review")
+    assert review["outputs"] == ["模型复核报告.md"]
+
+
+def test_resumed_pipeline_rejects_changed_gateway_or_key(engine, job):
+    state = engine.generation_pipeline.initialize(
+        job, run_id="frozen-transport", mode="fast",
+        model_routes={"fast": engine.S2_DEFAULT_MODEL, "quality": engine.S2_QUALITY_MODEL},
+        chapters=[{"id": "01", "title": "项目理解", "output": "章节_01.md"}],
+        credential_fingerprint=engine.generation_pipeline.credential_fingerprint("old-key"),
+        base_url="https://gateway.example/v1",
+    )
+    assert state["model_routes"]["base_url"] == "https://gateway.example/v1"
+
+    with pytest.raises(engine.generation_pipeline.NodeExecutionError) as exc:
+        engine._pipeline_validate_execution_contract(job, {
+            "base_url": "https://gateway.example/v1", "api_key": "new-key"
+        })
+
+    assert exc.value.code == "execution_contract_changed"
+
+
+def test_repeated_generic_table_headers_are_specialized_by_section(engine):
+    body = """# 第一章 资格响应
+
+## 案例一
+| 信息项 | 内容 |
+|---|---|
+| 客户 | 〔需补充〕 |
+
+## 案例二
+| 信息项 | 内容 |
+|---|---|
+| 客户 | 〔需补充〕 |
+
+## 公司基本情况
+| 信息项 | 内容 |
+|---|---|
+| 名称 | 〔需补充〕 |
+"""
+
+    safe = engine._pipeline_specialize_repeated_table_headers(body)
+
+    assert "| 信息项 | 内容 |" not in safe
+    assert "| 案例一信息项 | 待补充/响应内容 |" in safe
+    assert "| 案例二信息项 | 待补充/响应内容 |" in safe
+    assert "| 公司基本情况信息项 | 待补充/响应内容 |" in safe
+
+
+def test_compact_response_plan_is_expanded_to_four_valid_checkpoint_files(engine, tmp_path):
+    job = tmp_path / "compact-plan"
+    job.mkdir()
+    engine.generation_pipeline.initialize(
+        job, run_id="run-plan", mode="fast",
+        model_routes={"fast": engine.S2_DEFAULT_MODEL, "quality": engine.S2_QUALITY_MODEL},
+        chapters=[
+            {"id": "01", "title": "项目理解与总体方案", "output": "章节_01_总体方案.md"},
+            {"id": "02", "title": "实施与验收", "output": "章节_02_实施验收.md"},
+        ],
+    )
+    node = next(item for item in engine.generation_pipeline.load(job)["nodes"]
+                if item["id"] == "response_plan")
+    attempt = engine.generation_pipeline.attempt_directory(job, {**node, "attempt": 1})
+    compact = {
+        "composition": ["投标函与资格证明", "技术响应文件", "商务响应与报价文件"],
+        "scoring_points": [{
+            "requirement": "总体方案完整性", "score": "未知", "location": "项目理解与总体方案",
+            "evidence": "方案正文", "gap": "〔需补充〕最终评分分值",
+        }],
+        "risks": [{
+            "category": "资格", "requirement": "提供有效营业执照", "risk": "缺失可能废标",
+            "action": "提交前人工核验并盖章",
+        }],
+        "chapter_guidance": [{
+            "title": "项目理解与总体方案", "basis": ["采购需求"],
+            "scoring_points": ["总体方案完整性"], "material_slots": ["项目案例"],
+        }],
+    }
+
+    engine._pipeline_write_response_plan(str(job), str(attempt), compact)
+
+    engine.generation_pipeline.validate_outputs(attempt, node)
+    plan = engine.read_json(str(attempt / "response_plan.json"), {})
+    assert [item["id"] for item in plan["chapters"]] == ["01", "02"]
+    assert "总体方案完整性" in (attempt / "评分点响应矩阵.md").read_text(encoding="utf-8")
+    assert "缺失可能废标" in (attempt / "废标风险清单.md").read_text(encoding="utf-8")
+
+
+def test_model_json_parser_skips_reasoning_braces_and_finds_fenced_contract(engine):
+    raw = (
+        '分析过程中的示例 {not-json} 不属于结果。\n'
+        '```json\n{"composition":["技术响应"],"scoring_points":[],"risks":[]}\n```\n'
+        '以上为结果。'
+    )
+
+    parsed = engine._pipeline_json_object(raw)
+
+    assert parsed["composition"] == ["技术响应"]
+
+
+def test_skill_contract_keeps_fact_boundaries_but_drops_tool_scripts(engine):
+    raw = (
+        '# 投标 Skill\n必须遵守事实边界，不得编造资质。\n'
+        '```python\nprint("tool script must not reach model")\n```\n'
+        '## 成本控制\n评分点和废标风险必须逐项核对。\n'
+        '## 边界\n未知客户事实标记为需补充。\n'
+    )
+
+    compiled = engine._pipeline_skill_contract(raw)
+
+    assert "不得编造资质" in compiled
+    assert "废标风险必须逐项核对" in compiled
+    assert "tool script must not reach model" not in compiled
 
 
 def test_pipeline_worker_runs_local_parse_short_nodes_and_word_checkpoint(engine, tmp_path, monkeypatch):

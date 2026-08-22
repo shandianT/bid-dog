@@ -32,7 +32,7 @@ def test_pipeline_initializes_bounded_nodes_and_freezes_fast_routes(tmp_path):
         base_url="https://gateway.example/v1",
     )
 
-    assert state["version"] == 1
+    assert state["version"] == pipeline.PIPELINE_VERSION
     assert state["run_id"] == "run-1"
     assert state["mode"] == "fast"
     assert state["state"] == "pending"
@@ -346,11 +346,39 @@ def test_standard_quality_node_uses_quality_route(tmp_path):
 
     def runner(node, _prompt, model):
         used.append((node["id"], model))
-        (tmp_path / "成品质检报告.md").write_text("# 复核\n" + "检查结论。" * 20, encoding="utf-8")
+        (tmp_path / "模型复核报告.md").write_text("# 复核\n" + "检查结论。" * 20, encoding="utf-8")
 
     pipeline.run_model_node(tmp_path, "quality_review", runner, prompt="复核整册")
 
     assert used == [("quality_review", "senseaudio-s2")]
+
+
+def test_v1_standard_pipeline_migrates_review_without_replaying_chapters(tmp_path):
+    state = pipeline.initialize(
+        tmp_path, run_id="legacy-standard", mode="standard",
+        model_routes={"fast": "deepseek-v4-flash", "quality": "senseaudio-s2"},
+        chapters=_chapters(),
+    )
+    state["version"] = 1
+    review = next(node for node in state["nodes"] if node["id"] == "quality_review")
+    review["outputs"] = ["成品质检报告.md"]
+    review["state"] = "done"
+    chapter = next(node for node in state["nodes"] if node["id"] == "chapter_write:01")
+    chapter["state"] = "done"
+    (tmp_path / "成品质检报告.md").write_text("# 模型复核\n\n旧版复核结论。", encoding="utf-8")
+    (tmp_path / pipeline.PIPELINE_FILE).write_text(
+        json.dumps(state, ensure_ascii=False), encoding="utf-8"
+    )
+
+    migrated = pipeline.migrate(tmp_path)
+
+    assert migrated["version"] == pipeline.PIPELINE_VERSION
+    assert next(node for node in migrated["nodes"] if node["id"] == "chapter_write:01")["state"] == "done"
+    migrated_review = next(node for node in migrated["nodes"] if node["id"] == "quality_review")
+    assert migrated_review["outputs"] == ["模型复核报告.md"]
+    assert migrated_review["state"] == "pending"
+    assert migrated_review["attempt"] == 0
+    assert not (tmp_path / "模型复核报告.md").exists()
 
 
 def test_attempt_outputs_are_validated_before_atomic_promotion(tmp_path):

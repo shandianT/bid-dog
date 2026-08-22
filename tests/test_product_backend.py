@@ -160,6 +160,25 @@ def test_delivery_summary_reports_word_toc_deviations_and_key_checks(engine, job
     assert delivery["ready"] is True
 
 
+def test_delivery_warning_allows_word_delivery_but_keeps_confirmation_status(engine, job):
+    word = job / "投标文件_技术标.docx"
+    _write_word(word, with_toc=True)
+    (job / "技术应答偏离表.md").write_text(
+        "|序号|要求|响应|\n|---|---|---|\n|1|技术要求|无偏离|\n", encoding="utf-8"
+    )
+    (job / "商务偏离表.md").write_text(
+        "|序号|要求|响应|\n|---|---|---|\n|1|商务要求|无偏离|\n", encoding="utf-8"
+    )
+
+    delivery = engine.delivery_summary(str(job), quality={
+        "status": "warning", "level": "yellow", "summary": "章节建议扩写",
+    })
+
+    assert delivery["ready"] is True
+    assert delivery["checks"]["status"] == "warning"
+    assert delivery["checks"]["level"] == "yellow"
+
+
 def test_delivery_summary_never_guesses_missing_toc_or_deviation_complete(engine, job):
     word = job / "投标文件_技术标.docx"
     _write_word(word, with_toc=False)
