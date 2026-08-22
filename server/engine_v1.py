@@ -35,7 +35,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.20.2'
+ENGINE_VERSION = '0.20.3'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -2130,7 +2130,7 @@ def _skill_manifest(run_id, skill_dir, dispatch, injected, execution_path):
             raw_bytes = open(os.path.join(skill_dir, '.skill_version'), 'rb').read(80)
             try: raw_version = raw_bytes.decode('ascii').strip()
             except UnicodeDecodeError: raw_version = ''
-            # 只允许明显的数字版本标签原样落盘（兼容内置 5.8 与标准 0.19.0）；
+            # 只允许明显的数字版本标签原样落盘（兼容内置技能版与标准产品版）；
             # PAT/Key/备注等任意 token 一律只留不可逆摘要。
             safe_version = re.fullmatch(
                 r'v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?'
@@ -4388,7 +4388,7 @@ def skill_dir_conf(conf=None):
     custom = eng.get('skill_dir') or os.environ.get('SKILL_DIR')
     return custom or ensure_skill()   # 托管默认目录必须走 ensure_skill:带版本标记,升级后自动刷新存量目录
 
-SKILL_VERSION = '5.8'   # 技能包内容版本:已解压目录比它旧(或无标记)时,用内置 zip 自动刷新
+SKILL_VERSION = '5.11'  # 技能包内容版本:表格全左对齐并清除字符缩进/语义列宽;存量目录自动刷新
 
 def ensure_skill():
     """内置技能包:首次运行自动解压到数据目录;版本升级后老目录自动刷新,修复能到存量用户手里"""
