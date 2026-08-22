@@ -835,6 +835,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 <script>
 /* ================= 连接与状态 ================= */
 const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(location.hostname);
+const IS_SOURCE_PREVIEW = location.protocol === 'file:';
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
 const BUNDLED_ENGINE_VERSION = '0.20.1';
@@ -1277,10 +1278,31 @@ function showDiagnosticDetail(detail){
   el('ovl').style.display='block';el('diagnosticSheet').style.display='flex';
   el('diagnosticDetailWrap').style.display=detail?'block':'none';el('diagnosticDetail').textContent=detail||'';
 }
+async function repairEngineFromDesktop(out){
+  if(IS_SOURCE_PREVIEW){
+    out.textContent='当前打开的是源码预览，浏览器没有启动系统进程的权限。\n请关闭此页，双击“应用程序”里的“中标狗.app”。';
+    el('diagnosticDetail').textContent='源码文件 app/src/index.html 只用于界面开发和预览，不包含 Tauri 桌面壳的引擎启动权限。';
+    el('diagnosticDetailWrap').style.display='block';return false;
+  }
+  const invoke=window.__TAURI__&&window.__TAURI__.core&&window.__TAURI__.core.invoke;
+  if(typeof invoke!=='function'){
+    out.textContent='当前页面没有桌面修复权限。\n请从“应用程序”启动中标狗，不要直接打开 index.html。';return false;
+  }
+  const r=await invoke('repair_local_engine');
+  out.textContent=(r.ok?'✓ ':'✗ ')+(r.message||'修复已执行');
+  el('diagnosticDetail').textContent=r.detail||JSON.stringify(r,null,2);el('diagnosticDetailWrap').style.display='block';
+  if(r.ok) setTimeout(async()=>{const h=await findEngine();if(h&&!S.online)await goOnline(h);},500);
+  return !!r.ok;
+}
 async function runDiagnostics(){
   showDiagnosticDetail((el('problemHost')&&el('problemHost')._detail)||'');
-  const out=el('diagnosticStatus'),btn=el('diagnosticRun');out.textContent='正在检查连接与当前任务…';btn.disabled=true;btn.textContent='诊断中…';
+  const out=el('diagnosticStatus'),btn=el('diagnosticRun'),repairMode=S.engineOffline===true;let repaired=false;
+  out.textContent=repairMode?'正在检查并修复本地引擎…':'正在检查连接与当前任务…';btn.disabled=true;btn.textContent=repairMode?'修复中…':'诊断中…';
   try{
+    if(repairMode){
+      repaired=await repairEngineFromDesktop(out);
+      return;
+    }
     const r=await api('/v1/diagnostics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:S.active||null})});
     const checks=Array.isArray(r.checks)?r.checks:(Array.isArray(r.items)?r.items:[]);
     const lines=checks.map(x=>{const v=diagnosticCheckView(x);return v.symbol+' '+(x.label||x.name||'检查项')+(x.summary||x.message?'：'+(x.summary||x.message):'');});
@@ -1289,8 +1311,8 @@ async function runDiagnostics(){
     const detail=r.technical_detail||r.detail||JSON.stringify(r,null,2);el('diagnosticDetail').textContent=detail;el('diagnosticDetailWrap').style.display='block';
   }catch(e){
     try{const h=await api('/v1/health');out.textContent='✓ 本地服务已连接\n△ 完整诊断暂不可用，请更新应用后重试';el('diagnosticDetail').textContent=JSON.stringify(h,null,2);el('diagnosticDetailWrap').style.display='block';}
-    catch(_){out.textContent='✗ 本地服务没有响应\n请退出应用后重新打开；任务文件不会丢失。';}
-  }finally{btn.disabled=false;btn.textContent='开始诊断';}
+    catch(_){S.online=false;out.textContent='本地服务没有响应，正在尝试安全重启…';repaired=await repairEngineFromDesktop(out);}
+  }finally{btn.disabled=false;btn.textContent=(repairMode&&!repaired)?'检查并修复':'开始诊断';}
 }
 function problemAction(act,param){
   const p=S.problems[S.active||'_global']||S.problems._global||{};
@@ -1315,8 +1337,9 @@ el('problemHost').addEventListener('click',e=>{const b=e.target.closest('[data-p
 async function findEngine(){
   let stale = null;
   for(const base of API_CANDIDATES){
+    const controller = new AbortController(), timer = setTimeout(()=>controller.abort(), 900);
     try{
-      const r = await fetch(base + '/v1/health', {cache:'no-store'});
+      const r = await fetch(base + '/v1/health', {cache:'no-store',signal:controller.signal});
       if(!r.ok) continue;
       const h = await r.json();
       const feats = h.features || [];
@@ -1324,6 +1347,7 @@ async function findEngine(){
       if(rightVersion && NEED_FEATURES.every(f => feats.indexOf(f) >= 0)){ API = base; S.stale = null; return h; }
       stale = stale || {base, h};
     }catch(e){}
+    finally{clearTimeout(timer);}
   }
   if(stale) S.stale = stale.h.version || '旧版';
   return null;
@@ -1361,8 +1385,9 @@ async function openUpdate(){
   document.body.appendChild(a); a.click(); a.remove();
 }
 async function goOnline(h){
-  S.online = true; S.engineVersion = h.version||'?';
+  S.online = true; S.engineOffline = false; S.engineVersion = h.version||'?';
   el('conn').textContent = '本地服务已连接'; el('demoTag').style.display='none';
+  el('heroSub').textContent = '把招标文件交给我,预检 → 分析 → 分章撰写 → 出 Word,全程可对话';
   el('brandDot').style.background = 'var(--green)';
   if(S.stale){
     el('conn').textContent = '本地服务需要更新';
@@ -1379,27 +1404,33 @@ async function goOnline(h){
   renderTasks(); renderMain(); showOnboarding(false);
 }
 function showEngineOffline(){
-  S.online = false;
-  el('conn').textContent = S.stale ? '本地服务需要更新' : '本地引擎未启动';
+  S.online = false; S.engineOffline = true;
+  el('conn').textContent = IS_SOURCE_PREVIEW ? '源码预览（未连接引擎）' : (S.stale ? '本地服务需要更新' : '本地引擎未启动');
   el('demoTag').style.display = 'block';
-  el('demoTag').textContent = S.stale
+  el('demoTag').textContent = IS_SOURCE_PREVIEW
+    ? '源码预览不能启动内置引擎'
+    : S.stale
     ? '检测到旧版引擎 · 正在安全切换到新版'
     : '本地引擎未启动 · 当前无法生成真实文件';
   el('brandDot').style.background = 'var(--amber)';
   el('sbR').textContent = isWin ? 'C:\\Users\\me\\Documents\\中标狗\\jobs' : '~/Documents/中标狗/jobs';
-  el('heroSub').textContent = S.stale
+  el('heroSub').textContent = IS_SOURCE_PREVIEW
+    ? '当前打开的是源码预览；请从“应用程序”启动中标狗桌面端'
+    : S.stale
     ? '旧引擎若还有任务会先安全收尾；完成后应用会自动连接新版，无需手动关进程'
     : '生成环境没有启动；应用会继续重连，也可以立即运行诊断查看缺失组件和启动路径';
   renderTasks(); renderMain();
   presentProblem({
     job_id:'_global',
     level:'error',
-    title:S.stale ? '本地生成引擎需要更新' : '本地生成引擎没有启动',
-    text:S.stale
+    title:IS_SOURCE_PREVIEW ? '当前打开的是源码预览' : (S.stale ? '本地生成引擎需要更新' : '本地生成引擎没有启动'),
+    text:IS_SOURCE_PREVIEW
+      ? '此页面只能预览界面，不具备启动或修复内置引擎的桌面权限。'
+      : S.stale
       ? '已验证为中标狗旧引擎，正在安全收尾并自动切换；不会强制中断仍在生成的任务。'
       : '安装包内置引擎没有成功启动，可能是安装不完整、被安全软件隔离，或启动路径不可用。',
-    detail:'桌面端会把启动路径和系统错误写入 engine-bootstrap.log；点击一键诊断可查看当前环境与修复建议。',
-    actions:[{act:'diagnose',label:'一键诊断'}]
+    detail:IS_SOURCE_PREVIEW ? '请关闭 index.html 预览页，双击“/应用程序/中标狗.app”。' : '桌面端会校验内置引擎身份，重启已确认属于本应用的无响应进程，并将结果写入 engine-bootstrap.log。',
+    actions:[{act:'diagnose',label:IS_SOURCE_PREVIEW?'查看打开方法':'检查并修复'}]
   });
 }
 async function boot(){

@@ -343,6 +343,20 @@ test('关键错误使用持久操作卡，并提供一键诊断与查看原因',
   assert.match(handle, /presentProblem/);
 });
 
+test('本地引擎离线时提供真正的桌面修复，源码预览不冒充安装包', () => {
+  expectHtml(/const IS_SOURCE_PREVIEW\s*=\s*location\.protocol\s*===\s*['"]file:['"]/);
+  const diagnostics = section('async function repairEngineFromDesktop(out)', 'function problemAction');
+  assert.match(diagnostics, /repair_local_engine/);
+  assert.match(diagnostics, /repairEngineFromDesktop/);
+  assert.match(diagnostics, /检查并修复/);
+  const offline = section('function showEngineOffline()', 'async function boot()');
+  assert.match(offline, /当前打开的是源码预览/);
+  assert.match(offline, /label:IS_SOURCE_PREVIEW\?'查看打开方法':'检查并修复'/);
+  const discovery = section('async function findEngine()', 'function applyHealthUpdate');
+  assert.match(discovery, /AbortController/);
+  assert.match(discovery, /clearTimeout/);
+});
+
 test('桌面、在线体验与站点应用三个前端副本保持完全一致', () => {
   assert.strictEqual(demoHtml, html, 'site/demo.html 与桌面前端发生漂移');
   assert.strictEqual(siteAppHtml, html, 'site/app/index.html 与桌面前端发生漂移');

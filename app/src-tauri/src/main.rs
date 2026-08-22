@@ -6,6 +6,7 @@ use desktop_state::{
     aggregate_progress, close_action, should_send_shutdown, CloseAction, JobNotification,
     JobSnapshot, NotificationKind, NotificationTracker, ProgressKind,
 };
+use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -33,6 +34,7 @@ const TRAY_QUIT_ID: &str = "quit-bid-dog";
 
 struct DesktopRuntime {
     engine: Mutex<Option<Child>>,
+    engine_starting: AtomicBool,
     trusted_engine: AtomicBool,
     primary_instance: AtomicBool,
     explicit_quit: AtomicBool,
@@ -45,6 +47,7 @@ impl Default for DesktopRuntime {
     fn default() -> Self {
         Self {
             engine: Mutex::new(None),
+            engine_starting: AtomicBool::new(false),
             trusted_engine: AtomicBool::new(false),
             primary_instance: AtomicBool::new(false),
             explicit_quit: AtomicBool::new(false),
@@ -68,6 +71,41 @@ enum EngineHandover {
     ReuseCurrent,
     ReplaceTrustedOld,
     BlockedForeign,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EngineRepairDecision {
+    ReuseCurrent,
+    ReplaceTrustedOld,
+    RestartOwned,
+    RestartVerifiedStale,
+    StartFresh,
+    BlockedUnverified,
+}
+
+fn classify_repair(
+    has_owned_child: bool,
+    busy: bool,
+    probe: Option<EngineHandover>,
+    has_verified_stale_listener: bool,
+) -> EngineRepairDecision {
+    match probe {
+        Some(EngineHandover::ReuseCurrent) => EngineRepairDecision::ReuseCurrent,
+        Some(EngineHandover::ReplaceTrustedOld) => EngineRepairDecision::ReplaceTrustedOld,
+        Some(EngineHandover::BlockedForeign) => EngineRepairDecision::BlockedUnverified,
+        None if has_owned_child => EngineRepairDecision::RestartOwned,
+        None if has_verified_stale_listener => EngineRepairDecision::RestartVerifiedStale,
+        None if !busy => EngineRepairDecision::StartFresh,
+        None => EngineRepairDecision::BlockedUnverified,
+    }
+}
+
+#[derive(Serialize)]
+struct EngineRepairResult {
+    ok: bool,
+    action: &'static str,
+    message: String,
+    detail: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -277,8 +315,34 @@ fn spawn_engine() -> Option<Child> {
 }
 
 fn spawn_and_store_engine(runtime: &DesktopRuntime, data: Option<&Path>) -> bool {
-    let spawned = spawn_engine();
-    let ready = spawned.is_some();
+    if runtime
+        .engine_starting
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        append_bootstrap_log(data, "已有引擎启动流程在进行，复用本次启动。");
+        return true;
+    }
+    struct StartingGuard<'a>(&'a AtomicBool);
+    impl Drop for StartingGuard<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+    let _starting = StartingGuard(&runtime.engine_starting);
+    let mut spawned = spawn_engine();
+    let mut ready = spawned.is_some();
+    if let Some(child) = spawned.as_mut() {
+        let started = std::time::Instant::now();
+        while started.elapsed() < Duration::from_secs(2) && !port_busy(ENGINE_PORT) {
+            if child.try_wait().ok().flatten().is_some() {
+                ready = false;
+                spawned = None;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
     if let Ok(mut child) = runtime.engine.lock() {
         *child = spawned;
     }
@@ -325,7 +389,10 @@ fn wait_for_port_then_spawn(
                     runtime.trusted_engine.store(true, Ordering::Release);
                     return;
                 }
-                append_bootstrap_log(data.as_deref(), "同版本引擎未确认桌面接管；等待端口安全释放。");
+                append_bootstrap_log(
+                    data.as_deref(),
+                    "同版本引擎未确认桌面接管；等待端口安全释放。",
+                );
             }
             _ => {
                 append_bootstrap_log(
@@ -361,7 +428,10 @@ fn start_engine_with_handover(runtime: Arc<DesktopRuntime>) {
                 runtime.trusted_engine.store(true, Ordering::Release);
                 append_bootstrap_log(data.as_deref(), "已连接同版本本地引擎，无需重复启动。");
             } else {
-                append_bootstrap_log(data.as_deref(), "同版本引擎未确认桌面接管；等待端口安全释放。");
+                append_bootstrap_log(
+                    data.as_deref(),
+                    "同版本引擎未确认桌面接管；等待端口安全释放。",
+                );
                 wait_for_port_then_spawn(runtime, data, false);
             }
         }
@@ -410,6 +480,336 @@ fn start_engine_with_handover(runtime: Arc<DesktopRuntime>) {
             wait_for_port_then_spawn(runtime, data, true);
         }
     }
+}
+
+fn wait_until_port_free(timeout: Duration) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < timeout {
+        if !port_busy(ENGINE_PORT) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    !port_busy(ENGINE_PORT)
+}
+
+fn wait_until_current_engine(timeout: Duration) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < timeout {
+        if matches!(
+            probe_engine(ENGINE_PORT),
+            Some((EngineHandover::ReuseCurrent, _))
+        ) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    false
+}
+
+fn parse_listener_pids(output: &str) -> Vec<u32> {
+    let mut pids = Vec::new();
+    for line in output.lines() {
+        if let Ok(pid) = line.trim().parse::<u32>() {
+            if pid > 0 && !pids.contains(&pid) {
+                pids.push(pid);
+            }
+        }
+    }
+    pids
+}
+
+#[cfg(target_os = "macos")]
+fn listening_pids(port: u16) -> Vec<u32> {
+    let port_arg = format!("-iTCP:{port}");
+    Command::new("/usr/sbin/lsof")
+        .args(["-nP", &port_arg, "-sTCP:LISTEN", "-t"])
+        .output()
+        .ok()
+        .map(|output| parse_listener_pids(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "windows")]
+fn listening_pids(port: u16) -> Vec<u32> {
+    let script = format!(
+        "(Get-NetTCPConnection -State Listen -LocalPort {port} -ErrorAction SilentlyContinue).OwningProcess"
+    );
+    Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()
+        .map(|output| parse_listener_pids(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn listening_pids(_port: u16) -> Vec<u32> {
+    Vec::new()
+}
+
+#[cfg(target_os = "macos")]
+fn process_executable(pid: u32) -> Option<PathBuf> {
+    let pid_arg = pid.to_string();
+    let output = Command::new("/usr/sbin/lsof")
+        .args(["-a", "-p", &pid_arg, "-d", "txt", "-Fn"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('n').map(PathBuf::from))
+}
+
+#[cfg(target_os = "windows")]
+fn process_executable(pid: u32) -> Option<PathBuf> {
+    let script = format!(
+        "(Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\" -ErrorAction SilentlyContinue).ExecutablePath"
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()?;
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then(|| PathBuf::from(value))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn process_executable(_pid: u32) -> Option<PathBuf> {
+    None
+}
+
+fn same_executable(observed: &Path, expected: &Path) -> bool {
+    let observed = fs::canonicalize(observed).unwrap_or_else(|_| observed.to_path_buf());
+    let expected = fs::canonicalize(expected).unwrap_or_else(|_| expected.to_path_buf());
+    #[cfg(target_os = "windows")]
+    {
+        observed
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&expected.to_string_lossy())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        observed == expected
+    }
+}
+
+fn verified_stale_listener(expected: &Path) -> Option<(u32, PathBuf)> {
+    listening_pids(ENGINE_PORT).into_iter().find_map(|pid| {
+        let observed = process_executable(pid)?;
+        same_executable(&observed, expected).then_some((pid, observed))
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn terminate_verified_listener(pid: u32) -> bool {
+    Command::new("/bin/kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(target_os = "macos")]
+fn force_terminate_verified_listener(pid: u32) -> bool {
+    Command::new("/bin/kill")
+        .args(["-KILL", &pid.to_string()])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_verified_listener(pid: u32) -> bool {
+    Command::new("taskkill.exe")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(target_os = "windows")]
+fn force_terminate_verified_listener(pid: u32) -> bool {
+    terminate_verified_listener(pid)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn terminate_verified_listener(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn force_terminate_verified_listener(_pid: u32) -> bool {
+    false
+}
+
+fn repair_local_engine_blocking(runtime: &DesktopRuntime) -> EngineRepairResult {
+    let data = data_dir();
+    let has_owned_child = runtime
+        .engine
+        .lock()
+        .ok()
+        .is_some_and(|guard| guard.is_some());
+    let busy = port_busy(ENGINE_PORT);
+    let probed = probe_engine(ENGINE_PORT).map(|(decision, _)| decision);
+    let expected = std::env::current_exe()
+        .ok()
+        .and_then(|exe| resolve_engine_sidecar(&exe).ok());
+    let verified_stale = expected.as_deref().and_then(verified_stale_listener);
+    let decision = classify_repair(has_owned_child, busy, probed, verified_stale.is_some());
+
+    append_bootstrap_log(
+        data.as_deref(),
+        &format!("用户执行检查并修复: {decision:?}"),
+    );
+
+    match decision {
+        EngineRepairDecision::ReuseCurrent => {
+            let attached = attach_engine(ENGINE_PORT);
+            runtime.trusted_engine.store(attached, Ordering::Release);
+            return EngineRepairResult {
+                ok: attached,
+                action: if attached {
+                    "reconnected"
+                } else {
+                    "attach_failed"
+                },
+                message: if attached {
+                    "本地引擎正常，已重新连接。".into()
+                } else {
+                    "引擎已响应，但桌面端接管失败。".into()
+                },
+                detail: "已验证 127.0.0.1:18901 的版本和产品身份。".into(),
+            };
+        }
+        EngineRepairDecision::BlockedUnverified => {
+            append_bootstrap_log(
+                data.as_deref(),
+                "检查并修复未结束未验证的端口进程，避免误杀其他软件。",
+            );
+            return EngineRepairResult {
+                ok: false,
+                action: "blocked_unverified",
+                message: "18901 端口被无法验证身份的进程占用，为避免误关其他软件，未强制结束。".into(),
+                detail: "请先退出旧版中标狗；若仍未恢复，重启电脑后再打开当前版本。详情已写入 engine-bootstrap.log。".into(),
+            };
+        }
+        EngineRepairDecision::ReplaceTrustedOld => {
+            let accepted = engine_http_json(ENGINE_PORT, "POST", "/v1/shutdown")
+                .as_ref()
+                .and_then(shutdown_state)
+                .is_some();
+            if !accepted || !wait_until_port_free(Duration::from_secs(12)) {
+                return EngineRepairResult {
+                    ok: false,
+                    action: "waiting_for_old_engine",
+                    message: "旧版引擎正在安全收尾，不会强制中断正在生成的任务。".into(),
+                    detail: "收尾完成后应用会自动启动新版引擎。".into(),
+                };
+            }
+        }
+        EngineRepairDecision::RestartOwned => {
+            if let Ok(mut guard) = runtime.engine.lock() {
+                if let Some(mut child) = guard.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+            runtime.trusted_engine.store(false, Ordering::Release);
+            if !wait_until_port_free(Duration::from_secs(5)) {
+                return EngineRepairResult {
+                    ok: false,
+                    action: "restart_timeout",
+                    message: "已结束无响应的内置引擎，但端口没有及时释放。".into(),
+                    detail: "任务文件保留在本地；请退出应用后重新打开。".into(),
+                };
+            }
+        }
+        EngineRepairDecision::RestartVerifiedStale => {
+            let Some((pid, observed)) = verified_stale else {
+                return EngineRepairResult {
+                    ok: false,
+                    action: "stale_identity_changed",
+                    message: "端口进程身份在修复前发生变化，已停止自动处理。".into(),
+                    detail: "未结束任何无法验证的进程。".into(),
+                };
+            };
+            let still_same_engine = expected.as_deref().is_some_and(|expected| {
+                process_executable(pid)
+                    .as_deref()
+                    .is_some_and(|current| same_executable(current, expected))
+            });
+            if !still_same_engine {
+                return EngineRepairResult {
+                    ok: false,
+                    action: "stale_identity_changed",
+                    message: "端口进程身份在修复前发生变化，已停止自动处理。".into(),
+                    detail: "未结束任何无法验证的进程。".into(),
+                };
+            }
+            append_bootstrap_log(
+                data.as_deref(),
+                &format!(
+                    "已确认遗留引擎占用 {ENGINE_PORT}: pid={pid}, path={}",
+                    observed.display()
+                ),
+            );
+            let requested = terminate_verified_listener(pid);
+            let graceful = requested && wait_until_port_free(Duration::from_secs(3));
+            let still_verified = expected.as_deref().is_some_and(|expected| {
+                process_executable(pid)
+                    .as_deref()
+                    .is_some_and(|observed| same_executable(observed, expected))
+            });
+            let forced = !graceful
+                && still_verified
+                && force_terminate_verified_listener(pid)
+                && wait_until_port_free(Duration::from_secs(5));
+            if !graceful && !forced {
+                return EngineRepairResult {
+                    ok: false,
+                    action: "stale_process_did_not_exit",
+                    message: "已确认是中标狗遗留引擎，但进程未及时退出。".into(),
+                    detail: "请退出所有中标狗窗口后重试；任务文件不会删除。".into(),
+                };
+            }
+        }
+        EngineRepairDecision::StartFresh => {}
+    }
+
+    if !spawn_and_store_engine(runtime, data.as_deref()) {
+        return EngineRepairResult {
+            ok: false,
+            action: "spawn_failed",
+            message: "内置引擎重新启动失败。".into(),
+            detail: "请查看 engine-bootstrap.log 中记录的实际启动路径和系统错误。".into(),
+        };
+    }
+    let ready = wait_until_current_engine(Duration::from_secs(30));
+    if ready {
+        let _ = attach_engine(ENGINE_PORT);
+        runtime.trusted_engine.store(true, Ordering::Release);
+    }
+    EngineRepairResult {
+        ok: ready,
+        action: if ready { "restarted" } else { "health_timeout" },
+        message: if ready {
+            "已重启内置引擎并通过健康检查，正在恢复任务连接。".into()
+        } else {
+            "内置引擎已启动，但 30 秒内未通过健康检查。".into()
+        },
+        detail: if ready {
+            "任务文件和已生成内容均未删除。".into()
+        } else {
+            "请查看 engine.log 与 engine-bootstrap.log。".into()
+        },
+    }
+}
+
+#[tauri::command]
+async fn repair_local_engine(
+    runtime: tauri::State<'_, Arc<DesktopRuntime>>,
+) -> Result<EngineRepairResult, String> {
+    let runtime = runtime.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || repair_local_engine_blocking(&runtime))
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// 关窗时先礼后兵:请引擎自己收尾。
@@ -601,11 +1001,14 @@ fn shutdown_owned_engine(runtime: &DesktopRuntime) {
 
 fn main() {
     let runtime = Arc::new(DesktopRuntime::default());
+    let managed_runtime = runtime.clone();
     let setup_runtime = runtime.clone();
     let window_runtime = runtime.clone();
     let exit_runtime = runtime.clone();
 
     tauri::Builder::default()
+        .manage(managed_runtime)
+        .invoke_handler(tauri::generate_handler![repair_local_engine])
         // Keep this first. Secondary processes are terminated before setup, so they can
         // neither spawn an engine nor enter this process's shutdown path.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -863,5 +1266,33 @@ mod engine_sidecar_tests {
 
         assert!(!runtime.trusted_engine.load(Ordering::Acquire));
         assert!(runtime.shutdown_sent.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn repair_restarts_only_an_owned_unhealthy_engine() {
+        assert_eq!(
+            classify_repair(true, true, None, false),
+            EngineRepairDecision::RestartOwned
+        );
+        assert_eq!(
+            classify_repair(false, true, None, true),
+            EngineRepairDecision::RestartVerifiedStale
+        );
+        assert_eq!(
+            classify_repair(false, true, None, false),
+            EngineRepairDecision::BlockedUnverified
+        );
+        assert_eq!(
+            classify_repair(false, true, Some(EngineHandover::BlockedForeign), true),
+            EngineRepairDecision::BlockedUnverified
+        );
+    }
+
+    #[test]
+    fn listener_pid_parser_ignores_noise_and_duplicates() {
+        assert_eq!(
+            parse_listener_pids("123\nnoise\n456\n123\n"),
+            vec![123, 456]
+        );
     }
 }

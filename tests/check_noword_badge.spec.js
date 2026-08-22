@@ -274,7 +274,7 @@ test('one-click diagnostics becomes visible immediately above the problem card',
   expect(layers.diagnostic).toBeGreaterThan(layers.problem);
 });
 
-test('desktop engine startup failure is visible and offers diagnostics instead of silent demo mode', async ({ page }) => {
+test('desktop engine startup failure is visible and offers repair instead of silent demo mode', async ({ page }) => {
   await page.goto('/?demo=1');
   await page.evaluate(() => {
     S.active = 'running-job';
@@ -284,7 +284,7 @@ test('desktop engine startup failure is visible and offers diagnostics instead o
   await expect(page.locator('#conn')).toContainText('本地引擎未启动');
   await expect(page.locator('#demoTag')).toContainText('无法生成真实文件');
   await expect(page.locator('#problemHost')).toContainText('本地生成方式没有启动');
-  await expect(page.locator('#problemHost').getByRole('button', {name:'一键诊断'})).toBeVisible();
+  await expect(page.locator('#problemHost').getByRole('button', {name:'检查并修复'})).toBeVisible();
   await expect(page.locator('#heroSub')).not.toContainText('流程可完整体验');
 
   const problemScopes = await page.evaluate(() => Object.keys(S.problems));
@@ -296,6 +296,35 @@ test('desktop engine startup failure is visible and offers diagnostics instead o
     renderProblem();
   });
   await expect(page.locator('#problemHost')).toBeHidden();
+});
+
+test('desktop repair button invokes the native shell and shows the actual result', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__repairCalls = 0;
+    window.__TAURI__ = {core:{invoke: async command => {
+      window.__repairCalls += 1;
+      if(command !== 'repair_local_engine') throw new Error('unexpected command');
+      return {ok:true,action:'restarted',message:'已重启内置引擎并通过健康检查',detail:'任务文件均未删除'};
+    }}};
+  });
+  await page.goto('/?demo=1');
+  await page.evaluate(() => showEngineOffline());
+
+  await page.locator('#problemHost').getByRole('button',{name:'检查并修复'}).click();
+
+  await expect(page.locator('#diagnosticStatus')).toContainText('已重启内置引擎');
+  await expect(page.locator('#diagnosticRun')).toHaveText('开始诊断');
+  expect(await page.evaluate(() => window.__repairCalls)).toBe(1);
+});
+
+test('an old listener that accepts connections but never replies cannot trap boot forever', async ({ page }) => {
+  await page.route('**/v1/health', async () => {
+    await new Promise(resolve => setTimeout(resolve, 20_000));
+  });
+  await page.goto('/');
+
+  await expect(page.locator('#problemHost').getByRole('button',{name:'检查并修复'})).toBeVisible({timeout:15_000});
+  await expect(page.locator('#conn')).toContainText('本地引擎未启动');
 });
 
 test('uploaded bid can be reviewed, saved as a complete template, and used by a staged job', async ({ page }) => {
