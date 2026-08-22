@@ -86,6 +86,7 @@ def test_release_assets_are_explicit_and_published_releases_are_immutable(engine
     assert "out/bid-dog_%s_aarch64.dmg" % version in workflow
     assert "out/bid-dog_%s_x64-setup.exe" % version in workflow
     assert "out/SHA256SUMS" in workflow
+    assert '- "**/*.md"' in workflow
 
 
 def test_commercial_macos_signing_imports_identity_before_building_the_engine(engine):
