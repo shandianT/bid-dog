@@ -20,6 +20,11 @@ def test_user_visible_copyright_statement_is_present_in_all_frontend_copies():
         "app/src/index.html",
         "site/demo.html",
         "site/app/index.html",
-        "site/index.html",
     ):
         assert "© 2026 张家涛" in (ROOT / relative).read_text(encoding="utf-8")
+
+    homepage = (ROOT / "site/index.html").read_text(encoding="utf-8")
+    assert "中标狗 · 作者 FDE 家涛" in homepage
+    assert "https://avatars.githubusercontent.com/u/106303992?v=4" in homepage
+    assert 'aria-label="Orcastao 的 GitHub 主页"' in homepage
+    assert "GitHub · shandianT" not in homepage
