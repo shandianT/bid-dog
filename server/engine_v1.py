@@ -112,7 +112,10 @@ def ensure_preset():
 app = FastAPI(title='bid-dog-engine')
 _DESKTOP_ORIGINS = {'tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'}
 _DESKTOP_ORIGINS.update(x.strip() for x in os.environ.get('BID_ALLOWED_ORIGINS', '').split(',') if x.strip())
-_LOOPBACK_ORIGIN = re.compile(r'^https?://(?:127\.0\.0\.1|localhost)(?::\d+)?$', re.I)
+# *.localhost 整族按 RFC 6761/浏览器实现恒解析回环,放行它不增加 DNS 重绑定面。
+# 为什么需要:新前端(app-next)是 ES module,规范规定 module 脚本一律按 CORS 模式抓取,
+# 同源也带 Origin 头——tauri.localhost:端口 下的静态资源请求因此会进这道闸。
+_LOOPBACK_ORIGIN = re.compile(r'^https?://(?:127\.0\.0\.1|(?:[a-z0-9-]+\.)*localhost)(?::\d+)?$', re.I)
 
 def origin_allowed(origin):
     """只让本机页面/Tauri 壳跨域访问桌面引擎，阻断恶意网页读取 Key 或发起本机命令。"""
@@ -122,7 +125,7 @@ def origin_allowed(origin):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(_DESKTOP_ORIGINS),
-    allow_origin_regex=r'^https?://(?:127\.0\.0\.1|localhost)(?::\d+)?$',
+    allow_origin_regex=r'^https?://(?:127\.0\.0\.1|(?:[a-z0-9-]+\.)*localhost)(?::\d+)?$',
     allow_methods=['*'],
     allow_headers=['*'],
     expose_headers=['X-Request-ID'],

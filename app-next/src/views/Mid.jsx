@@ -99,7 +99,7 @@ function ChatMessages(){
   const options = q ? (q.options || []).slice() : [];
   if(q && options.length) options.push(ASK_SELF);
   return (
-    <div className="chatwrap" ref={boxRef}>
+    <div className="chatwrap" id="chatWrap" ref={boxRef}>
       {list.map((m, mi) => {
         if(m.role === 'sys') return <div className="sysline" key={mi}><span className="sdot2" />{m.text}</div>;
         const u = m.role === 'user';
@@ -157,7 +157,7 @@ function Worklog(){
   const live = (p0.pct || 0) < 100;
   return (
     <details className="wl" open={live}><summary>{live ? '⚙ 它正在做什么' : '⚙ 工作过程回放 · ' + wl.length + ' 行'}</summary>
-      <pre ref={preRef} onScroll={e => { const b = e.target; stickRef.current = b.scrollTop + b.clientHeight >= b.scrollHeight - 30; }}>{wl.join('\n')}</pre>
+      <pre id="wlBody" ref={preRef} onScroll={e => { const b = e.target; stickRef.current = b.scrollTop + b.clientHeight >= b.scrollHeight - 30; }}>{wl.join('\n')}</pre>
     </details>
   );
 }
@@ -171,13 +171,13 @@ export default function Mid(){
     <div id="chat" className="mid">
       {on && (
         <div className="cwrap"><div className="midtabs" id="midTabs">
-          {MID_TABS.map(([k, label]) => <button key={k} type="button" className={k === tab ? 'on' : ''}
+          {MID_TABS.map(([k, label]) => <button key={k} type="button" data-midtab={k} className={k === tab ? 'on' : ''}
             onClick={() => { S.midTab[id] = k; bump(); }}>{label}</button>)}
         </div></div>
       )}
       <div className="cwrap"><ConfirmCard /></div>
-      {on && tab === 'outline' && <div className="cwrap"><Outline /></div>}
-      {(!on || tab === 'flow') && <div className="cwrap"><FlowConsole /></div>}
+      {on && tab === 'outline' && <div className="cwrap" id="outlineHost"><Outline /></div>}
+      {(!on || tab === 'flow') && <div className="cwrap" id="flowHost"><FlowConsole /></div>}
       {(!on || tab === 'chat') && <div className="cwrap"><ChatMessages /></div>}
       {(!on || tab === 'chat') && <div className="cwrap"><Worklog /></div>}
     </div>

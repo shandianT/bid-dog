@@ -49,6 +49,8 @@ export async function runUpdate(){
 }
 
 // Rust 侧把真实的下载字节和阶段播过来(见 emit_update_stage)。收不到也不致命。(经典同注释)
+export function showUpdateRestart(v){ UPD.restart = v !== false; bump(); }
+
 export function bindUpdateProgress(){
   const listen = typeof window!=='undefined' && window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
   if(typeof listen !== 'function') return;

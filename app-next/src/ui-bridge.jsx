@@ -4,11 +4,41 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Input } from 'antd';
 import { S, ui, bump, api } from './core/index.js';
 import { applyProjectMoveWith } from './views/project-move.js';
+import * as njc from './views/newjob-core.js';
 import { esc } from './lib.js';
 
 let confirmResolve = null;
 
 export function installUiBridge(){
+  // 测试座:经典全局名(spec 用 page.evaluate 直呼)
+  if(typeof window !== 'undefined'){
+    window.el = id => document.getElementById(id);   // 经典 DOM 快捷,spec 与老代码都在用
+    // 新建任务向导全局(经典同名;njShowStep/njRender 是纯状态版,语义不变)
+    Object.assign(window, {
+      NJ: njc.NJ, njOpen: njc.njOpen, njAddFiles: njc.njAddFiles, njStart: njc.njStart,
+      njReset: njc.njReset, deriveTemplateFromFile: njc.deriveTemplateFromFile,
+      saveDerivedTemplate: njc.saveDerivedTemplate, discardDerivedTemplate: njc.discardDerivedTemplate,
+      saveCurrentTemplate: njc.saveCurrentTemplate, deleteSelectedTemplate: njc.deleteSelectedTemplate,
+      loadJobTemplates: njc.loadJobTemplates, startStaged: njc.startStaged, addRef: njc.addRef,
+      njShowStep: step => { njc.NJ.step = step; bump(); },
+      njRender: () => { njc.njPickTender(); bump(); },
+    });
+    window.closeAll = (...a) => ui.closeAll(...a);
+    window.askConfirm = (...a) => ui.askConfirm(...a);
+    window.cfDone = v => cfDone(v);
+    window.openCheck = () => ui.openCheck();
+    window.openCoverage = () => ui.openCoverage();
+    window.openRewrite = (n, t) => ui.openRewrite(n, t);
+    window.openPreview = (p, u) => ui.openPreview(p, u);
+    window.openLog = () => ui.openLog();
+    window.runDiagnostics = () => ui.runDiagnostics();
+    window.openRevision = () => ui.openRevision();
+    window.openRedo = () => ui.openRedo();
+    // 经典分区重绘函数:新架构下都等于「失效重渲」,保留同名以免 spec/老代码断链
+    ;['renderHead','renderRail','renderTasks','renderMain','renderChat','renderWorklog',
+      'renderFlowConsole','renderProblem','renderAtts','renderP0Views','renderCovPill']
+      .forEach(n => { window[n] = () => bump(); });
+  }
   ui.closeAll = () => {
     if(confirmResolve){ confirmResolve(false); confirmResolve = null; }
     S.sheet = null; bump();
@@ -53,8 +83,8 @@ export function ConfirmModal(){
     <Modal open={open} onCancel={() => cfDone(false)} onOk={() => cfDone(true)}
       okText="确认" cancelText="取消" width={430} centered
       okButtonProps={sh && sh.danger ? { danger: true } : undefined}
-      title={open ? sh.title : ''} data-sheet="confirm">
-      <div style={{ color:'var(--ant-color-text-secondary,#54575f)', whiteSpace:'pre-line' }}>{open ? sh.desc : ''}</div>
+      title={<span id="cfT">{open ? sh.title : ''}</span>} data-sheet="confirm">
+      <div id="confirm" style={{ color:'var(--ant-color-text-secondary,#54575f)', whiteSpace:'pre-line' }}><span id="cfD">{open ? sh.desc : ''}</span></div>
     </Modal>
   );
 }
@@ -97,10 +127,10 @@ export function LogSheet(){
         : <span style={{color:'#d4380d'}}>✗ 技能规则未成功加载 — {r.why||''}<br/>请先运行“一键诊断”;如仍未恢复,再到高级设置检查技能包路径和注入状态。</span>;
   return (
     <Modal open={open} onCancel={ui.closeAll} footer={null} width={720} centered title="运行日志">
-      <div id="logSkill" style={{ font:'400 12px/1.7 inherit', marginBottom:8 }}>{skillLine}</div>
+      <div id="logSheet"><div id="logSkill" style={{ font:'400 12px/1.7 inherit', marginBottom:8 }}>{skillLine}</div>
       <pre id="logBody" style={{ font:"400 12px/1.7 'SF Mono',Menlo,Consolas,monospace", whiteSpace:'pre-wrap',
         wordBreak:'break-all', maxHeight:'56vh', overflow:'auto', background:'#f7f8fa',
-        border:'1px solid #eceef2', borderRadius:10, padding:'10px 12px' }}>{state.text}</pre>
+        border:'1px solid #eceef2', borderRadius:10, padding:'10px 12px' }}>{state.text}</pre></div>
     </Modal>
   );
 }
@@ -112,8 +142,9 @@ export function DiagnosticSheet(){
   const [out, setOut] = useState('');
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState('');
+  const [repaired, setRepaired] = useState(false);
   const ran = useRef(false);
-  useEffect(() => { if(open){ setOut(''); setDetail(sh.detail||''); ran.current = false; if(sh.run) runNow(); } }, [open]);
+  useEffect(() => { if(open){ setOut(''); setDetail(sh.detail||''); setRepaired(false); ran.current = false; if(sh.run) runNow(); } }, [open]);
   async function repairFromDesktop(setText){
     const invoke = typeof window!=='undefined' && window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
     if(typeof invoke !== 'function'){
@@ -129,7 +160,7 @@ export function DiagnosticSheet(){
     const repairMode = S.engineOffline === true;
     setBusy(true); setOut(repairMode ? '正在检查并修复本地引擎…' : '正在检查连接与当前任务…');
     try{
-      if(repairMode){ await repairFromDesktop(setOut); return; }
+      if(repairMode){ if(await repairFromDesktop(setOut)) setRepaired(true); return; }
       const r = await api('/v1/diagnostics', { method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ job_id: S.active || null }) });
       const checks = Array.isArray(r.checks) ? r.checks : (Array.isArray(r.items) ? r.items : []);
@@ -148,18 +179,18 @@ export function DiagnosticSheet(){
         setDetail(JSON.stringify(h,null,2));
       }catch(_){
         S.online = false; setOut('本地服务没有响应,正在尝试安全重启…');
-        await repairFromDesktop(setOut);
+        if(await repairFromDesktop(setOut)) setRepaired(true);
       }
     }finally{ setBusy(false); }
   }
   return (
     <Modal open={open} onCancel={ui.closeAll} width={640} centered title="连接与任务诊断"
-      okText={busy ? (S.engineOffline?'修复中…':'诊断中…') : (S.engineOffline?'检查并修复':'开始诊断')}
-      okButtonProps={{ loading:busy }} onOk={runNow} cancelText="关闭">
-      <pre id="diagnosticStatus" style={{ whiteSpace:'pre-wrap', font:'400 12.5px/1.8 inherit', minHeight:40 }}>{out || '点「开始诊断」检查连接、引擎与当前任务。'}</pre>
+      okText={busy ? (S.engineOffline?'修复中…':'诊断中…') : ((S.engineOffline && !repaired)?'检查并修复':'开始诊断')}
+      okButtonProps={{ loading:busy, id:'diagnosticRun' }} onOk={runNow} cancelText="关闭">
+      <div id="diagnosticSheet"><pre id="diagnosticStatus" style={{ whiteSpace:'pre-wrap', font:'400 12.5px/1.8 inherit', minHeight:40 }}>{out || '点「开始诊断」检查连接、引擎与当前任务。'}</pre>
       {detail ? <details id="diagnosticDetailWrap"><summary style={{cursor:'pointer',color:'#8b8f98'}}>技术详情</summary>
         <pre id="diagnosticDetail" style={{ whiteSpace:'pre-wrap', wordBreak:'break-all', font:"400 11.5px/1.7 'SF Mono',Menlo,Consolas,monospace", maxHeight:'32vh', overflow:'auto', background:'#f7f8fa', borderRadius:8, padding:'8px 10px' }}>{detail}</pre>
-      </details> : null}
+      </details> : null}</div>
     </Modal>
   );
 }

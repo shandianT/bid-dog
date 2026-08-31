@@ -172,6 +172,17 @@ def test_untrusted_browser_origin_cannot_read_or_mutate_desktop_engine(engine):
     assert "access-control-allow-origin" not in response.headers
 
 
+def test_localhost_subdomain_origin_allowed_but_lookalike_rejected(engine):
+    # 新前端是 ES module:规范规定 module 脚本一律按 CORS 抓取,同源也带 Origin,
+    # 所以 tauri.localhost:端口 必须能过闸;而「以 localhost 开头的外网域」仍要拒——
+    # *.localhost 整族恒为回环(RFC 6761),localhost.evil.example 不是。
+    with TestClient(engine.app) as client:
+        ok = client.get("/v1/health", headers={"Origin": "http://tauri.localhost:18893"})
+        bad = client.get("/v1/health", headers={"Origin": "http://localhost.evil.example"})
+    assert ok.status_code == 200
+    assert bad.status_code == 403
+
+
 def test_tauri_origin_remains_allowed(engine):
     with TestClient(engine.app) as client:
         response = client.get(

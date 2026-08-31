@@ -27,11 +27,15 @@ export default function Problem(){
   const key = S.active || '_global', p = S.problems[key] || S.problems._global;
   const [moreOpen, setMoreOpen] = useState(false);
   if(!p) return null;
+  // 诊断弹层在场时横幅退让(经典 dataset.hiddenForDiagnostic 的等价实现):
+  // 横幅上点「一键诊断/查看原因」后,不该在弹层后面还压着一条红。
+  if(S.sheet && S.sheet.name === 'diagnostic') return null;
   const acts = (p.actions && p.actions.length ? p.actions : [{ act: 'diagnose', label: '一键诊断' }]).slice();
   if(p.detail && !acts.some(a => a.act === 'show_detail')) acts.push({ act: 'show_detail', label: '查看原因' });
   if(!acts.some(a => a.act === 'diagnose')) acts.push({ act: 'diagnose', label: '一键诊断' });
   const primary = acts[0], secondary = acts[1], rest = acts.slice(2);
   const Btn = ({ a, pp }) => <button type="button" className={pp ? 'pp' : ''}
+    data-problem-action={a.act} data-param={a.param || ''}
     onClick={() => problemAction(a.act, a.param || '')}>{_friendlyActionLabel(a.label)}</button>;
   return (
     <div className="problem-host" id="problemHost" aria-live="assertive">
@@ -50,7 +54,7 @@ export default function Problem(){
             )}
           </div>
         </div>
-        <button className="problem-close" type="button" aria-label="关闭" onClick={() => problemAction('dismiss')}>×</button>
+        <button className="problem-close" type="button" aria-label="关闭" data-problem-action="dismiss" onClick={() => problemAction('dismiss')}>×</button>
       </div>
     </div>
   );

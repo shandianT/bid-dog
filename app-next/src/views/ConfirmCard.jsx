@@ -18,7 +18,7 @@ export default function ConfirmCard(){
     }catch(err){ ui.toast(err && err.message || '修正未送达,问题已保留,可重试'); }
   }
   return (
-    <div className="confirm-card">
+    <div id="confirmHost"><div className="confirm-card">
       <h4>开始撰写前,确认解析出的关键信息</h4>
       <div className="chd">发现读错了现在改一个字,胜过跑完 30 分钟后返工。修正会同步进任务要求,响应规划会按修正重新核对。</div>
       <dl className="confirm-kv">
@@ -29,19 +29,19 @@ export default function ConfirmCard(){
         <dt>废标风险</dt><dd className="veto">{p.veto || ''}</dd>
       </dl>
       <div className="confirm-acts">
-        <button type="button" className="btn-primary" onClick={() => answer((chip.options || [])[0] || '确认无误，开始撰写')}>
+        <button type="button" className="btn-primary" data-cfok="1" onClick={() => answer((chip.options || [])[0] || '确认无误，开始撰写')}>
           {(chip.options || [])[0] || '确认无误，开始撰写'}</button>
-        <button type="button" className="btn-plain" onClick={() => setFixOpen(v => !v)}>有误,需要修正</button>
+        <button type="button" className="btn-plain" data-cffix="1" onClick={() => setFixOpen(v => !v)}>有误,需要修正</button>
       </div>
       {fixOpen && (
-        <div className="confirm-fix">
-          <textarea autoFocus value={fixText} onChange={e => setFixText(e.target.value)}
+        <div className="confirm-fix" id="cfFix" style={{ display:'block' }}>
+          <textarea id="cfFixText" autoFocus value={fixText} onChange={e => setFixText(e.target.value)}
             placeholder="写清楚哪一项有误、应为什么。例:项目名应为「清湖片区二期」;资质要求应为市政公用工程总承包贰级" />
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
-            <button type="button" className="btn-primary" onClick={sendFix}>提交修正并开始</button>
+            <button type="button" className="btn-primary" data-cfsend="1" onClick={sendFix}>提交修正并开始</button>
           </div>
         </div>
       )}
-    </div>
+    </div></div>
   );
 }

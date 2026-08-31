@@ -18,12 +18,13 @@ import SettingsSheet from './views/SettingsSheet.jsx';
 import AssetsSheet from './views/AssetsSheet.jsx';
 import UpdateSheet, { UpdateRestart } from './views/UpdateSheet.jsx';
 import OnboardingSheet from './views/OnboardingSheet.jsx';
-import { renderUpdateSteps, openUpdatePanel, bindUpdateProgress } from './views/update-core.js';
+import { renderUpdateSteps, openUpdatePanel, bindUpdateProgress, showUpdateRestart } from './views/update-core.js';
 import { njAddFiles, walkEntries, addRef } from './views/newjob-core.js';
 
-function Hero(){
+function Hero({ hidden }){
+  // 经典 renderMain 用 display 切换,#hero/#heroSub 常驻 DOM(spec 的反向断言依赖这点)
   return (
-    <div id="hero">
+    <div id="hero" style={hidden ? { display: 'none' } : undefined}>
       <h2>准备好了,随时开始</h2>
       <div className="hs" id="heroSub">{S.heroSub || '把招标文件交给我,预检 → 分析 → 分章撰写 → 出 Word,全程可对话'}</div>
       <div className="dropbig" onClick={() => document.getElementById('filein') && document.getElementById('filein').click()}>
@@ -63,6 +64,7 @@ export default function App(){
     // 测试座:经典全局函数名保持可呼(spec 用 page.evaluate 直呼它们)
     window.renderUpdateSteps = renderUpdateSteps;
     window.openUpdatePanel = openUpdatePanel;
+    window.showUpdateRestart = showUpdateRestart;
     bindUpdateProgress();
     boot();
     installVisibilityHandler();
@@ -108,7 +110,7 @@ export default function App(){
         <Sidebar />
         <main>
           <Problem />
-          {!has && <Hero />}
+          <Hero hidden={has} />
           {has && showResult && <ResultView job={job} />}
           {has && !showResult && <><Head /><Mid /><Composer /></>}
         </main>

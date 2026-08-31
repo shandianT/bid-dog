@@ -30,9 +30,10 @@ export function CheckSheet(){
   }
   return (
     <Modal open={open} onCancel={ui.closeAll} footer={null} width={640} centered
-      title={!h ? '还没到出件阶段' : (<span>{h.summary} <span className={'cklv ' + (h.level || '')}>{h.level === 'red' ? '不可交付' : '仅可作初稿'}</span></span>)}>
+      title={<span id="ckTitle">{!h ? '还没到出件阶段' : h.summary}</span>}>
+      {h && <div id="ckLv" className={'cklv ' + (h.level || '')}>{h.level === 'red' ? '不可交付' : '仅可作初稿'}</div>}
       {/* 每条只在后端给了可执行动作时才画按钮(经典同注释:假按钮比没有更糟) */}
-      <div className="ckList">
+      <div className="ckList" id="check"><div id="ckList" style={{display:'contents'}}>
         {gaps.map((g, i) => (
           <div className="lrow" key={i}>
             <span className="dot" style={{ background: DOT[g.level] || 'var(--amber)' }} />
@@ -46,7 +47,7 @@ export function CheckSheet(){
           </div>
         ))}
         {!gaps.length && h && <div className="outline-note">没有待处理项。</div>}
-      </div>
+      </div></div>
       {canRepair && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 }}>
           <Button onClick={repairJob}>一键清洗内容异常</Button>
@@ -80,18 +81,19 @@ export function CoverageSheet(){
   }
   return (
     <Modal open={open} onCancel={ui.closeAll} footer={null} width={680} centered title="评分点覆盖">
+      <div id="covSheet">
       {cov && cov.available ? (
         <>
-          <div className="covHead">评分点是评标专家打分的依据。已覆盖 <b>{cov.covered}/{cov.total}</b> 项——「已覆盖」= 规划无缺口 + 落到具体章节 + 该章节已写完。</div>
-          <div className="covBar"><b style={{ width: (cov.total ? Math.round(cov.covered / cov.total * 100) : 0) + '%' }} /></div>
-          <div className="covList">
+          <div className="covHead" id="covHead">评分点是评标专家打分的依据。已覆盖 <b>{cov.covered}/{cov.total}</b> 项——「已覆盖」= 规划无缺口 + 落到具体章节 + 该章节已写完。</div>
+          <div className="covBar"><b id="covBarFill" style={{ width: (cov.total ? Math.round(cov.covered / cov.total * 100) : 0) + '%' }} /></div>
+          <div className="covList" id="covList">
             {un.length ? un.map((x, i) => (
               <div className="covitem" key={i}>
                 <div className="ci2"><b>{x.requirement}</b>
                   <span>{[x.gap && ('缺口:' + x.gap), x.location && ('落位:' + x.location)].filter(Boolean).join(' · ') || '待落实'}</span></div>
                 {x.score && x.score !== '未知' ? <span className="score">{x.score} 分</span> : null}
                 {x.node_id
-                  ? <button type="button" disabled={busyIdx === i} onClick={() => dispatch(i)}>{busyIdx === i ? '派发中…' : '补写应答'}</button>
+                  ? <button type="button" data-cov={i} disabled={busyIdx === i} onClick={() => dispatch(i)}>{busyIdx === i ? '派发中…' : '补写应答'}</button>
                   : <span style={{ color: 'var(--faint)', fontSize: 11 }}>{covReasonHint(x)}</span>}
               </div>
             )) : <div className="outline-note">全部评分点都已覆盖。</div>}
@@ -107,6 +109,7 @@ export function CoverageSheet(){
           </div>
         </>
       ) : <div className="outline-note">{(cov && cov.note) || '响应规划完成后这里会实时更新'}</div>}
+      </div>
     </Modal>
   );
 }
@@ -157,9 +160,11 @@ export function RewriteSheet(){
     }catch(err){ setBusy(false); ui.toast(err && err.message || '重写没能启动,稍后重试'); }
   }
   return (
-    <Modal open={open} onCancel={ui.closeAll} width={600} centered title={'重写本章:' + (sh.title || sh.node)}
-      okText={busy ? '启动中…' : '开始重写'} okButtonProps={{ loading: busy }} onOk={submit} cancelText="取消">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <Modal open={open} onCancel={ui.closeAll} width={600} centered
+      title={<span id="rwTitle">{'重写本章:' + (sh.title || sh.node)}</span>}
+      okText={busy ? '启动中…' : '开始重写'} okButtonProps={{ loading: busy, id: 'rwGo' }} onOk={submit} cancelText="取消">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} id="rwSheet">
+        <div style={{ font: '400 12px/1.6 inherit', color: 'var(--dim)' }}>只重做这一章,其余章节锁定不动;旧稿会存入「历史版本」文件夹,可随时找回。汇总和最终 Word 会自动跟着更新。</div>
         <div className="rw-diff">
           <div className="drow"><span className="dk">这一章</span><span>{node.title || sh.title || sh.node}{words ? ' · 当前 ' + words : ''} → 依据下方要求整章重写</span></div>
           <div className="drow keep"><span className="dk">其余章节</span><span>原样保留,不重跑</span></div>
@@ -178,7 +183,7 @@ export function RewriteSheet(){
         )}
         <div>
           <div className="lbl2">补充要求(选填)</div>
-          <Input.TextArea rows={4} autoFocus value={note} onChange={e => setNote(e.target.value)}
+          <Input.TextArea id="rwNote" rows={4} autoFocus value={note} onChange={e => setNote(e.target.value)}
             placeholder="例:把实施进度改成 90 天;第二节补一段应急预案;引用素材库里的 XX 案例" />
         </div>
       </div>

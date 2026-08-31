@@ -1,7 +1,6 @@
 // 任务头部:标题/徽章/副题/进度条/动作(暂停·停止·修改·从断点继续·开始·日志·交付结果·覆盖·出件前检查)。
 // 全部判定公式逐字对应经典 renderHead(含 PR #10 的「待处理」徽章与「Word 已生成」lead)。
 import React from 'react';
-import { Tooltip } from 'antd';
 import { S, ui, jobState, publicTaskState, taskPresentation, taskCapabilities, wordPresence,
          completionGate, deliveryDeadEnd, verdict, timing, fmtDur, knownStep, PUBLIC_TASK_LABELS,
          resumeJob, togglePause, stopJob, rerunJob, say, deliveryViewModel } from '../core/index.js';
@@ -83,8 +82,8 @@ export default function Head(){
     un.forEach(x => { const r = String(x.reason || '') || 'unlocated'; tally[r] = (tally[r] || 0) + 1; });
     const tip = !un.length ? '全部评分点都已覆盖'
       : '未覆盖 ' + un.length + ' 项:' + Object.keys(tally).sort((a, b) => tally[b] - tally[a]).map(r => (names[r] || r) + ' ' + tally[r] + ' 项').join('、') + '。点开逐条查看,可直接补写应答。';
-    covPill = <Tooltip title={tip}><span className={'pill covpill' + (cov.covered >= cov.total ? ' on' : '')} id="covPill"
-      onClick={() => ui.openCoverage ? ui.openCoverage() : null}>评分点覆盖 {cov.covered}/{cov.total}</span></Tooltip>;
+    covPill = <span className={'pill covpill' + (cov.covered >= cov.total ? ' on' : '')} id="covPill" title={tip}
+      onClick={() => ui.openCoverage()}>评分点覆盖 {cov.covered}/{cov.total}</span>;
   }
 
   return (

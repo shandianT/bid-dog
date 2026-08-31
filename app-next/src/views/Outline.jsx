@@ -29,11 +29,11 @@ export default function Outline(){
         (n.state === 'failed' && n.error_code) ? String(n.error_code) : ''].filter(Boolean).join(' · ');
       const canRw = ['done', 'failed', 'blocked'].indexOf(n.state) >= 0;
       return (
-        <div key={n.id} className={'outline-row ' + cls} onClick={() => out && ui.openPreview(out)}>
+        <div key={n.id} className={'outline-row ' + cls} data-pv={out} onClick={() => out && ui.openPreview(out)}>
           <span className="outline-dot" />
           <div className="outline-copy"><b>{i + 1}. {n.title || n.id}</b><span>{sub}</span></div>
           <span className="outline-w">{art ? _fmtWords(art.size_kb) : ''}</span>
-          <span className="outline-act">{canRw && <button type="button"
+          <span className="outline-act">{canRw && <button type="button" data-rw={n.id} data-rwt={n.title || ''}
             onClick={e => { e.stopPropagation(); ui.openRewrite(n.id, n.title || ''); }}>
             {n.state === 'done' ? '重写本章' : '重试并调整'}</button>}</span>
         </div>
@@ -65,7 +65,7 @@ export default function Outline(){
     <>
       <div className="outline-note">本任务由智能体模式生成:可逐章预览;「单章重写」需要分段生成模式(新建任务默认使用)。</div>
       <div className="outline">{chapterArts.map((a, i) => (
-        <div key={a.name} className="outline-row done" onClick={() => ui.openPreview(a.name)}>
+        <div key={a.name} className="outline-row done" data-pv={a.name} onClick={() => ui.openPreview(a.name)}>
           <span className="outline-dot" />
           <div className="outline-copy"><b>{i + 1}. {a.name.replace(/^章节_\d*_?/, '').replace(/\.md$/i, '')}</b><span>已生成</span></div>
           <span className="outline-w">{_fmtWords(a.size_kb)}</span><span className="outline-act" />

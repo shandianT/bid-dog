@@ -56,17 +56,17 @@ function TemplateDraftCard(){
     }
   }, [draft]);
   if(!draft) return null;
-  if(draft._loading) return <div className="njdraft">正在分析目录、表格和场景规则…</div>;
-  if(draft._error) return <div className="njdraft">{draft._error}</div>;
+  if(draft._loading) return <div className="njdraft" id="njTemplateDraft">正在分析目录、表格和场景规则…</div>;
+  if(draft._error) return <div className="njdraft" id="njTemplateDraft">{draft._error}</div>;
   const ready = !!(draft.validation || {}).ready;
   return (
-    <div className="njdraft">
+    <div className="njdraft" id="njTemplateDraft">
       <TemplateSummary item={draft} label="模板草稿" />
       <TemplateDetail item={draft} open />
       <div className="lbl2" style={{ marginTop: 8 }}>模板名称</div>
-      <Input value={name} onChange={e => setName(e.target.value)} />
+      <Input id="njDerivedTemplateName" value={name} onChange={e => setName(e.target.value)} />
       <div className="lbl2" style={{ marginTop: 8 }}>目录(每行一章,可修改)</div>
-      <Input.TextArea rows={6} value={outline} onChange={e => setOutline(e.target.value)} />
+      <Input.TextArea id="njDerivedOutline" rows={6} value={outline} onChange={e => setOutline(e.target.value)} />
       <div style={{ marginTop: 7, color: ready ? 'var(--amber)' : 'var(--red)', fontSize: 12.5 }}>
         质量评分 {String((draft.validation || {}).score || 0)};{ready ? '保存前请确认目录和材料要求,历史正文不会进入模板。' : '提取到的结构不足,暂不能保存;请换用标题层级更完整的标书。'}</div>
       <div style={{ display: 'flex', gap: 7, marginTop: 9 }}>
@@ -163,9 +163,13 @@ export default function NewJob(){
             <div style={{ display: 'flex', gap: 10 }}>
               <div style={{ flex: 1 }}>
                 <div className="lbl2">场景模板</div>
-                <Select style={{ width: '100%' }} value={NJ.template} onChange={v => { NJ.template = v; bump(); }}
-                  options={[{ value: 'auto', label: '自动推荐（推荐）' },
-                    ...(S.templates || []).filter(x => x && x.id).map(x => ({ value: String(x.id), label: x.name || x.title || x.id }))]} />
+                {/* 原生 select:经典 spec 与 problemAction 用 el('njTemplate').value 直接驱动 */}
+                <select id="njTemplate" className="nsel" value={NJ.template}
+                  onChange={e => { NJ.template = e.target.value; bump(); }}>
+                  <option value="auto">自动推荐（推荐）</option>
+                  {(S.templates || []).filter(x => x && x.id).map(x => (
+                    <option key={x.id} value={String(x.id)}>{x.name || x.title || x.id}</option>))}
+                </select>
               </div>
               <div style={{ flex: 1 }}>
                 <div className="lbl2">归入项目(选填)</div>
