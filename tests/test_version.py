@@ -100,3 +100,29 @@ def test_commercial_macos_signing_imports_identity_before_building_the_engine(en
     assert "MAC_APPLE_ID_SECRET:" in build_step
     assert "unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID" in build_step
     assert "\n          APPLE_ID:" not in build_step
+
+
+def test_update_manifest_is_published_to_the_site_as_a_static_file():
+    """转发方案实测失败过:GitHub 的 /releases/download 会 302 到
+    release-assets.githubusercontent.com,Vercel 的 rewrite 原样透传,客户端
+    还是得连 GitHub——「查更新不依赖 GitHub」的目的没达到。改成 CI 把清单提交成
+    静态文件。这条测试钉住三件事,防止有人把它改回转发或悄悄删掉发布步骤。"""
+    import json as _json
+
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+    assert "publish the update manifest to the site" in workflow
+    assert "cp out/latest.json site/updater/darwin-aarch64.json" in workflow
+    assert "cp out/latest.json site/updater/windows-x86_64.json" in workflow
+    # 新文件在 git diff 里看不见,必须先 add 再比对暂存区,否则首次发布会被跳过
+    assert "git diff --cached --quiet -- site/updater" in workflow
+
+    # vercel.json 不能再有 rewrites:它只会把 302 透传出去
+    vercel = _json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
+    assert "rewrites" not in vercel
+
+    for name in ("darwin-aarch64.json", "windows-x86_64.json"):
+        manifest = _json.loads(
+            (ROOT / "site" / "updater" / name).read_text(encoding="utf-8"))
+        assert set(manifest["platforms"]) == {"darwin-aarch64", "windows-x86_64"}
+        for entry in manifest["platforms"].values():
+            assert entry["signature"] and entry["url"].startswith("https://")
