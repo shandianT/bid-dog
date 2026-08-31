@@ -61,3 +61,31 @@ body{-webkit-font-smoothing:antialiased;overflow:hidden}
 ::-webkit-scrollbar{width:9px;height:9px}
 ::-webkit-scrollbar-thumb{background:#d7dae0;border-radius:9px;border:2.5px solid transparent;background-clip:content-box}
 ::-webkit-scrollbar-thumb:hover{background:#c2c6cd;border:2.5px solid transparent;background-clip:content-box}
+
+/* v2:章节网格 / 命令面板 / 预演 diff / 数字等宽 */
+.num{font-variant-numeric:tabular-nums}
+.chgrid{display:grid;grid-template-columns:1fr 1fr;gap:2px 22px}
+.chrow{display:flex;align-items:center;gap:9px;padding:7px 4px;border-radius:8px;font-size:13px}
+.chrow.queued{color:#9aa0ab}
+.chrow.writing{background:#f0f6ff}
+.chname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chmeta{color:#8b8f98;font-size:12px;flex:none}
+.chrow.writing .chmeta{color:#0f62d6;font-weight:600}
+.pulse{width:9px;height:9px;border-radius:50%;background:#0f62d6;flex:none;animation:pl 1.1s ease-in-out infinite}
+@keyframes pl{0%,100%{box-shadow:0 0 0 0 rgba(15,98,214,.35)}55%{box-shadow:0 0 0 6px rgba(15,98,214,0)}}
+.qdot{width:8px;height:8px;border-radius:50%;border:1.5px solid #c9cdd4;flex:none}
+.kbd{font:600 11px/1 ui-monospace,Menlo,monospace;background:#f1f3f6;border:1px solid #e2e5ea;
+  border-radius:5px;padding:2px 5px;color:#54575f;margin-left:2px}
+.krow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;
+  border-radius:8px;font-size:13.5px;cursor:pointer}
+.krow:hover{background:#f0f6ff}
+.khint{border-top:1px solid #eceef2;padding:9px 16px;font-size:11.5px;color:#9aa0ab}
+.diff{display:flex;flex-direction:column;gap:1px;background:#eceef2;border:1px solid #eceef2;border-radius:10px;overflow:hidden}
+.drow{display:grid;grid-template-columns:1.1fr 1fr 14px 1.2fr;align-items:center;gap:10px;background:#fff;padding:10px 13px;font-size:12.5px}
+.drow .dk{font-weight:600;color:#181a1f}
+.drow .dfrom{color:#8b8f98}
+.drow .dto{color:#181a1f}
+.drow.hot{background:#fffbf0}
+.drow.hot .dto{color:#d46b08;font-weight:600}
+.wordicon.dim{background:#f1f3f6;color:#8b8f98}
+@media (prefers-reduced-motion:reduce){.pulse{animation:none}}
