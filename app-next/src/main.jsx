@@ -1,12 +1,16 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import { ConfigProvider, App as AntApp, theme as antTheme } from 'antd'
+import { ConfigProvider, App as AntApp } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
+import { installGlobals } from './core/index.js'
+import { installUiBridge } from './ui-bridge.jsx'
 import App from './App.jsx'
+import Showcase from './Showcase.jsx'
 import './app.css'
+import './live.css'
 
 // 设计令牌集中在这里:品牌蓝沿用现产品(#0a63c9 系),中性色转微冷灰,
-// 圆角 10,阴影用「key+ambient」双层。组件观感全部由 AntD 5 承担。
+// 圆角 10,阴影用「key+ambient」双层。组件观感全部由 AntD 6 承担。
 const theme = {
   token: {
     colorPrimary: '#0f62d6', colorInfo: '#0f62d6', colorLink: '#0f62d6',
@@ -29,8 +33,12 @@ const theme = {
   },
 }
 
+// ?showcase=1 保留路线一评估原型(纯假数据);默认进真实应用。
+const SHOWCASE = /[?&]showcase=1/.test(location.search)
+if(!SHOWCASE){ installGlobals(); installUiBridge(); }
+
 createRoot(document.getElementById('root')).render(
   <ConfigProvider locale={zhCN} theme={theme}>
-    <AntApp><App /></AntApp>
+    <AntApp>{SHOWCASE ? <Showcase /> : <App />}</AntApp>
   </ConfigProvider>
 )
