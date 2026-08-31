@@ -1,0 +1,10 @@
+# 引擎 sidecar 构建依赖(CI 与本地打包共用)。
+# 全部锁定版本范围:不锁的话 CI 每次拉最新,pydantic/fastapi 大版本变更或
+# PyInstaller 行为变更(如 --add-data 分隔符语义)都会静默改变发布物。
+pyinstaller>=6.10,<7
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+python-multipart>=0.0.9,<1
+python-docx>=1.1,<2
+pypdf>=5,<7
+certifi>=2024.7.4

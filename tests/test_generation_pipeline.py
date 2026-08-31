@@ -162,7 +162,7 @@ def test_pipeline_summary_reports_real_node_counts_and_retry(tmp_path):
     assert summary["retry"] == {
         "node_id": "chapter_write:02",
         "attempt": 0,
-        "max_attempts": 3,
+        "max_attempts": pipeline.MAX_ATTEMPTS,
         "retry_after_seconds": 18,
         "error_code": "stream_idle_timeout",
     }
@@ -409,11 +409,11 @@ def test_recover_does_not_bypass_max_attempts_and_manual_retry_is_explicit(tmp_p
         chapters=_chapters(),
     )
     previous_attempt_dirs = []
-    for _ in range(3):
+    for _ in range(pipeline.MAX_ATTEMPTS):
         node = pipeline.start_node(tmp_path, "chapter_write:01", input_digest="same")
         previous_attempt_dirs.append(pipeline.attempt_directory(tmp_path, node))
         pipeline.fail_node(tmp_path, "chapter_write:01", "stream_idle_timeout", retryable=True)
-    assert node["attempt"] == 3
+    assert node["attempt"] == pipeline.MAX_ATTEMPTS
     recovered = pipeline.recover(tmp_path)
     failed = next(item for item in recovered["nodes"] if item["id"] == "chapter_write:01")
     assert failed["state"] == "failed"

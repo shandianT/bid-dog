@@ -81,7 +81,12 @@ def read_any(path):
             if child.tag == qn('w:p'):
                 p = Paragraph(child, doc); t = p.text.strip()
                 if not t: continue
-                st = (p.style.name or '').lower()
+                # WPS/.doc 转存的 docx 里 p.style 常为 None,直接 .name 会把整个解析打崩
+                # (engine_v1._style_name 同一坑已修,这里同样要防)
+                try:
+                    st = ((p.style.name if p.style is not None else '') or '').lower()
+                except Exception:
+                    st = ''
                 lv = 0
                 if 'heading 1' in st or st == '标题 1': lv = 1
                 elif 'heading 2' in st or st == '标题 2': lv = 2

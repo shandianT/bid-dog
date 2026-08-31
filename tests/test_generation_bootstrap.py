@@ -337,7 +337,13 @@ def test_model_node_uses_non_stream_completion_and_injects_skill_contract(
             '# 实施方案\n\n' + '逐项响应招标文件并提供实施、验收和运维安排。' * 20
         )}}]}
 
+    def fake_stream(base, key, payload, **kwargs):
+        # v0.20.4 起节点走流式优先(空闲超时替代总超时,防网关掐长连接);
+        # 请求体与非流式同构,这里复用同一份捕获与回包。
+        return fake_openai(base, key, "/chat/completions", payload, **kwargs)
+
     monkeypatch.setattr(engine, "_openai_req", fake_openai)
+    monkeypatch.setattr(engine, "_openai_stream_req", fake_stream)
     monkeypatch.setattr(
         engine, "_pipeline_declared_input_names",
         lambda *_args, **_kwargs: ["招标文件_解析版.md"],
@@ -357,7 +363,6 @@ def test_model_node_uses_non_stream_completion_and_injects_skill_contract(
     )
 
     assert captured["path"] == "/chat/completions"
-    assert captured["payload"]["stream"] is False
     assert captured["payload"]["model"] == engine.S2_DEFAULT_MODEL
     assert captured["payload"]["max_tokens"] == 4800
     assert "不得编造资质" in captured["payload"]["messages"][0]["content"]
@@ -401,6 +406,8 @@ def test_truncated_chapter_continues_once_without_discarding_first_response(
         return {"choices": [{"finish_reason": "stop", "message": {"content": second}}]}
 
     monkeypatch.setattr(engine, "_openai_req", fake_openai)
+    monkeypatch.setattr(engine, "_openai_stream_req",
+                        lambda base, key, payload, **kw: fake_openai(base, key, "/chat/completions", payload))
     monkeypatch.setattr(
         engine, "_pipeline_declared_input_names",
         lambda *_args, **_kwargs: ["招标文件_解析版.md"],
@@ -461,6 +468,12 @@ def test_response_plan_is_built_locally_without_calling_the_model(
     node.update({"attempt": 1, "attempt_serial": 1})
     monkeypatch.setattr(
         engine, "_openai_req",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("response planning must be deterministic and local")
+        ),
+    )
+    monkeypatch.setattr(
+        engine, "_openai_stream_req",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("response planning must be deterministic and local")
         ),
@@ -544,7 +557,7 @@ def test_standard_pipeline_preserves_model_review_as_separate_artifact(engine, j
     assert review["outputs"] == ["模型复核报告.md"]
 
 
-def test_resumed_pipeline_rejects_changed_gateway_or_key(engine, job):
+def test_resumed_pipeline_rejects_changed_gateway_but_accepts_new_key(engine, job):
     state = engine.generation_pipeline.initialize(
         job, run_id="frozen-transport", mode="fast",
         model_routes={"fast": engine.S2_DEFAULT_MODEL, "quality": engine.S2_QUALITY_MODEL},
@@ -554,12 +567,20 @@ def test_resumed_pipeline_rejects_changed_gateway_or_key(engine, job):
     )
     assert state["model_routes"]["base_url"] == "https://gateway.example/v1"
 
+    # 网关变化仍然硬拦截:换网关等于换执行环境,检查点必须作废
     with pytest.raises(engine.generation_pipeline.NodeExecutionError) as exc:
         engine._pipeline_validate_execution_contract(job, {
-            "base_url": "https://gateway.example/v1", "api_key": "new-key"
+            "base_url": "https://other-gateway.example/v1", "api_key": "old-key"
         })
-
     assert exc.value.code == "execution_contract_changed"
+
+    # 同网关换 Key 是用户失败后最常见的自救,不再作废检查点;指纹换到新 Key 上继续
+    engine._pipeline_validate_execution_contract(job, {
+        "base_url": "https://gateway.example/v1", "api_key": "new-key"
+    })
+    updated = engine.generation_pipeline.load(job)
+    assert updated["model_routes"]["credential_fingerprint"] == \
+        engine.generation_pipeline.credential_fingerprint("new-key")
 
 
 def test_repeated_generic_table_headers_are_specialized_by_section(engine):

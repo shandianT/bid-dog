@@ -166,7 +166,7 @@ test('generation flow console shows evidence, checkpoint, and polling recovery w
   await expect(page.locator('#flowHost')).toContainText('生成流程台');
   await expect(page.locator('#flowHost')).toContainText('正在检查生成组件');
   await expect(page.locator('#flowHost')).toContainText('任务目录');
-  await expect(page.locator('#flowHost')).toContainText('实时连接');
+  await expect(page.locator('#flowHost')).toContainText('进度同步中');
   expect(await page.locator('#flowHost .flow-phase').count()).toBe(6);
 
   await page.evaluate(() => {
@@ -174,9 +174,9 @@ test('generation flow console shows evidence, checkpoint, and polling recovery w
     recordStreamFailure('flow-contract');
     recordStreamFailure('flow-contract');
   });
-  await expect(page.locator('#flowHost')).toContainText('轮询保障中');
+  await expect(page.locator('#flowHost')).toContainText('改用定时刷新进度');
   await page.evaluate(() => markStreamOpen('flow-contract'));
-  await expect(page.locator('#flowHost')).toContainText('连接已恢复');
+  await expect(page.locator('#flowHost')).toContainText('进度同步已恢复');
 });
 
 test('flow console keeps long node content readable and lets users inspect every phase', async ({ page }) => {

@@ -288,6 +288,32 @@ fn spawn_engine() -> Option<Child> {
     cmd.env("PORT", ENGINE_PORT.to_string());
     if let Some(data) = data.as_ref() {
         cmd.env("BID_HOME", &data);
+        // PyInstaller onefile 会把 python-docx 模板等数据解压到 %TEMP%\_MEIxxxx。
+        // 引擎跨夜常驻时,Windows 存储感知/磁盘清理会按文件年龄清空系统临时目录,
+        // 之后导 Word 报「Package not found at ..._MEI...default.docx」(真机反馈)。
+        // 把引擎的 TMP/TEMP 指到数据目录下的受控子目录,系统清理策略碰不到;
+        // 顺带清扫历史崩溃残留的 _MEI*(onefile 异常退出不会自清)。
+        let engine_tmp = data.join("engine-tmp");
+        if fs::create_dir_all(&engine_tmp).is_ok() {
+            if let Ok(entries) = fs::read_dir(&engine_tmp) {
+                let week = std::time::Duration::from_secs(7 * 24 * 3600);
+                for entry in entries.flatten() {
+                    let stale = entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .map(|age| age > week)
+                        .unwrap_or(false);
+                    if stale && entry.file_name().to_string_lossy().starts_with("_MEI") {
+                        let _ = fs::remove_dir_all(entry.path());
+                    }
+                }
+            }
+            cmd.env("TMP", &engine_tmp)
+                .env("TEMP", &engine_tmp)
+                .env("TMPDIR", &engine_tmp);
+        }
         if let Ok(log) = fs::File::create(data.join("engine.log")) {
             if let Ok(log2) = log.try_clone() {
                 cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log2));
@@ -802,6 +828,42 @@ fn repair_local_engine_blocking(runtime: &DesktopRuntime) -> EngineRepairResult 
     }
 }
 
+#[derive(Serialize)]
+struct AppUpdateResult {
+    ok: bool,
+    updated: bool,
+    version: String,
+    message: String,
+}
+
+/// 应用内自动更新:检查签名清单 → 下载校验 → 安装 → 重启进入新版。
+/// 更新包必须通过 tauri.conf.json 里 pubkey 对应私钥的签名,清单被篡改或
+/// 下载被劫持都会校验失败——这是"版本由我们把控"的技术底座。
+#[tauri::command]
+async fn install_app_update(app: tauri::AppHandle) -> Result<AppUpdateResult, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("检查更新失败：{error}"))?;
+    let Some(update) = update else {
+        return Ok(AppUpdateResult {
+            ok: true,
+            updated: false,
+            version: String::new(),
+            message: "当前已经是最新版本。".into(),
+        });
+    };
+    let version = update.version.clone();
+    update
+        .download_and_install(|_received, _total| {}, || {})
+        .await
+        .map_err(|error| format!("下载或安装更新 {version} 失败：{error}"))?;
+    // 安装完成直接重启进入新版;退出路径会先让引擎优雅收尾(见 RunEvent 处理)。
+    app.restart()
+}
+
 #[tauri::command]
 async fn repair_local_engine(
     runtime: tauri::State<'_, Arc<DesktopRuntime>>,
@@ -1008,13 +1070,14 @@ fn main() {
 
     tauri::Builder::default()
         .manage(managed_runtime)
-        .invoke_handler(tauri::generate_handler![repair_local_engine])
+        .invoke_handler(tauri::generate_handler![repair_local_engine, install_app_update])
         // Keep this first. Secondary processes are terminated before setup, so they can
         // neither spawn an engine nor enter this process's shutdown path.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             setup_runtime
                 .primary_instance
@@ -1193,7 +1256,7 @@ mod engine_sidecar_tests {
 
     #[test]
     fn newer_or_non_numeric_bid_dog_engine_is_not_replaced_by_an_older_shell() {
-        for version in ["0.20.4", "1.0.0", "development-build"] {
+        for version in ["0.20.5", "1.0.0", "development-build"] {
             let health = serde_json::json!({
                 "ok": true,
                 "version": version,
