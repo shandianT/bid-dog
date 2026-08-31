@@ -36,6 +36,39 @@ svg.i{width:16px;height:16px;flex:none;display:block}
 aside{background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px;overflow-y:auto}
 .brand{display:flex;align-items:center;gap:8px;padding:4px 6px 2px;font:600 13.5px/1 inherit;letter-spacing:-.01em}
 .brand .bd{width:7px;height:7px;border-radius:50%;background:var(--green)}
+/* 版本号常驻可见:用户能一眼说出自己在用哪一版,报问题时也报得准 */
+.brand .ver{margin-left:auto;font:500 10.5px/1 var(--mono,inherit);color:var(--faint);letter-spacing:0}
+.brand .ver.new{color:var(--blue)}
+
+/* ===== 更新面板:把"黑箱等待"拆成有名字的步骤 ===== */
+.upd-kicker{font:600 10px/1 inherit;letter-spacing:.14em;color:var(--blue);text-transform:uppercase}
+.upd-notes{font:400 12.5px/1.7 inherit;color:var(--sub);background:var(--soft);
+  border-radius:var(--r-s);padding:11px 13px;max-height:150px;overflow-y:auto;white-space:pre-wrap}
+.upd-warn{display:flex;gap:9px;align-items:flex-start;font:400 12.5px/1.65 inherit;
+  background:var(--amber-bg);color:var(--amber);border-radius:var(--r-s);padding:11px 13px}
+.upd-warn b{display:block;color:var(--amber);font-weight:600;margin-bottom:2px}
+.upd-steps{display:flex;flex-direction:column;gap:2px}
+.upd-step{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--r-s);
+  background:var(--soft);font:400 12.5px/1.4 inherit;color:var(--dim);transition:background var(--tr),color var(--tr)}
+.upd-step .si{width:17px;height:17px;border-radius:50%;flex:none;display:flex;align-items:center;
+  justify-content:center;font:600 10px/1 inherit;border:1.5px solid var(--line-d);color:var(--faint)}
+.upd-step .sn{flex:1;min-width:0}
+.upd-step .sr{font:500 11.5px/1 inherit;color:var(--faint);font-variant-numeric:tabular-nums}
+.upd-step.active{background:var(--blue-t);color:var(--ink)}
+.upd-step.active .si{border-color:var(--blue);color:var(--blue)}
+.upd-step.active .sr{color:var(--blue)}
+.upd-step.done{color:var(--ink)}
+.upd-step.done .si{background:var(--green);border-color:var(--green);color:#fff}
+.upd-step.done .sr{color:var(--green)}
+.upd-bar{height:3px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:7px}
+.upd-bar b{display:block;height:100%;background:var(--blue);transition:width .25s}
+.upd-foot{font:400 11.5px/1.65 inherit;color:var(--faint)}
+/* 重启遮罩:安装完到新版起来之间那几秒,不交代一声就像卡死了 */
+.upd-restart{position:fixed;inset:0;z-index:90;display:none;align-items:center;justify-content:center;
+  background:rgba(255,255,255,.92);backdrop-filter:blur(3px)}
+.upd-restart .box{display:flex;flex-direction:column;align-items:center;gap:11px;text-align:center;padding:0 24px}
+.upd-restart b{font:600 14.5px/1.4 inherit;color:var(--ink)}
+.upd-restart span{font:400 12.5px/1.7 inherit;color:var(--sub);max-width:300px}
 .newbtn{display:flex;align-items:center;gap:9px;background:var(--blue);color:#fff;border-radius:10px;
   padding:10px 12px;cursor:pointer;transition:background var(--tr),transform .1s;box-shadow:var(--sh-xs)}
 .newbtn:hover{background:var(--blue-d)}.newbtn:active{transform:scale(.985)}
@@ -470,7 +503,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 
 <div id="app">
   <aside>
-    <div class="brand"><span class="bd" id="brandDot"></span>中标狗</div>
+    <div class="brand"><span class="bd" id="brandDot"></span>中标狗<span class="ver" id="brandVer" title="当前版本"></span></div>
     <div class="newbtn" onclick="pickFile()">
       <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       <div class="nb-t"><b>新建任务</b><i>选择或拖入招标文件</i></div>
@@ -742,6 +775,26 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 </div>
 
 <!-- 应用内确认框:桌面壳(Tauri)里 window.confirm 会静默返回 false,原生弹窗不可用 -->
+<div class="sheet" id="updSheet" style="width:500px;gap:13px;z-index:60">
+  <div style="display:flex;flex-direction:column;gap:5px">
+    <div class="upd-kicker">应用更新</div>
+    <h2 id="updTitle" style="font-size:16.5px">有新版本</h2>
+    <div class="desc" id="updVersions"></div>
+  </div>
+  <div class="upd-notes" id="updNotes" style="display:none"></div>
+  <div class="upd-warn" id="updWarn" style="display:none"></div>
+  <div class="upd-steps" id="updSteps"></div>
+  <div class="upd-foot" id="updFoot"></div>
+  <div style="display:flex;gap:9px;justify-content:flex-end" id="updActions">
+    <button class="btn gy" type="button" id="updLater" onclick="closeAll()">稍后再说</button>
+    <button class="btn" type="button" id="updGo" onclick="runUpdate()">立即更新</button>
+  </div>
+</div>
+<div class="upd-restart" id="updRestart">
+  <div class="box"><i class="spin b" style="width:22px;height:22px;border-width:2.5px"></i>
+    <b>正在重启应用</b>
+    <span>新版本已安装完成,正在关闭旧版本并启动新版本。请不要手动关闭窗口。</span></div>
+</div>
 <div class="sheet" id="confirm" style="width:400px;gap:14px;z-index:55">
   <h2 id="cfT" style="font-size:15.5px">确认操作?</h2>
   <div class="desc" id="cfD"></div>
@@ -1083,7 +1136,8 @@ function healthUpdateInfo(health){
   let url = String(u.url || u.release_url || h.release_url || '');
   const safe = /^https:\/\/github\.com\/shandianT\/bid-dog\/releases(?:\/|$)/i;
   if(!safe.test(url)) url = 'https://github.com/shandianT/bid-dog/releases/latest';
-  return {version:version || '新版', url};
+  const notes = String(u.notes || u.body || u.release_notes || h.update_notes || '').slice(0, 1200);
+  return {version:version || '新版', url, notes};
 }
 function modeFromModel(model){
   const m = String(model||'');
@@ -1516,12 +1570,21 @@ async function findEngine(){
   if(stale) S.stale = stale.h.version || '旧版';
   return null;
 }
+// 版本号常驻侧栏:用户随时说得出自己在用哪一版,报问题时也报得准。
+// 必须不依赖引擎连通——引擎起不来的时候,恰恰是最需要报版本号的时候。
+function renderBrandVersion(info){
+  const ver = el('brandVer'); if(!ver) return;
+  ver.textContent = 'v' + (S.engineVersion || BUNDLED_ENGINE_VERSION);
+  ver.className = 'ver' + (info ? ' new' : '');
+  ver.title = info ? ('有新版 v' + info.version + ',点左下角更新') : '当前版本';
+}
 function applyHealthUpdate(h){
   const info = healthUpdateInfo(h), link = el('updateLink');
   S.updateInfo = info;
+  renderBrandVersion(info);
   if(info){
     link.textContent = IS_WEB ? ('有修复版 v' + info.version + ' → 去下载')
-                              : ('有新版 v' + info.version + ' → 立即更新');
+                              : ('有新版 v' + info.version + ' → 查看并更新');
     link.style.display = 'flex';
   }else link.style.display = 'none';
   // 版本治理:低于最低支持版(required)强提示;过期(expired)持久横幅,主按钮=立即更新。
@@ -1534,30 +1597,88 @@ function applyHealthUpdate(h){
   }
   return info;
 }
-async function autoUpdate(){
-  /* 桌面端一键自动更新:签名校验 → 下载 → 安装 → 自动重启;网页端退回下载页 */
+// 三步就是三步:每一步都对应一个引擎真的报上来的事件。
+// 硬凑出「校验签名」这种看不见状态的步骤,和之前那个假进度条是同一种毛病。
+const UPDATE_STEPS = [['download','下载安装包'],['install','校验签名并安装'],['restart','重启应用']];
+function fmtMB(bytes){ const n=Number(bytes)||0; return n>=1048576?(n/1048576).toFixed(1)+' MB':Math.round(n/1024)+' KB'; }
+function renderUpdateSteps(stage, received, total){
+  const host=el('updSteps'); if(!host) return;
+  const order=UPDATE_STEPS.map(x=>x[0]), at=order.indexOf(stage);
+  host.innerHTML=UPDATE_STEPS.map(([key,label],i)=>{
+    const cls = at<0 ? '' : (i<at ? 'done' : i===at ? 'active' : '');
+    let right='', bar='';
+    if(key==='download' && i===at){
+      right = total>0 ? Math.floor(received/total*100)+'%' : fmtMB(received);
+      if(total>0) bar='<div class="upd-bar"><b style="width:'+Math.min(100,Math.floor(received/total*100))+'%"></b></div>';
+    } else if(cls==='done') right='已完成';
+    else if(cls==='active') right='进行中';
+    return '<div><div class="upd-step '+cls+'"><span class="si">'+(cls==='done'?'✓':(i+1))+'</span>'
+      +'<span class="sn">'+esc(label)+'</span><span class="sr">'+esc(right)+'</span></div>'+bar+'</div>';
+  }).join('');
+}
+// 更新要重启,重启会打断正在跑的生成。这是中标狗独有的一层——必须在按钮按下去之前说清楚,
+// 而不是等任务断了再解释。所幸检查点还在,更新后能「从断点继续」。
+function runningJobsForUpdate(){
+  return (S.jobs||[]).filter(j=>j && ['running','paused'].indexOf(jobState(j))>=0);
+}
+function openUpdatePanel(){
+  const info=S.updateInfo;
+  if(!info){ toast('当前已经是最新版本'); return; }
+  if(IS_WEB){ openUpdate(); return; }      // 网页端没有本地安装能力,直接给下载页
+  el('updTitle').textContent='有新版本 v'+info.version;
+  el('updVersions').textContent='当前 v'+(S.engineVersion||BUNDLED_ENGINE_VERSION)+' → 新版 v'+info.version;
+  const notes=el('updNotes'), text=String(info.notes||'').trim();
+  notes.textContent=text; notes.style.display=text?'block':'none';
+  const busy=runningJobsForUpdate(), warn=el('updWarn');
+  if(busy.length){
+    warn.style.display='flex';
+    warn.innerHTML='<span>⚠</span><div><b>有 '+busy.length+' 个任务正在生成</b>'
+      +'更新需要重启应用,这些任务会停在当前检查点。已写完的章节不会丢,重启后在任务里点「从断点继续」就能接着跑。'
+      +'不想中断的话,可以等它跑完再更新。</div>';
+  } else warn.style.display='none';
+  el('updFoot').textContent='更新期间请不要关闭应用。已生成的内容、素材库和设置都不受影响。';
+  el('updGo').textContent=busy.length?'仍然更新':'立即更新';
+  el('updGo').style.display=''; el('updLater').style.display='';
+  renderUpdateSteps('', 0, 0);
+  el('ovl').style.display='block'; el('updSheet').style.display='flex';
+}
+async function runUpdate(){
   const invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
   if(IS_WEB || typeof invoke !== 'function'){ openUpdate(); return; }
-  // 下载安装包要几十秒到几分钟,而 toast 2.6 秒就消失了。原来点完之后界面毫无动静,
-  // 用户只会以为没反应、反复点——每点一次就多起一个并发下载。这里改成:
-  // 入口自己变成进度态并锁住,过程可见,重复点击直接忽略。
-  if(S.updating) return;
+  if(S.updating) return;                   // 重复点击 = 并发下载,直接忽略
   S.updating = true;
-  const link = el('updateLink'), restore = link ? link.textContent : '';
-  const setLink = t => { if(link){ link.textContent = t; link.style.pointerEvents = 'none'; link.style.opacity = '.75'; } };
-  const releaseLink = t => { if(link){ link.textContent = t || restore; link.style.pointerEvents = ''; link.style.opacity = ''; } };
-  setLink('正在更新…请勿关闭');
-  toast('正在下载并安装更新,完成后会自动重启,任务数据不受影响…');
+  el('updGo').style.display='none'; el('updLater').style.display='none';
+  el('updFoot').textContent='正在更新,请不要关闭应用。这一步不能中途取消。';
+  renderUpdateSteps('download', 0, 0);
   try{
     const r = await invoke('install_app_update');
-    if(r && r.updated === false){ toast(r.message || '当前已经是最新版本'); releaseLink('已经是最新版'); S.updating = false; }
-    else setLink('更新完成 · 正在重启…');   // 装好了就等重启接管,不解锁,免得又点一次
+    if(r && r.updated === false){         // 已经是最新:面板退回可关闭状态,不假装装过
+      S.updating=false; renderUpdateSteps('', 0, 0);
+      el('updFoot').textContent=r.message||'当前已经是最新版本。';
+      el('updLater').style.display=''; el('updLater').textContent='关闭';
+      applyHealthUpdate({});
+    }
   }catch(e){
-    toast((e && (e.message || String(e))) || '自动更新失败,已为你打开下载页');
-    releaseLink(); S.updating = false;
-    openUpdate();                       // 自动通道失败退回手动下载,不能把用户困在旧版
+    S.updating=false;
+    el('updFoot').textContent=(e && (e.message||String(e))) || '自动更新失败。已为你打开下载页,可手动安装。';
+    el('updGo').style.display=''; el('updGo').textContent='重试';
+    el('updLater').style.display='';
+    openUpdate();                          // 自动通道失败退回手动下载,不能把用户困在旧版
   }
 }
+function autoUpdate(){ openUpdatePanel(); }   // 侧栏入口:先看清楚再决定,不再一点就跑
+// Rust 侧把真实的下载字节和阶段播过来(见 emit_update_stage)。收不到也不致命:
+// 步骤停在「下载中」,更新照常进行——但正常情况下用户能看到进度真的在走。
+(function bindUpdateProgress(){
+  const listen = window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
+  if(typeof listen !== 'function') return;
+  listen('app-update://progress', ev => {
+    const p = (ev && ev.payload) || {};
+    if(p.stage === 'restarting'){ el('updRestart').style.display='flex'; return; }
+    renderUpdateSteps(p.stage === 'installing' ? 'install' : 'download',
+                      Number(p.received)||0, Number(p.total)||0);
+  }).catch(()=>{});
+})();
 async function pollHealthUpdate(attempt){
   if(!S.online || FORCE_DEMO) return;
   try{
@@ -1634,6 +1755,7 @@ function showEngineOffline(){
   });
 }
 async function boot(){
+  renderBrandVersion(null);   // 先把版本号亮出来,不等引擎——引擎连不上时更需要它
   if(FORCE_DEMO){
     S.online = false;
     el('conn').textContent = '在线体验版(演示数据)';
@@ -3492,7 +3614,7 @@ function notify(t){ if(IS_WEB && window.Notification && Notification.permission=
 /* ================= 弹层 ================= */
 function openSheet(id){ el('ovl').style.display='block'; el(id).style.display='flex'; if(id==='providers') loadProviders(); if(id==='assets') loadAssets(); }
 function openCheck(){ el('ovl').style.display='block'; el('check').style.display='flex'; renderCheck(); }
-function closeAll(){ cfDone(false); ['ovl','check','providers','assets','preview','confirm','redo','logSheet','diagnosticSheet','projectSheet','onboarding','newjob','covSheet','rwSheet'].forEach(i=>el(i).style.display='none'); const p=el('problemHost');if(p&&p.dataset.hiddenForDiagnostic){delete p.dataset.hiddenForDiagnostic;renderProblem();} }
+function closeAll(){ cfDone(false); ['ovl','check','providers','assets','preview','confirm','redo','logSheet','diagnosticSheet','projectSheet','onboarding','newjob','covSheet','rwSheet','updSheet'].forEach(i=>el(i).style.display='none'); const p=el('problemHost');if(p&&p.dataset.hiddenForDiagnostic){delete p.dataset.hiddenForDiagnostic;renderProblem();} }
 /* 应用内确认(替代 window.confirm:Tauri 桌面壳里原生 confirm 静默返回 false) */
 function askConfirm(title, desc, danger){
   return new Promise(res=>{

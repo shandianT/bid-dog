@@ -828,6 +828,13 @@ fn repair_local_engine_blocking(runtime: &DesktopRuntime) -> EngineRepairResult 
     }
 }
 
+#[derive(Clone, Serialize)]
+struct AppUpdateProgress {
+    stage: String,
+    received: u64,
+    total: u64,
+}
+
 #[derive(Serialize)]
 struct AppUpdateResult {
     ok: bool,
@@ -856,12 +863,46 @@ async fn install_app_update(app: tauri::AppHandle) -> Result<AppUpdateResult, St
         });
     };
     let version = update.version.clone();
+    // 下载一个安装包要几十秒到几分钟。以前这两个回调是空的——Tauri 把真实的字节进度
+    // 递到手里,我们直接扔掉,界面只能干转一个圈。用户看不到任何动静,就会以为卡死了
+    // 反复点,每点一次多起一个并发下载。这里把进度原样播给前端,让它能画出真进度条。
+    // 总大小来自响应的 Content-Length,由 on_chunk 的第二个参数递进来;
+    // 服务端没给长度时是 None,前端据此退化成"已下载 X MB"而不是假装有百分比。
+    let downloaded = std::sync::atomic::AtomicU64::new(0);
+    let progress_app = app.clone();
+    let done_app = app.clone();
     update
-        .download_and_install(|_received, _total| {}, || {})
+        .download_and_install(
+            move |chunk, total| {
+                let received = downloaded
+                    .fetch_add(chunk as u64, std::sync::atomic::Ordering::Relaxed)
+                    + chunk as u64;
+                emit_update_stage(&progress_app, "downloading", received, total.unwrap_or(0));
+            },
+            move || {
+                // 下载完成,进入安装。安装这一段不可中断,前端据此把"稍后再说"收起来。
+                emit_update_stage(&done_app, "installing", 0, 0);
+            },
+        )
         .await
         .map_err(|error| format!("下载或安装更新 {version} 失败：{error}"))?;
+    emit_update_stage(&app, "restarting", 0, 0);
     // 安装完成直接重启进入新版;退出路径会先让引擎优雅收尾(见 RunEvent 处理)。
     app.restart()
+}
+
+/// 把更新进度播给前端。播不出去(窗口已关等)不算错误:更新本身照常继续,
+/// 少一条进度提示远好过为了报进度把更新中断掉。
+fn emit_update_stage(app: &tauri::AppHandle, stage: &str, received: u64, total: u64) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "app-update://progress",
+        AppUpdateProgress {
+            stage: stage.to_string(),
+            received,
+            total,
+        },
+    );
 }
 
 #[tauri::command]
