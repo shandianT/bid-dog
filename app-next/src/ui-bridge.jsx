@@ -40,9 +40,8 @@ export function installUiBridge(){
   ui.openJobFolder = () => import('./views/artifacts.js').then(m => m.openJobFolder());
   ui.repairJob = () => { S.sheet = { name:'check' }; bump(); };   // 经典 repair 动作=打开检查抽屉并清洗;清洗按钮在抽屉里
   ui.downloadDiagnosticBundle = () => import('./views/diagnostic-bundle.js').then(m => m.downloadDiagnosticBundle());
-  // 视图 D 落地前的占位:入口保留、当面说明,不做死按钮。
-  const migrating = label => () => { S.sheet = { name:'migrating', label }; bump(); };
-  ui.openUpdatePanel = migrating('更新面板');
+  ui.openUpdatePanel = () => import('./views/update-core.js').then(m => m.openUpdatePanel());
+  ui.showOnboarding = force => import('./views/OnboardingSheet.jsx').then(m => m.showOnboarding(force));
 }
 
 function cfDone(v){ const r = confirmResolve; confirmResolve = null; S.sheet = null; bump(); if(r) r(v); }

@@ -14,6 +14,11 @@ import NewJob from './views/NewJob.jsx';
 import { ConfirmModal, ProjectSheet, LogSheet, DiagnosticSheet, MigratingSheet, Toast } from './ui-bridge.jsx';
 import ResultView from './views/ResultView.jsx';
 import { CheckSheet, CoverageSheet, RewriteSheet, RedoSheet, PreviewSheet } from './views/sheets.jsx';
+import SettingsSheet from './views/SettingsSheet.jsx';
+import AssetsSheet from './views/AssetsSheet.jsx';
+import UpdateSheet, { UpdateRestart } from './views/UpdateSheet.jsx';
+import OnboardingSheet from './views/OnboardingSheet.jsx';
+import { renderUpdateSteps, openUpdatePanel, bindUpdateProgress } from './views/update-core.js';
 import { njAddFiles, walkEntries, addRef } from './views/newjob-core.js';
 
 function Hero(){
@@ -55,6 +60,10 @@ export default function App(){
   const [hot, setHot] = useState(null);
 
   useEffect(() => {
+    // 测试座:经典全局函数名保持可呼(spec 用 page.evaluate 直呼它们)
+    window.renderUpdateSteps = renderUpdateSteps;
+    window.openUpdatePanel = openUpdatePanel;
+    bindUpdateProgress();
     boot();
     installVisibilityHandler();
     // 运行中的任务每秒刷新耗时/预估(经典同一节奏)
@@ -112,6 +121,7 @@ export default function App(){
       <NewJob />
       <ConfirmModal /><ProjectSheet /><LogSheet /><DiagnosticSheet /><MigratingSheet />
       <CheckSheet /><CoverageSheet /><RewriteSheet /><RedoSheet /><PreviewSheet />
+      <SettingsSheet /><AssetsSheet /><UpdateSheet /><OnboardingSheet /><UpdateRestart />
       <Toast />
       <DropOverlay visible={dropVisible} hot={hot} setHot={setHot} />
     </>

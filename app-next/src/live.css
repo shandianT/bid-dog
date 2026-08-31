@@ -460,3 +460,52 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 /* 新建任务:模板面板与草稿卡 */
 .njTemplatePreview{border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:400 12px/1.7 inherit;color:var(--sub)}
 .njdraft{border:1px solid #f3ddb5;background:#fdf9f0;border-radius:10px;padding:10px 12px;font:400 12px/1.7 inherit;color:var(--sub)}
+
+/* ============ 视图 D:设置 / 素材库 / 引导 / 更新面板 ============ */
+.desc2{font:400 12px/1.7 inherit;color:var(--dim)}
+.qkcard{border:1.5px solid var(--blue);border-radius:12px;padding:13px 14px;display:flex;flex-direction:column;gap:10px;background:#f7faff}
+.segbar{display:flex;background:#eceff3;border-radius:9px;padding:3px;gap:2px}
+.segbar .seg{font:550 12px/1 inherit;color:var(--sub);padding:7px 12px;border-radius:7px;cursor:pointer;transition:all .15s}
+.segbar .seg.on{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(16,24,40,.1)}
+.setdet{border:1px solid var(--line-d);border-radius:11px;padding:2px 12px 10px}
+.setdet>summary{cursor:pointer;font:500 13px/2.6 inherit;color:var(--sub);user-select:none;list-style:none}
+.setdet>summary::-webkit-details-marker{display:none}
+.s2note{font:400 11.5px/1.7 inherit;color:var(--sub);background:#f4f6f9;border-radius:9px;padding:9px 11px}
+.lrow .a{font:500 12px/1 inherit;color:var(--blue);cursor:pointer;white-space:nowrap;padding-top:3px}
+.gcard{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+.gcard .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.gcard .a{font:500 12px/1 inherit;color:var(--blue);cursor:pointer;white-space:nowrap}
+.upd-kicker{font:600 10.5px/1 inherit;letter-spacing:.08em;color:var(--dim)}
+.upd-notes{background:#f7f8fa;border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+  font:400 12px/1.8 inherit;color:var(--sub);white-space:pre-line}
+.upd-warn{display:flex;gap:9px;background:#fdf3e4;border:1px solid #f3ddb5;border-radius:10px;padding:10px 12px;
+  font:400 12px/1.7 inherit;color:#8a5a12}
+.upd-warn b{display:block;font:600 12.5px/1.6 inherit}
+.upd-steps{display:flex;flex-direction:column;gap:5px}
+.upd-step{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:9px;padding:9px 12px;
+  font:400 12.5px/1 inherit;color:var(--dim)}
+.upd-step .si{width:18px;height:18px;border-radius:50%;background:#f1f3f6;display:flex;align-items:center;
+  justify-content:center;font:600 10px/1 inherit;flex:none}
+.upd-step .sn{flex:1}
+.upd-step .sr{font:500 11.5px/1 inherit;font-variant-numeric:tabular-nums}
+.upd-step.done{color:var(--sub)}
+.upd-step.done .si{background:#e9f7f0;color:var(--green)}
+.upd-step.active{color:var(--ink);border-color:#c7dbf7}
+.upd-step.active .si{background:var(--blue-weak);color:var(--blue)}
+.upd-bar{height:4px;background:#eceef2;border-radius:2px;margin:5px 12px 2px;overflow:hidden}
+.upd-bar b{display:block;height:100%;background:var(--blue);border-radius:2px;transition:width .3s}
+.upd-foot{font:400 11.5px/1.7 inherit;color:var(--faint)}
+.upd-restart{position:fixed;inset:0;z-index:120;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center}
+.upd-restart .box{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center}
+.upd-restart b{font:600 15px/1.4 inherit}
+.upd-restart span{font:400 12.5px/1.7 inherit;color:var(--dim);max-width:320px}
+.ob-progress{display:flex;gap:6px;margin-bottom:14px}
+.ob-step{flex:1;text-align:center;font:550 11.5px/1 inherit;color:var(--faint);border:1px solid var(--line);
+  border-radius:999px;padding:8px 0}
+.ob-step.on{color:var(--blue);border-color:#c7dbf7;background:var(--blue-weak)}
+.ob-step.done{color:var(--green);border-color:#bfe6d4;background:#e9f7f0}
+.ob-pane{display:flex;flex-direction:column;gap:11px}
+.ob-big{font:650 15.5px/1.4 inherit}
+.ob-help{font:400 12px/1.7 inherit;color:var(--dim)}
+.diag-status{background:#f7f8fa;border:1px solid var(--line);border-radius:10px;padding:11px 13px;
+  font:400 12.5px/1.8 inherit;color:var(--sub);margin:0}
