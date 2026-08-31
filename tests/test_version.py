@@ -6,7 +6,7 @@ from conftest import ROOT
 
 def test_release_version_is_consistent(engine):
     version = engine.ENGINE_VERSION
-    assert version == "0.20.5"
+    assert version == "0.20.6"
     assert json.loads((ROOT / "app" / "package.json").read_text())["version"] == version
     assert json.loads((ROOT / "app" / "package-lock.json").read_text())["version"] == version
     assert json.loads((ROOT / "app" / "src-tauri" / "tauri.conf.json").read_text())["version"] == version
@@ -70,7 +70,7 @@ def test_release_assets_are_explicit_and_published_releases_are_immutable(engine
     assert "releases are immutable" in workflow
     assert "same commit" in workflow
     assert 'releases?per_page=100' in workflow
-    assert "Draft release desktop-v0.20.5 belongs to another commit" in workflow
+    assert "Draft release desktop-v0.20.6 belongs to another commit" in workflow
     assert "verify staged release assets" in workflow
     # A newly-created draft tag is briefly not discoverable through the
     # /releases/tags/{tag} endpoint. Verify and publish by the action's stable

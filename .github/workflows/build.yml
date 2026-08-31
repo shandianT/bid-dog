@@ -334,7 +334,7 @@ jobs:
           app_path=$(find "$mount_dir" -maxdepth 1 -name '*.app' -print -quit)
           codesign --verify --deep --strict --verbose=2 "$app_path"
           "$app_path/Contents/MacOS/opencode-cli" --version
-          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.20.5"
+          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "0.20.6"
           if [ "$MAC_SIGNING_READY" = "true" ]; then
             spctl --assess --type execute --verbose=2 "$app_path"
             xcrun stapler validate "$app_path"
@@ -363,7 +363,7 @@ jobs:
           done
           test -n "$health" || { cat "$engine_log"; exit 1; }
           printf '%s' "$health" | python -c \
-            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.20.5"'
+            'import json,sys; h=json.load(sys.stdin); assert h["ok"] is True and h["version"] == "0.20.6"'
           word_job="$engine_data/jobs/word-smoke"
           mkdir -p "$word_job"
           printf '%s\n' '{"name":"安装包 Word 冒烟","tender":"招标文件.docx"}' >"$word_job/任务.json"
@@ -435,7 +435,7 @@ jobs:
               Get-Content $engineOut, $engineErr -ErrorAction SilentlyContinue
               throw "installed bid-engine.exe did not become healthy"
             }
-            if ($health.version -ne "0.20.5") {
+            if ($health.version -ne "0.20.6") {
               throw "installed engine version mismatch: $($health.version)"
             }
             $wordJob = Join-Path $engineData "jobs\word-smoke"
@@ -497,9 +497,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="desktop-v0.20.5"
+          tag="desktop-v0.20.6"
           release_rows=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-            --jq '.[] | select(.tag_name == "desktop-v0.20.5") | [.id, .draft, .target_commitish] | @tsv')
+            --jq '.[] | select(.tag_name == "desktop-v0.20.6") | [.id, .draft, .target_commitish] | @tsv')
           release_count=$(printf '%s\n' "$release_rows" | sed '/^$/d' | wc -l | tr -d ' ')
           if [ "$release_count" -gt 1 ]; then
             echo "Multiple releases exist for $tag; refusing an ambiguous update."
@@ -512,7 +512,7 @@ jobs:
               exit 1
             fi
             if [ "$release_target" != "$GITHUB_SHA" ]; then
-              echo "Draft release desktop-v0.20.5 belongs to another commit; refusing to mix assets."
+              echo "Draft release desktop-v0.20.6 belongs to another commit; refusing to mix assets."
               exit 1
             fi
             echo "Found an unfinished draft for the same commit; resuming its asset upload safely."
@@ -546,13 +546,13 @@ jobs:
           done
           # mac 自动更新包默认叫 <产品名>.app.tar.gz,统一成带版本与架构的名字
           if [ -f out/bid-dog.app.tar.gz ]; then
-            mv out/bid-dog.app.tar.gz out/bid-dog_0.20.5_aarch64.app.tar.gz
+            mv out/bid-dog.app.tar.gz out/bid-dog_0.20.6_aarch64.app.tar.gz
           fi
           if [ -f out/bid-dog.app.tar.gz.sig ]; then
-            mv out/bid-dog.app.tar.gz.sig out/bid-dog_0.20.5_aarch64.app.tar.gz.sig
+            mv out/bid-dog.app.tar.gz.sig out/bid-dog_0.20.6_aarch64.app.tar.gz.sig
           fi
-          test -f out/bid-dog_0.20.5_aarch64.dmg
-          test -f out/bid-dog_0.20.5_x64-setup.exe
+          test -f out/bid-dog_0.20.6_aarch64.dmg
+          test -f out/bid-dog_0.20.6_x64-setup.exe
           (cd out && sha256sum bid-dog_* > SHA256SUMS)
           ls -la out
       - name: build auto-update manifest (latest.json)
@@ -560,7 +560,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import glob, json, os, datetime
-          version = '0.20.5'
+          version = '0.20.6'
           repo = os.environ.get('GITHUB_REPOSITORY', 'shandianT/bid-dog')
           base = 'https://github.com/%s/releases/download/desktop-v%s/' % (repo, version)
           def sig_for(pattern):
@@ -590,8 +590,8 @@ jobs:
       - id: stage_release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: desktop-v0.20.5
-          name: 中标狗桌面版 v0.20.5
+          tag_name: desktop-v0.20.6
+          name: 中标狗桌面版 v0.20.6
           target_commitish: ${{ github.sha }}
           # Only a same-commit draft reaches this step; this repairs an interrupted partial upload.
           overwrite_files: true
@@ -604,8 +604,8 @@ jobs:
             中标狗桌面应用安装包（自动构建；未配置商业证书时 macOS 为 ad-hoc、Windows 为未签名）。作者:FDE-家涛。
             官网(含在线体验、成品 Word 页面):https://bid-dog.vercel.app
 
-            - macOS Apple Silicon(M 系列): `bid-dog_0.20.5_aarch64.dmg`
-            - Windows: `bid-dog_0.20.5_x64-setup.exe`
+            - macOS Apple Silicon(M 系列): `bid-dog_0.20.6_aarch64.dmg`
+            - Windows: `bid-dog_0.20.6_x64-setup.exe`
             - 校验文件: `SHA256SUMS`
             - 需 Intel Mac 时,把 workflow 矩阵加回 `platform: macos-13` 即可。
 
@@ -613,18 +613,21 @@ jobs:
             `xattr -dr com.apple.quarantine "/Applications/中标狗.app"` 即可打开(或:系统设置 → 隐私与安全性 → 仍要打开)。每个新下载版本都可能再次需要放行。详见 README。
             Windows SmartScreen 提示时点「更多信息 → 仍要运行」。
 
-            v0.20.5（完整说明见仓库更新日志）:
-            - Word 表头、序号、状态、数量和正文单元格全部统一左对齐，垂直方向保持居中。
-            - 显式清除数值缩进与字符缩进，避免 Word/WPS 继承正文“两字符首行缩进”。
-            - 表格按列语义分配宽度，叙述列过宽时自动切换横版，减少中文一字一行和手工调宽。
-            - 单元格段前段后为 0、1.15 倍行距；表头继续加粗并支持跨页重复。
-            - Word 自检新增“表格·段落”和“表格·对齐”硬门禁，格式回退时禁止交付。
+            v0.20.6（完整说明见仓库更新日志）:
+            - **装上 v0.20.5 或本版之后，以后每一版都能在应用内一键更新**；
+              v0.20.4 及更早的安装包里没有更新能力，需要手动安装一次。
+            - 侧栏版本号改成看得清、可点击的入口：点它即可主动检查更新。此前只有
+              「有新版」时才冒出提示，已经是最新版时界面上关于更新什么都不显示。
+            - 更新清单端点 https://bid-dog.vercel.app/updater/*.json 此前一直是 404
+              （原设计要求发版后手动拷贝 latest.json，从未执行过），改为代理转发到
+              Release 上 CI 自动产出的清单，永远最新。
+            - 设置面板底部改为作者署名，与站点首页统一。
             - OpenCode 继续固定为 1.18.18；macOS/Windows 安装载荷仍须实启引擎并导出 Word 后才允许发布。
 
             完整历史版本说明见 CHANGELOG.md。
           files: |
-            out/bid-dog_0.20.5_aarch64.dmg
-            out/bid-dog_0.20.5_x64-setup.exe
+            out/bid-dog_0.20.6_aarch64.dmg
+            out/bid-dog_0.20.6_x64-setup.exe
             out/SHA256SUMS
       - name: upload auto-update assets to the draft release
         shell: bash
@@ -635,7 +638,7 @@ jobs:
           if [ -z "$extras" ]; then
             echo "无自动更新资产可上传(未配置签名密钥)"; exit 0
           fi
-          gh release upload "desktop-v0.20.5" $extras --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "desktop-v0.20.6" $extras --clobber --repo "$GITHUB_REPOSITORY"
       - name: verify staged release assets
         shell: bash
         env:
@@ -657,14 +660,14 @@ jobs:
           if release.get("draft") is not True:
               raise SystemExit("release must remain a draft until all assets are verified")
           expected = {
-              "bid-dog_0.20.5_aarch64.dmg",
-              "bid-dog_0.20.5_x64-setup.exe",
+              "bid-dog_0.20.6_aarch64.dmg",
+              "bid-dog_0.20.6_x64-setup.exe",
               "SHA256SUMS",
           }
           optional = {
-              "bid-dog_0.20.5_aarch64.app.tar.gz",
-              "bid-dog_0.20.5_aarch64.app.tar.gz.sig",
-              "bid-dog_0.20.5_x64-setup.exe.sig",
+              "bid-dog_0.20.6_aarch64.app.tar.gz",
+              "bid-dog_0.20.6_aarch64.app.tar.gz.sig",
+              "bid-dog_0.20.6_x64-setup.exe.sig",
               "latest.json",
           }
           assets = {item.get("name"): item for item in release.get("assets", [])}
@@ -691,6 +694,6 @@ jobs:
           release = json.load(open(sys.argv[1], encoding="utf-8"))
           if release.get("draft") is not False:
               raise SystemExit("release was not published")
-          if release.get("tag_name") != "desktop-v0.20.5":
+          if release.get("tag_name") != "desktop-v0.20.6":
               raise SystemExit("published release tag mismatch")
           PY

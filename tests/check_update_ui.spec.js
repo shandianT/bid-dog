@@ -13,10 +13,14 @@ const { test, expect } = require('@playwright/test');
 const DESKTOP_URL = (process.env.BIDDOG_TEST_URL || 'http://127.0.0.1:18765')
   .replace('127.0.0.1', 'tauri.localhost').replace('localhost:', 'tauri.localhost:');
 
+// 「新版」的版本号是虚构的,可以写死;「当前」不能——它来自真实引擎,每次升版都会变。
+// 第一版把当前版写死成 '0.20.5',升到 0.20.6 时这条用例立刻断了。断言该钉的是
+// 「当前 → 新版」这个形态和真实取值,不是某两个具体数字。
+const NEXT_VERSION = '9.9.9';
+const runningVersion = page => page.evaluate(() => S.engineVersion || BUNDLED_ENGINE_VERSION);
 const UPDATE_HEALTH = {
-  version: '0.20.5',
   update: {
-    available: true, latest: '0.20.6',
+    available: true, latest: NEXT_VERSION,
     url: 'https://github.com/shandianT/bid-dog/releases/latest',
     notes: '• 修复「从断点继续」按钮不出现\n• 进度条重开应用后不再清零',
   },
@@ -39,7 +43,7 @@ test('the sidebar always shows the running version and turns into an update entr
 
   await page.evaluate(h => applyHealthUpdate(h), UPDATE_HEALTH);
   await expect(page.locator('#updateLink')).toBeVisible();
-  await expect(page.locator('#updateLink')).toContainText('v0.20.6');
+  await expect(page.locator('#updateLink')).toContainText('v' + NEXT_VERSION);
   await expect(page.locator('#brandVer')).toHaveClass(/\bnew\b/);           // 同一行就地变蓝
 });
 
@@ -49,8 +53,9 @@ test('the update panel names every step instead of spinning silently', async ({ 
   await page.evaluate(() => el('updateLink').onclick());
 
   await expect(page.locator('#updSheet')).toBeVisible();
-  await expect(page.locator('#updTitle')).toHaveText('有新版本 v0.20.6');
-  await expect(page.locator('#updVersions')).toContainText('当前 v0.20.5 → 新版 v0.20.6');
+  await expect(page.locator('#updTitle')).toHaveText('有新版本 v' + NEXT_VERSION);
+  await expect(page.locator('#updVersions'))
+    .toHaveText('当前 v' + (await runningVersion(page)) + ' → 新版 v' + NEXT_VERSION);
   await expect(page.locator('#updNotes')).toContainText('从断点继续');       // 更新说明照实显示
   const steps = page.locator('#updSteps .upd-step');
   await expect(steps).toHaveCount(3);
@@ -135,5 +140,5 @@ test('the version badge is the manual check-for-updates entry, not just a label'
   await page.evaluate(h => applyHealthUpdate(h), UPDATE_HEALTH);
   await page.evaluate(() => checkForUpdate());
   await expect(page.locator('#updSheet')).toBeVisible();
-  await expect(page.locator('#updTitle')).toHaveText('有新版本 v0.20.6');
+  await expect(page.locator('#updTitle')).toHaveText('有新版本 v' + NEXT_VERSION);
 });
