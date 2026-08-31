@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+# Windows runner 上 Python 的 stdout 默认走系统代码页(cp1252),脚本里任何一句中文
+# print 都会抛 UnicodeEncodeError 让整个作业以退出码 1 结束——安装包构建曾因此
+# 在 Rust 开始编译前就挂掉。在 workflow 层锁死 UTF-8,后面新增的脚本也不会再踩。
+env:
+  PYTHONIOENCODING: utf-8
+
 concurrency:
   group: build-installers-${{ github.workflow }}-${{ github.ref }}
   # 主分支正在上传安装包时不能被新提交取消，否则可能留下半成品 Release。
