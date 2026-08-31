@@ -12,6 +12,8 @@ import Rail from './views/Rail.jsx';
 import Problem from './views/Problem.jsx';
 import NewJob from './views/NewJob.jsx';
 import { ConfirmModal, ProjectSheet, LogSheet, DiagnosticSheet, MigratingSheet, Toast } from './ui-bridge.jsx';
+import ResultView from './views/ResultView.jsx';
+import { CheckSheet, CoverageSheet, RewriteSheet, RedoSheet, PreviewSheet } from './views/sheets.jsx';
 import { njAddFiles, walkEntries, addRef } from './views/newjob-core.js';
 
 function Hero(){
@@ -28,36 +30,6 @@ function Hero(){
         <div className="sug" onClick={() => ui.openSheet('providers')}>接入你的生成服务<span className="sgr">设置</span></div>
         {/* 演示流程全程走本地脚本化通道,不碰引擎——在线时同样放行(经典同注释) */}
         <div className="sug" onClick={() => { S.online ? demoNew('滨江新区智慧管网(演示)') : demoBoot(); }}>先看一遍 12 阶段演示流程<span className="sgr">约 30 秒</span></div>
-      </div>
-    </div>
-  );
-}
-
-function ResultPlaceholder({ job }){
-  // 交付结果主视图在视图迁移 B 落成完整形态;这里先保证「能看到主文件、能回过程页」两条命脉。
-  const vd = deliveryViewModel(job, S.arts[S.active] || []);
-  return (
-    <div className="result-view" id="resultView">
-      <div className="result-wrap">
-        <div className="result-nav"><button className="tab on" type="button">交付结果</button>
-          <button className="tab" type="button" onClick={() => { S.processView[S.active] = true; bump(); }}>过程与诊断</button></div>
-        <div className="result-hero">
-          <div className="result-mark">✓</div>
-          <div className="result-title"><h2>交付文件已准备好</h2><p>请先打开 Word 复核,再处理待确认项。</p></div>
-        </div>
-        <section className="result-card">
-          <div className="lbl2">主交付文件</div>
-          <div className="result-word">
-            <div className="word-icon">WORD</div>
-            <div className="word-copy"><b>{(vd.primary && vd.primary.name) || '正在核对文件…'}</b><span>生成完成后可直接打开或下载</span></div>
-          </div>
-          <div className="result-actions">
-            <button className="primary" type="button" onClick={() => vd.primary && ui.openArtifact(vd.primary.name || '投标文件.docx', vd.primary.url || '')}>打开</button>
-            <button type="button" onClick={() => ui.openRevision()}>继续修改</button>
-            <button type="button" onClick={() => ui.openCheck()}>查看待确认项</button>
-          </div>
-          <div className="result-note">提交前仍请人工确认投标人名称、报价、资质有效期和签章。完整交付检查视图正在迁移(视图迁移 B)。</div>
-        </section>
       </div>
     </div>
   );
@@ -128,7 +100,7 @@ export default function App(){
         <main>
           <Problem />
           {!has && <Hero />}
-          {has && showResult && <ResultPlaceholder job={job} />}
+          {has && showResult && <ResultView job={job} />}
           {has && !showResult && <><Head /><Mid /><Composer /></>}
         </main>
         {railOn && <Rail />}
@@ -139,6 +111,7 @@ export default function App(){
       </div>
       <NewJob />
       <ConfirmModal /><ProjectSheet /><LogSheet /><DiagnosticSheet /><MigratingSheet />
+      <CheckSheet /><CoverageSheet /><RewriteSheet /><RedoSheet /><PreviewSheet />
       <Toast />
       <DropOverlay visible={dropVisible} hot={hot} setHot={setHot} />
     </>

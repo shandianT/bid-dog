@@ -4,6 +4,8 @@ import React, { useLayoutEffect, useRef } from 'react';
 import { S, ui, bump, flowConsoleView, taskPresentation, phaseTimingLabel, timing, fmtDur,
          jobState, _friendlyText, _friendlyActionLabel, errAction, answer, ASK_SELF } from '../core/index.js';
 import { mdHtml } from '../lib.js';
+import Outline from './Outline.jsx';
+import ConfirmCard from './ConfirmCard.jsx';
 
 const MID_TABS = [['outline', '标书大纲'], ['flow', '执行过程'], ['chat', '对话与要求']];
 
@@ -92,8 +94,8 @@ function ChatMessages(){
     const box = boxRef.current; if(!box) return;
     box.scrollTop = box.scrollHeight;    // 挂载/更新后贴底;用户上翻的场景由外层滚动容器判断保留
   });
-  // 解析确认问题不走通用气泡(结构化确认卡在视图 B 落地;落地前先以普通选项呈现,保证能答)
-  const q = S.chips[S.active];
+  // 解析确认问题不走通用气泡:confirmHost 里有结构化确认卡(经典同注释)
+  const q = S.chips[S.active] && S.chips[S.active].kind === 'confirm_parse' ? null : S.chips[S.active];
   const options = q ? (q.options || []).slice() : [];
   if(q && options.length) options.push(ASK_SELF);
   return (
@@ -173,8 +175,8 @@ export default function Mid(){
             onClick={() => { S.midTab[id] = k; bump(); }}>{label}</button>)}
         </div></div>
       )}
-      {on && tab === 'outline' && <div className="cwrap"><div className="outline-note" style={{ padding: '18px 4px' }}>
-        标书大纲视图正在迁移(视图迁移 B),先用「执行过程」和「对话与要求」跟进任务;经典界面此功能完整可用。</div></div>}
+      <div className="cwrap"><ConfirmCard /></div>
+      {on && tab === 'outline' && <div className="cwrap"><Outline /></div>}
       {(!on || tab === 'flow') && <div className="cwrap"><FlowConsole /></div>}
       {(!on || tab === 'chat') && <div className="cwrap"><ChatMessages /></div>}
       {(!on || tab === 'chat') && <div className="cwrap"><Worklog /></div>}

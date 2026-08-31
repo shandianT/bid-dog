@@ -26,16 +26,23 @@ export function installUiBridge(){
   ui.showDiagnosticDetail = detail => { S.sheet = { name:'diagnostic', detail:String(detail||'') }; bump(); };
   ui.runDiagnostics = () => { S.sheet = { name:'diagnostic', detail:(S.problems[S.active||'_global']||S.problems._global||{}).detail||'', run:true }; bump(); };
   ui.openLog = () => { S.sheet = { name:'log' }; bump(); };
-  // 视图 B/D 落地前的占位:入口保留、当面说明,不做死按钮。
+  ui.openCheck = () => { S.sheet = { name:'check' }; bump(); };
+  ui.openCoverage = () => {
+    const cov = S.active ? S.coverage[S.active] : null;
+    if(!cov || !cov.available){ ui.toast((cov && cov.note) || '响应规划完成后这里会实时更新'); return; }
+    S.sheet = { name:'coverage' }; bump();
+  };
+  ui.openRevision = () => { S.sheet = { name:'redo' }; bump(); };
+  ui.openRedo = () => { S.sheet = { name:'redo' }; bump(); };
+  ui.openRewrite = (node, title) => { S.sheet = { name:'rewrite', node, title }; bump(); };
+  ui.openPreview = (pv, url) => { S.sheet = { name:'preview', pv, url }; bump(); };
+  ui.openArtifact = (name, url) => import('./views/artifacts.js').then(m => m.openArtifact(name, url));
+  ui.openJobFolder = () => import('./views/artifacts.js').then(m => m.openJobFolder());
+  ui.repairJob = () => { S.sheet = { name:'check' }; bump(); };   // 经典 repair 动作=打开检查抽屉并清洗;清洗按钮在抽屉里
+  // 视图 D 落地前的占位:入口保留、当面说明,不做死按钮。
   const migrating = label => () => { S.sheet = { name:'migrating', label }; bump(); };
-  ui.openCheck = migrating('出件前检查');
-  ui.openRevision = migrating('修改结果');
-  ui.openRedo = migrating('修改结果');
-  ui.repairJob = migrating('一键修复');
   ui.downloadDiagnosticBundle = migrating('导出诊断包');
   ui.openUpdatePanel = migrating('更新面板');
-  ui.openArtifact = async (name, url) => { ui.toast('文件打开在迁移中:' + (name||'')); };
-  ui.openJobFolder = async () => { ui.toast('打开任务文件夹在迁移中'); };
 }
 
 function cfDone(v){ const r = confirmResolve; confirmResolve = null; S.sheet = null; bump(); if(r) r(v); }
