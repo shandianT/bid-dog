@@ -115,3 +115,25 @@ test('the restart overlay explains the gap between install and relaunch', async 
   await expect(page.locator('#updRestart')).toContainText('正在重启应用');
   await expect(page.locator('#updRestart')).toContainText('不要手动关闭');
 });
+
+// 已经是最新版时,界面上关于更新原本什么都不显示——想主动确认「我是不是最新的」
+// 无处可点。被动通知和主动查询是两件事,两条路都得有。
+test('the version badge is the manual check-for-updates entry, not just a label', async ({ page }) => {
+  await openDesktop(page);
+  const badge = page.locator('#brandVer');
+  await expect(badge).toHaveAttribute('role', 'button');      // 可点,且对键盘可达
+  await expect(badge).toHaveAttribute('tabindex', '0');
+  await expect(badge).toHaveAttribute('title', /检查更新/);
+  await expect(page.locator('#updateLink')).toBeHidden();      // 没新版时侧栏入口本就不该出现
+
+  // 引擎未连接时点它:说清为什么不能查,而不是静默什么都不发生
+  await page.evaluate(() => { S.online = false; });
+  await page.evaluate(() => checkForUpdate());
+  await expect(page.locator('#toast')).toContainText('本地服务未连接');
+
+  // 已知有新版时点它 = 直接进更新面板,不必再查一遍
+  await page.evaluate(h => applyHealthUpdate(h), UPDATE_HEALTH);
+  await page.evaluate(() => checkForUpdate());
+  await expect(page.locator('#updSheet')).toBeVisible();
+  await expect(page.locator('#updTitle')).toHaveText('有新版本 v0.20.6');
+});

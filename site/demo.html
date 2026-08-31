@@ -37,7 +37,11 @@ aside{background:var(--panel);border-right:1px solid var(--line);padding:14px 12
 .brand{display:flex;align-items:center;gap:8px;padding:4px 6px 2px;font:600 13.5px/1 inherit;letter-spacing:-.01em}
 .brand .bd{width:7px;height:7px;border-radius:50%;background:var(--green)}
 /* 版本号常驻可见:用户能一眼说出自己在用哪一版,报问题时也报得准 */
-.brand .ver{margin-left:auto;font:500 10.5px/1 var(--mono,inherit);color:var(--faint);letter-spacing:0}
+.brand .ver{margin-left:auto;font:600 11px/1 var(--mono,inherit);color:var(--dim);letter-spacing:0;
+  background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:3px 7px;
+  cursor:pointer;transition:background var(--tr),color var(--tr),border-color var(--tr)}
+.brand .ver:hover{background:var(--blue-t);color:var(--blue);border-color:var(--blue)}
+.brand .ver:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .brand .ver.new{color:var(--blue)}
 
 /* ===== 更新面板:把"黑箱等待"拆成有名字的步骤 ===== */
@@ -503,7 +507,7 @@ input.f:focus,select.f:focus{border-color:var(--blue)}
 
 <div id="app">
   <aside>
-    <div class="brand"><span class="bd" id="brandDot"></span>中标狗<span class="ver" id="brandVer" title="当前版本"></span></div>
+    <div class="brand"><span class="bd" id="brandDot"></span>中标狗<span class="ver" id="brandVer" role="button" tabindex="0" onclick="checkForUpdate()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();checkForUpdate();}"></span></div>
     <div class="newbtn" onclick="pickFile()">
       <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       <div class="nb-t"><b>新建任务</b><i>选择或拖入招标文件</i></div>
@@ -1576,7 +1580,26 @@ function renderBrandVersion(info){
   const ver = el('brandVer'); if(!ver) return;
   ver.textContent = 'v' + (S.engineVersion || BUNDLED_ENGINE_VERSION);
   ver.className = 'ver' + (info ? ' new' : '');
-  ver.title = info ? ('有新版 v' + info.version + ',点左下角更新') : '当前版本';
+  ver.title = info ? ('有新版 v' + info.version + ',点这里查看并更新') : '当前版本,点击检查更新';
+}
+// 被动通知不能替代主动查询。原来只有「有新版」时侧栏才冒出入口,已经是最新版时
+// 界面上关于更新什么都不显示——用户想确认「我是不是最新的」或者手动催一次,无处可点。
+// 版本号本身就是这个问题最自然的落点:点它=问一句「我这版还行吗」。
+async function checkForUpdate(){
+  if(S.checkingUpdate) return;
+  if(S.updateInfo){ openUpdatePanel(); return; }   // 已知有新版:直接进面板,不用再查一遍
+  if(!S.online || FORCE_DEMO){ toast('本地服务未连接,连上之后才能检查更新'); return; }
+  S.checkingUpdate = true;
+  const ver = el('brandVer');
+  if(ver) ver.textContent = '检查中…';
+  try{
+    const info = applyHealthUpdate(await api('/v1/health'));   // 内部会重绘版本号
+    if(info) openUpdatePanel();
+    else toast('已经是最新版本 v' + (S.engineVersion || BUNDLED_ENGINE_VERSION));
+  }catch(e){
+    renderBrandVersion(S.updateInfo);                          // 查失败要把版本号还原,不能停在「检查中…」
+    toast('检查更新失败,请稍后再试');
+  }finally{ S.checkingUpdate = false; }
 }
 function applyHealthUpdate(h){
   const info = healthUpdateInfo(h), link = el('updateLink');
