@@ -11,6 +11,11 @@ def test_release_version_is_consistent(engine):
     assert json.loads((ROOT / "app" / "package-lock.json").read_text())["version"] == version
     assert json.loads((ROOT / "app" / "src-tauri" / "tauri.conf.json").read_text())["version"] == version
 
+    # 新前端的两处版本:findEngine 用 BUNDLED_ENGINE_VERSION 认「自己的」引擎,
+    # 对不上就拒连——升版漏掉这里,桌面壳会永远显示「本地服务需要更新」。
+    env_js = (ROOT / "app-next" / "src" / "core" / "env.js").read_text()
+    assert "BUNDLED_ENGINE_VERSION = '%s'" % version in env_js
+
     cargo = (ROOT / "app" / "src-tauri" / "Cargo.toml").read_text()
     assert re.search(r'^version\s*=\s*"%s"$' % re.escape(version), cargo, re.M)
     workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text()

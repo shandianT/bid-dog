@@ -5,7 +5,7 @@
   "version": "0.20.6",
   "identifier": "com.shandiant.bidassistant",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../../app-next/dist"
   },
   "app": {
     "withGlobalTauri": true,

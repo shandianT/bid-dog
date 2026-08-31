@@ -9842,7 +9842,10 @@ backup_docx_template()  # _MEI 被系统清理后 Word 导出的最后一道保�
 reconcile_orphan_jobs() # 上次异常退出留下的「运行中」任务归位到检查点,可续跑
 start_update_check()
 
-web = os.environ.get('BID_WEB_DIR') or os.path.join(HERE, '..', 'app', 'src')
+# 网页/演示模式的前端:优先新界面构建产物,没构建过则回落经典单文件页。
+# 桌面版前端由 Tauri 壳自带(frontendDist),不走这里。
+_web_next = os.path.join(HERE, '..', 'app-next', 'dist')
+web = os.environ.get('BID_WEB_DIR') or (_web_next if os.path.isdir(_web_next) else os.path.join(HERE, '..', 'app', 'src'))
 if os.path.isdir(web): app.mount('/', StaticFiles(directory=web, html=True), name='web')
 
 if __name__ == '__main__':

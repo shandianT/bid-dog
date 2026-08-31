@@ -60,6 +60,11 @@ jobs:
         if: steps.browser-tests.outputs.present == 'true'
         working-directory: tests
         run: npx playwright install --with-deps chromium
+      - name: build the next-ui frontend (第二轮契约的被测对象)
+        working-directory: app-next
+        run: |
+          npm ci
+          npm run build
       - name: run offline regression suite
         run: bash tests/run_all.sh
       - name: upload test diagnostics
@@ -95,6 +100,8 @@ jobs:
             artifact_paths: |
               app/src-tauri/target/release/bundle/nsis/*.exe
     runs-on: ${{ matrix.platform }}
+    # 同一提交的孪生 runner 曾分别挂死 49/71 分钟(正常 7 分钟):不设上限就一直烧配额
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -263,6 +270,12 @@ jobs:
           printf '%s' "$session" | python -c 'import json,sys; s=json.load(sys.stdin); assert str(s["id"]).startswith("ses_")'
           status=$(curl -fsS --user opencode:build-smoke "http://127.0.0.1:$port/session/status")
           printf '%s' "$status" | python -c 'import json,sys; assert isinstance(json.load(sys.stdin), dict)'
+      - name: build the frontend (app-next → dist,tauri 打包吃这里)
+        working-directory: app-next
+        shell: bash
+        run: |
+          npm ci
+          npm run build
       - name: install deps & icons
         working-directory: app
         run: |
