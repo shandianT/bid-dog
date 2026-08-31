@@ -35,7 +35,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.20.3'
+ENGINE_VERSION = '0.20.5'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -633,13 +633,25 @@ CANCEL = {}      # jid → owner token；取消只作用于指定运行代际
 TERMINAL_OWNERS = {} # jid → 已原子提交完成态的 owner；停止不能再把同一代伪装成已停止
 PROCS = {}        # jid → 真实 agent 的 Popen 句柄(删除任务时用来杀进程)
 PROC_OWNERS = {}  # jid → 与 PROCS 同一代的 owner token
+RUNNING_THREADS = {}  # jid → 本轮 worker 线程句柄;用于识别「线程已死但 owner 未释放」的僵尸占位
 
 def _reserve_running_reason(base):
     """返回 (owner, reason)。调用方据此区分同单重复点击与全局暂时禁入。"""
     with RUNNING_LOCK:
         # 同一任务已经占位时必须先返回 running；shutdown/replay 不能借一次重复点击
         # 把真实活跃任务改写成 staged。
-        if base in RUNNING: return None, 'running'
+        if base in RUNNING:
+            # 僵尸占位自愈:worker 线程已死(极端崩溃没走到 finally 释放)时,
+            # RUNNING 里的 owner 会把这单永远焊死在「正在跑」——重试/重跑全被拒,
+            # 用户只能重启应用。线程对象在且已死,当场回收,让这次预约继续。
+            t = RUNNING_THREADS.get(base)
+            if t is not None and not t.is_alive():
+                RUNNING.pop(base, None)
+                CANCEL.pop(base, None)
+                TERMINAL_OWNERS.pop(base, None)
+                RUNNING_THREADS.pop(base, None)
+            else:
+                return None, 'running'
         if EXITING: return None, 'exiting'
         if SHUTTING_DOWN: return None, 'shutdown'
         if OC_REPLAYING: return None, 'replay'
@@ -660,6 +672,7 @@ def _release_running(base, owner):
         if not owner or RUNNING.get(base) != owner: return False
         if CANCEL.get(base) == owner: CANCEL.pop(base, None)
         if TERMINAL_OWNERS.get(base) == owner: TERMINAL_OWNERS.pop(base, None)
+        RUNNING_THREADS.pop(base, None)
         del RUNNING[base]
         return True
 
@@ -766,6 +779,9 @@ def _run_reserved_worker(base, owner, target, args):
 def _start_reserved_worker(base, owner, target, *args):
     thread = threading.Thread(target=_run_reserved_worker,
                               args=(base, owner, target, args), daemon=True)
+    with RUNNING_LOCK:
+        if RUNNING.get(base) == owner:
+            RUNNING_THREADS[base] = thread   # 登记本代线程,供僵尸占位自愈判断
     thread.start()
     return thread
 
@@ -944,7 +960,9 @@ def merged_materials(job):
         return glob_dir if os.path.isdir(glob_dir) else mdir
     if os.path.isdir(glob_dir) and os.path.realpath(glob_dir) != os.path.realpath(mdir):
         for root, dirs, files in os.walk(glob_dir):
-            dirs[:] = [d for d in dirs if not d.startswith(('.', '_')) and d != '原件']
+            # 原始标书/ 是入库存档的大二进制原件,章节内容早已拆进 章节模板/;
+            # 整目录拷进每个任务只会把素材推向节点上限,生成用不到它
+            dirs[:] = [d for d in dirs if not d.startswith(('.', '_')) and d not in ('原件', '原始标书')]
             rel = os.path.relpath(root, glob_dir)
             dst_root = mdir if rel == '.' else os.path.join(mdir, rel)
             for fn in files:
@@ -956,6 +974,64 @@ def merged_materials(job):
                     shutil.copy2(os.path.join(root, fn), dst)
                 except Exception: pass
     return mdir
+
+def _backflow_job_materials(job, rels, tag):
+    """把本单导入的素材回流到全局素材库 任务导入/<任务名>/(反馈:任务材料应自动落库)。
+
+    md5 对照 入库流水.jsonl 去重——同一份文件多单复用不会堆副本;图片顺带进 图片/
+    并登记占位索引,与「AI 识图打标」共用一条链路。回流失败只记流水,不影响任务。"""
+    lib = assets_dir()
+    log_path = os.path.join(lib, '入库流水.jsonl')
+    seen = set()
+    try:
+        for ln in open(log_path, encoding='utf-8', errors='ignore').read().splitlines():
+            try: seen.add(json.loads(ln).get('md5'))
+            except Exception: continue
+    except OSError:
+        pass
+    safe_tag = (''.join(c for c in str(tag) if c not in '\\/:*?"<>|').strip() or '未命名任务')[:20]
+    copied, imgs = 0, []
+    for rel in rels[:200]:
+        src = os.path.join(job, '素材', rel)
+        if not os.path.isfile(src): continue
+        try:
+            with open(src, 'rb') as fh: blob = fh.read()
+        except OSError: continue
+        digest = hashlib.md5(blob).hexdigest()
+        if digest in seen: continue
+        seen.add(digest)
+        ext = os.path.splitext(rel)[1].lower()
+        try:
+            if ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'):
+                d = os.path.join(lib, '图片'); os.makedirs(d, exist_ok=True)
+                fn2 = os.path.basename(rel)
+                dst = os.path.join(d, fn2)
+                if not os.path.exists(dst):
+                    shutil.copy2(src, dst); imgs.append(fn2)
+            else:
+                d = os.path.join(lib, '任务导入', safe_tag)
+                os.makedirs(d, exist_ok=True)
+                dst = os.path.join(d, os.path.basename(rel))
+                if not os.path.exists(dst): shutil.copy2(src, dst)
+            copied += 1
+            with open(log_path, 'a', encoding='utf-8') as lf:
+                lf.write(json.dumps({'ts': now(), 'source': '任务导入:' + os.path.basename(rel),
+                                     'md5': digest, 'from_job': os.path.basename(job),
+                                     'sections': 0, 'images': 1 if ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp') else 0,
+                                     'categories': {}}, ensure_ascii=False) + '\n')
+        except Exception:
+            continue
+    if imgs:
+        try:
+            entries = read_json(os.path.join(lib, '图片索引.json'), [])
+            have = {e.get('file') for e in entries}
+            for f in imgs:
+                if f not in have:
+                    entries.append({'id': os.path.splitext(f)[0], 'file': f, 'caption': '〔待AI识图〕',
+                                    'category': '未识别', 'ocr': '', 'keywords': '来自任务导入', 'anchor': ''})
+            write_image_index(entries)
+        except Exception:
+            pass
 
 def _skill_module(name):
     """从技能包 references/ 里加载确定性脚本(quality_gate / build_tender_docx 等)。
@@ -1307,20 +1383,28 @@ def delivery_summary(job, quality=None):
     quality = quality if isinstance(quality, dict) else _quality_result_from_disk(job, signature)
     word_format = (_word_format_status(job) if format_required else
                    {'status': 'not_required', 'present': False, 'report': ''})
+    if format_required and word['present'] and word_format.get('status') in ('stale', 'missing'):
+        # 质检/手动重试重建过 Word 后旧报告过期(或报告丢失)——Word 就在眼前,
+        # 当场重跑一次格式检查即可,不能因为报告旧就把整单判红(真机「生成了 Word 还报错」路径之一)。
+        word_format_audit(job, primary)
+        word_format = _word_format_status(job, primary)
+    format_ok = (not format_required) or word_format['status'] in ('pass', 'warn')
     components = [word['present'], toc['status'] == 'pass', deviations['status'] == 'pass',
-                  quality.get('status') in ('pass', 'warning'),
-                  (not format_required or word_format['status'] == 'pass')]
+                  quality.get('status') in ('pass', 'warning'), format_ok]
     ready = all(components)
     if (not word['present'] or toc['status'] == 'fail' or deviations['status'] == 'fail'
-            or quality.get('status') == 'fail'
-            or (format_required and word_format['status'] != 'pass')):
+            or quality.get('status') == 'fail' or not format_ok):
         check_status = 'fail'
     elif quality.get('status') in ('unknown', 'warning'):
         check_status = quality.get('status')
+    elif format_required and word_format['status'] == 'warn':
+        check_status = 'warning'
     else:
         check_status = 'pass'
+    format_note = ('；Word 格式自检有不符项，提交前请按报告核对'
+                   if format_required and word_format['status'] == 'warn' else '')
     checks = {'status': check_status, 'level': quality.get('level') or ('green' if ready else 'red'),
-              'summary': quality.get('summary') or ('关键检查已通过' if ready else '关键检查仍有待确认项')}
+              'summary': (quality.get('summary') or ('关键检查已通过' if ready else '关键检查仍有待确认项')) + format_note}
     summary = {'word': word, 'toc': toc, 'deviations': deviations, 'format': word_format,
                'checks': checks, 'ready': ready}
     try:
@@ -1394,15 +1478,43 @@ def evidence_for_step(job, step):
     if step == 12: return bool(_body_docxs(job, names))
     return False
 
+PIPELINE_STEP_BY_NODE = {'source_parse': 4, 'response_plan': 6, 'assemble': 9,
+                         'quality_review': 11, 'word_export': 12, 'delivery_gate': 12}
+
+def _pipeline_checkpoint_step(job):
+    """流水线节点状态换算成 12 步进度——这是引擎亲手写盘的权威证据。
+
+    文件启发式(evidence_for_step)找的是智能体模式的产物(图片索引、格式规范等),
+    分段流水线不产这些文件,证据链会在缺口处截断,把真实进度钳回「检查资料 1/12」
+    (真机反馈:进度显示与实际不符的主要来源)。节点状态本身就是磁盘证据,直接换算。"""
+    try:
+        state = generation_pipeline.load(job)
+    except Exception:
+        return 0
+    if state.get('version') != generation_pipeline.PIPELINE_VERSION: return 0
+    nodes = state.get('nodes') or []
+    best = 0
+    for node in nodes:
+        if node.get('state') != 'done': continue
+        nid = str(node.get('id') or '')
+        best = max(best, 8 if nid.startswith('chapter_write:') else PIPELINE_STEP_BY_NODE.get(nid, 0))
+    running = next((n for n in nodes if n.get('state') in ('running', 'retry_wait')), None)
+    if running:
+        nid = str(running.get('id') or '')
+        best = max(best, 7 if nid.startswith('chapter_write:')
+                   else max(0, PIPELINE_STEP_BY_NODE.get(nid, 1) - 1))
+    return best
+
 def verified_step(job, claimed=12):
-    """阶段必须连续成立；缺第 N 步时，后面的孤立文件不能把进度跳过去。"""
+    """阶段必须连续成立；缺第 N 步时，后面的孤立文件不能把进度跳过去。
+    流水线模式下节点检查点是更强的证据,取两者较大值。"""
     try: claimed = max(0, min(12, int(claimed or 0)))
     except Exception: claimed = 0
     done = 0
     for step in range(1, claimed + 1):
         if not evidence_for_step(job, step): break
         done = step
-    return done
+    return min(claimed, max(done, _pipeline_checkpoint_step(job)))
 
 def observed_activity_step(job):
     """识别正在发生的最远活动，不把它冒充连续验收通过的 checkpoint。"""
@@ -1532,9 +1644,12 @@ def ensure_docx(job, known, force=False):
             except SystemExit as e:
                 if e.code: raise RuntimeError('导出脚本退出码 %s' % e.code)
         except Exception as e:
+            append_diagnostic(job, 'word_export_failed', str(e), level='error', file=fn)
+            friendly = ('导出组件缺少 Word 模板(多因系统清理了临时文件),重启应用后点「重试导出 Word」即可恢复'
+                        if ('Package not found' in str(e) or '_MEI' in str(e)) else str(e))
             emit(job, {'type': 'message', 'role': 'agent',
                        'text': '⚠ 自动补出 Word 失败(%s):`%s` 的正文是好的,'
-                               '可以先打开 md 查看,或点「重跑本任务」。' % (e, fn)})
+                               '可以先打开 md 查看。' % (friendly, fn)})
             continue
         finally:
             sys.argv = old_argv
@@ -1595,10 +1710,13 @@ def word_format_audit(job, word_name=''):
         with open(report_path, 'a', encoding='utf-8') as report:
             report.write('\n- SHA-256：`%s`\n' % _file_digest(word_path))
         failed = len(checks.failed)
-        return {'status': 'pass' if failed == 0 else 'fail', 'report': report_name,
+        # Word 能打开、检查能跑完,只是样式项不符 → warn,不是 fail:
+        # 文件明明已导出且可用,把整单打成"未完成"是真机反馈里典型的
+        # 「生成了 Word 还报错」——样式差异属于提交前人工确认项,不是交付失败。
+        return {'status': 'pass' if failed == 0 else 'warn', 'report': report_name,
                 'failed': failed,
                 'summary': ('Word 格式门禁已通过' if failed == 0
-                            else 'Word 格式门禁有 %d 项不符' % failed)}
+                            else 'Word 已导出;格式自检有 %d 项不符(不影响打开使用),详见报告' % failed)}
     except Exception as exc:
         safe = redact(str(exc))
         open(report_path, 'w', encoding='utf-8').write(
@@ -1620,7 +1738,12 @@ def _word_format_status(job, word_name=''):
     current_digest = _file_digest(os.path.join(job, word_name)) if word_name else ''
     bound = bool(digest_match and current_digest
                  and hmac.compare_digest(digest_match.group(1).lower(), current_digest.lower()))
-    status = 'pass' if passed and bound else ('stale' if passed else 'fail')
+    # 报告有 SHA 绑定说明检查真的跑完了:未通过=样式项不符(warn);
+    # 没有 SHA 的失败报告是「检查没跑成」(fail)。passed 但绑定失效 = 报告过期(stale)。
+    if passed:
+        status = 'pass' if bound else 'stale'
+    else:
+        status = 'warn' if bound else 'fail'
     return {'status': status, 'present': True, 'report': report_name,
             'word_sha256_bound': bound}
 
@@ -1635,7 +1758,30 @@ def export_docx(jid: str):
     if made: return {'ok': True, 'made': made}
     if any(fn.lower().endswith('.docx') for fn in known):
         return {'ok': True, 'made': [], 'error': '任务里已经有 Word 了,不用再补'}
+    # 有正文却没出成 Word = 导出组件出错,不是「没有正文」。旧文案把用户指向
+    # 「重跑本任务」——既烧额度又治不了模板缺失,必须把真实原因和轻量动作给出来。
+    errs = _last_export_errors(job)
+    if _body_mds(job, known):
+        hint = ('Word 导出组件执行失败:%s。' % errs[0] if errs else 'Word 导出组件执行失败。')
+        if errs and ('Package not found' in errs[0] or '_MEI' in errs[0]):
+            hint += ' 多因系统清理了临时文件——重启应用后点「重试导出 Word」即可,无需重跑任务。'
+        return JSONResponse({'ok': False, 'code': 'word_export_failed', 'error': hint}, 500)
     return JSONResponse({'ok': False, 'error': '没有找到可导出的正文稿(投标文件_*.md),请重跑本任务'}, 400)
+
+def _last_export_errors(job, limit=3):
+    """diagnostics.jsonl 里最近的 word_export_failed 明细(新→旧),给导出失败响应用。"""
+    out = []
+    try:
+        for ln in reversed(open(os.path.join(job, 'diagnostics.jsonl'),
+                                encoding='utf-8', errors='ignore').read().splitlines()[-100:]):
+            try: rec = json.loads(ln)
+            except Exception: continue
+            if rec.get('code') == 'word_export_failed':
+                out.append(str(rec.get('detail') or '')[:200])
+                if len(out) >= limit: break
+    except OSError:
+        pass
+    return out
 
 def quality_audit(job, known):
     """完成后的确定性质检 + 自动修复 + 重出 Word(引擎兜底,不管模型有没有自觉跑过):
@@ -1998,11 +2144,17 @@ def settle(job, known=None, stop_reason=None, commit=True):
             # 在所有内容修复之后重跑，并用 SHA-256 绑定最终 Word。
             format_result = word_format_audit(job, words[0])
             known |= set(list_deliverables(job))
-            if format_result.get('status') != 'pass':
-                why = '已停止（Word 格式门禁未通过）'
+            if format_result.get('status') == 'fail':
+                # 只有「检查没跑成/Word 不可用」才拦交付;样式项不符(warn)不把整单打停——
+                # Word 明明已生成可用,判停就是真机反馈的「生成了 Word 还报错」。
+                why = '已停止（Word 格式检查无法完成）'
                 halt(job, why)
                 return {'state': 'stopped', 'reason': why, 'word': words[0],
                         'artifacts': sorted(known), 'delivery': delivery_summary(job, quality)}
+            if format_result.get('status') == 'warn':
+                emit(job, {'type': 'message', 'role': 'agent',
+                           'text': '%s。这些属于提交前人工确认项,在「出件前检查」里逐条看即可。' %
+                                   (format_result.get('summary') or 'Word 格式自检有不符项')})
         delivery = delivery_summary(job, quality)
         if not delivery.get('ready'):
             why = '已停止（出件检查未通过）'
@@ -2617,7 +2769,11 @@ OC_FINISH = OC_CLEAN_FINISH | OC_FAILED_FINISH
 OC_QUIET = 25      # 已 finish 且事件流再静这么多秒,才算整单收工
 OC_SLOW = float(os.environ.get('BIDDOG_OC_SLOW_SECONDS', 180))
 OC_STALL = float(os.environ.get('BIDDOG_OC_STALL_SECONDS', 8 * 60))
-OC_AUTO_RECOVER = max(0, min(3, int(os.environ.get('BIDDOG_OC_AUTO_RECOVER', 2))))
+OC_AUTO_RECOVER = max(0, min(6, int(os.environ.get('BIDDOG_OC_AUTO_RECOVER', 3))))
+# 整单自动恢复的硬上限:OC_AUTO_RECOVER 是「连败」预算(任务有真实进展就清零重来),
+# TOTAL 是整单封顶。旧版整单只给 2 次、几小时的任务断两次流就永久停——
+# 「6 次生成只成 1 次」的主因之一;新策略偶发断流可多次自愈,持续故障也不会热循环烧 Key。
+OC_AUTO_RECOVER_TOTAL = max(OC_AUTO_RECOVER, min(20, int(os.environ.get('BIDDOG_OC_AUTO_RECOVER_TOTAL', 12))))
 
 AUTO_RECOVERY_PROMPT = (
     '上一轮模型连接中断了，现在从已保存内容继续。先检查任务目录，已经写好的不要重写、'
@@ -2625,12 +2781,23 @@ AUTO_RECOVERY_PROMPT = (
 
 
 def _recoverable_turn_error(error):
+    """网络/网关的瞬时故障都算可恢复——这类错误重试大概率能过,直接停等于把整单交还给用户。
+    Key 无效、权限、配额彻底用尽这类确定性失败不在其列(重试也没用,该报就报)。"""
     text = str(error or '').lower()
     return any(marker in text for marker in (
         'stream idle timeout', 'no data received within configured window',
         'connection reset', 'unexpected_eof', 'unexpected eof',
         'stream disconnected before completion', 'eof occurred in violation',
-        'incompleteread', 'timed out', 'timeout'))
+        'incompleteread', 'timed out', 'timeout',
+        # 以下为真机/网关常见瞬时故障口径(429 限流、5xx 网关抖动、连接层断开)
+        'econnreset', 'econnrefused', 'socket hang up', 'fetch failed',
+        'network error', 'connection error', 'connection aborted',
+        'remote end closed', 'server disconnected', 'temporarily unavailable',
+        'too many requests', 'rate limit', 'overloaded', 'over capacity',
+        'bad gateway', 'service unavailable', 'gateway timeout',
+        ' 429', ' 502', ' 503', ' 504', '(429', '(502', '(503', '(504',
+        'http 429', 'http 502', 'http 503', 'http 504',
+        'status 429', 'status 502', 'status 503', 'status 504'))
 
 def _server_fallback_safe(job):
     """Only replay through the stable CLI path before any bid body exists, once per job."""
@@ -2677,6 +2844,8 @@ def oc_latest_assistant(rows, order):
     if not assistants: return {}
     return assistants[-1] if order == 'chronological' else assistants[0]
 
+OC_TURN_SIG = {}   # sid → 最近一次 oc_turn 观察到的消息活动签名(第三路心跳的旁路通道)
+
 def oc_turn(sid):
     """这一轮跑完了没有,返回 (done, 出错说明)。
 
@@ -2690,11 +2859,20 @@ def oc_turn(sid):
         finish=None          还在生成
         finish='tool-calls'  这段说完了,后面还要调工具,没完
         finish='stop'        这一轮真收工了
-    """
+
+    顺带把「消息条数 + 最新 assistant 消息摘要」写进 OC_TURN_SIG[sid]:SSE 半开、
+    长章节又暂时不写文件时,事件流和文件签名双双静默——但消息体在长(流式 token
+    在涨),签名一直在变。oc_run 以它作第三路心跳,不再把正常长跑误判成卡死、
+    亲手打断好端端的一轮(「任务中断误报」反馈的主根因)。"""
     ms, order = oc_messages(sid)
     if not ms:
         return False, ''          # 取不到就当没跑完:宁可多等,也不能误判成「没产出」
     top = oc_latest_assistant(ms, order)
+    try:
+        OC_TURN_SIG[sid] = '%d:%s' % (len(ms), hashlib.md5(
+            json.dumps(top, sort_keys=True, ensure_ascii=False, default=str).encode('utf-8', 'ignore')).hexdigest())
+    except Exception:
+        OC_TURN_SIG[sid] = str(len(ms))
     if not top: return False, ''
     err = oc_message_error(top)
     if err: return True, str(err)[:300]
@@ -2815,8 +2993,8 @@ def oc_watch(job, sid, stop, beat=None):
 
     beat 是给 oc_run 判收工用的心跳:每收到一条事件就盖个时间戳。光看消息 finish
     会在排队的两轮之间踩空,得配合「事件流也静下来了」一起判。"""
-    url = OC['base'] + '/api/session/%s/event' % sid
     buf, asked, last, flushed, admitted = [], set(), '', time.time(), 0
+    fail_streak, last_fail_note = 0, 0.0
     # 外壳版本行为不一致：有的重连会从第 1 条完整重放，有的只发新事件。
     # 用事件内容指纹去重，不再用“本连接序号 <= 上次总数”判断，否则
     # new-only 连接的所有新事件都会被当作历史跳过。
@@ -2835,8 +3013,15 @@ def oc_watch(job, sid, stop, beat=None):
         flushed = time.time()
     while not stop.is_set():
         try:
+            # 每次重连现取 base 与口令:server 重启换端口/口令后,旧 url 会 401 死循环、
+            # 台词永久静音(裸 except 又吞掉一切,用户只看到「像死机了」)。
+            # timeout 是 socket 级的:半开连接(对端悄悄断了)最多静默这么久就会抛错重连。
+            # 旧值 600 秒比 OC_STALL(480 秒)还长,SSE 假死会先触发误报中断;180 秒能在
+            # 判卡死之前把事件流救回来。正常长思考期间超时重连无害——事件按内容指纹去重。
+            url = OC['base'] + '/api/session/%s/event' % sid
             req = urllib.request.Request(url, headers=oc_auth())
-            with urllib.request.urlopen(req, timeout=600) as r:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                fail_streak = 0
                 for raw in r:
                     if stop.is_set(): break
                     line = raw.decode('utf-8', 'ignore').strip()
@@ -2866,8 +3051,14 @@ def oc_watch(job, sid, stop, beat=None):
                     # 攒够三条、或者隔了三秒就发一次:只按条数发的话,
                     # 它慢下来时台词会长时间一片空白,看着像死机了
                     if buf and (len(buf) >= 3 or time.time() - flushed >= 3): flush()
-        except Exception:
-            pass
+        except Exception as e:
+            fail_streak += 1
+            if time.time() - last_fail_note > 60:      # 同类错误 60 秒只记一次,不刷诊断流水
+                last_fail_note = time.time()
+                append_diagnostic(job, 'oc_watch_reconnect', str(e)[:200], attempt=fail_streak)
+            if fail_streak == 5:
+                emit(job, {'type': 'worklog',
+                           'lines': ['实时台词通道暂时不可用,正在重连;生成进度不受影响']})
         flush()
         if not stop.is_set(): time.sleep(2)   # 断了就重连,别让台词永久静音
 
@@ -2957,7 +3148,9 @@ def oc_run(job, prompt, allow_cli_fallback=True):
         oc_interrupt(sid)
         return OC_RUN_CANCELLED
     if not ok:
+        mark_connection_check(job, False, '连接探活失败:%s' % (why or '未知原因'))
         return fallback('opencode_probe_failed', why)
+    mark_connection_check(job, True, '连接已验证,生成进行中')
     update_runtime(job, execution_path='opencode_server', can_pause=True,
                    pause_disabled_reason='', session_id=sid, auto_recovery_count=0)
     stop = threading.Event()
@@ -2985,9 +3178,11 @@ def oc_run(job, prompt, allow_cli_fallback=True):
     current_step = 0
     step_started = time.time()
     job_sig = cli_activity_signature(job)
+    last_turn_sig = ''
     slow_notified = False
 
-    auto_recoveries = 0
+    auto_recoveries = 0       # 连败计数:任务出现真实进展(文件落盘)就清零
+    total_recoveries = 0      # 整单累计,封顶 OC_AUTO_RECOVER_TOTAL
     recovery_wait_cycles = 0
 
     def auto_recover(reason, interrupt=False):
@@ -2997,8 +3192,9 @@ def oc_run(job, prompt, allow_cli_fallback=True):
         overwrite chapters. A bounded continuation prompt instead inspects durable artifacts and
         resumes only the missing work.
         """
-        nonlocal auto_recoveries, recovery_wait_cycles, slow_notified, job_sig
+        nonlocal auto_recoveries, total_recoveries, recovery_wait_cycles, slow_notified, job_sig
         if auto_recoveries >= OC_AUTO_RECOVER: return False
+        if total_recoveries >= OC_AUTO_RECOVER_TOTAL: return False
         if interrupt: oc_interrupt(sid)
         sent_again, detail = oc_send(sid, AUTO_RECOVERY_PROMPT, delivery='queue',
                                      model=pinned_model, job=job)
@@ -3007,6 +3203,7 @@ def oc_run(job, prompt, allow_cli_fallback=True):
                               level='warning', session_id=sid, attempt=auto_recoveries + 1)
             return False
         auto_recoveries += 1
+        total_recoveries += 1
         # OpenCode may briefly keep the failed assistant message at the top while admitting the
         # continuation prompt. Give that durable queue five polling cycles before judging it again,
         # otherwise one stale error can burn both retries in two seconds.
@@ -3020,9 +3217,10 @@ def oc_run(job, prompt, allow_cli_fallback=True):
                        last_auto_recovery_at=now())
         append_diagnostic(job, 'opencode_auto_recovery', reason,
                           session_id=sid, attempt=auto_recoveries)
+        mark_connection_check(job, True, '连接已自动恢复(本单第 %d 次续跑)' % total_recoveries)
         emit(job, {'type': 'message', 'role': 'agent',
-                   'text': '模型连接刚才短暂中断，已自动从保存位置继续（第 %d/%d 次）。'
-                           '已落盘内容不会重写。' % (auto_recoveries, OC_AUTO_RECOVER)})
+                   'text': '模型连接刚才短暂中断，已自动从保存位置继续（本单第 %d 次自动续跑）。'
+                           '已落盘内容不会重写。' % total_recoveries})
         return True
 
     def drain_progress():
@@ -3048,12 +3246,22 @@ def oc_run(job, prompt, allow_cli_fallback=True):
             if current_sig != job_sig:
                 job_sig = current_sig
                 beat['ts'] = time.time()
+                # 文件真的在落盘 = 上一段连败已经翻篇,连败预算清零;
+                # 长任务里偶发的多次断流因此都能自愈,不会两次就把整单焊死。
+                auto_recoveries = 0
             quiet = time.time() - beat['ts']
+            if slow_notified and quiet < OC_SLOW: slow_notified = False   # 恢复活动后,下次变慢还要再提醒
             if recovery_wait_cycles:
                 recovery_wait_cycles -= 1
                 done, err = False, ''
             else:
                 done, err = oc_turn(sid)
+                # 第三路心跳:SSE 半开 + 长章节暂不写文件时,只有消息体在长。
+                # 它变了就说明模型还在正常吐字,绝不能按「卡死」打断。
+                turn_sig = OC_TURN_SIG.get(sid, '')
+                if turn_sig and turn_sig != last_turn_sig:
+                    last_turn_sig = turn_sig
+                    beat['ts'] = time.time()
             # 用户可能在本轮请求等待期间点了停止。停止意图必须高于迟到的连接错误，
             # 否则会误报“已切换稳定通道继续”，甚至启动第二条执行路径。
             if _cancel_requested(base):
@@ -3063,6 +3271,7 @@ def oc_run(job, prompt, allow_cli_fallback=True):
             if err:
                 if _recoverable_turn_error(err) and auto_recover(err):
                     continue
+                mark_connection_check(job, False, '连接中断:%s' % str(err)[:120])
                 oc_interrupt(sid)
                 if allow_cli_fallback and _server_fallback_safe(job):
                     fallback('opencode_turn_interrupted', err)
@@ -3093,6 +3302,7 @@ def oc_run(job, prompt, allow_cli_fallback=True):
                 detail = 'No meaningful session or file activity for %.1f seconds' % quiet
                 if auto_recover(detail, interrupt=True):
                     continue
+                mark_connection_check(job, False, '连接长时间无响应,任务已安全停下')
                 oc_interrupt(sid)
                 if allow_cli_fallback and _server_fallback_safe(job):
                     fallback('opencode_stalled', detail)
@@ -3109,6 +3319,7 @@ def oc_run(job, prompt, allow_cli_fallback=True):
         drain_progress()
         if current_step: record_stage(current_step, min(time.time() - step_started, 3 * 3600))
         collect_oc_usage(job, sid)
+        OC_TURN_SIG.pop(sid, None)
         stop.set()
     return result
 
@@ -3214,21 +3425,33 @@ def _pipeline_declared_input_names(job, node, state=None):
 
 
 def _pipeline_material_paths(job):
+    """列出本任务可供节点使用的素材文件,超限**截断**而不是抛异常。
+
+    旧版超过 1000 个文件/100MB 直接 raise,而 merged_materials 会把整个全局素材库
+    补拷进 job/素材——素材库养得越大,任务越必然「分段生成异常」,且每次续跑都
+    死在同一处(真机「传得越勤越失败」的隐蔽根源)。截断优先保留文本类规范素材,
+    并记诊断供排查。"""
     materials = os.path.join(job, '素材')
     result = []
     if not os.path.isdir(materials):
         return result
-    count = 0; total = 0
+    count = 0; total = 0; truncated = 0
     for parent, dirs, files in os.walk(materials, followlinks=False):
         dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(parent, name))]
         for name in sorted(files):
             source = os.path.join(parent, name)
             if os.path.islink(source): continue
-            size = os.path.getsize(source)
+            try: size = os.path.getsize(source)
+            except OSError: continue
+            if count >= 1000 or total + size > 100 * 1024 * 1024:
+                truncated += 1
+                continue
             count += 1; total += size
-            if count > 1000 or total > 100 * 1024 * 1024:
-                raise generation_pipeline.PipelineError('本节点素材超过安全处理上限')
             result.append(source)
+    if truncated:
+        append_diagnostic(job, 'material_limit_truncated',
+                          '素材超过节点安全上限,已按序保留 %d 个、跳过 %d 个;'
+                          '可在素材库精简后重跑' % (count, truncated))
     return result
 
 
@@ -3265,6 +3488,21 @@ def _pipeline_model_file_text(path, budget):
             if len(blob) > MAX_TEMPLATE_UPLOAD_BYTES: return ''
             _headings, _tables, text = extract_document_structure(os.path.basename(path), blob)
             return str(text or '')[:max(0, budget)]
+        if suffix in ('.html', '.htm'):
+            blob = open(path, 'rb').read(MAX_TEMPLATE_UPLOAD_BYTES + 1)
+            return html_to_text(blob)[:max(0, budget)]
+        if suffix == '.doc':
+            # 旧格式素材以前被静默丢弃——用户看着「上传成功」,内容却一个字进不了模型。
+            # 伪 doc(zip)与 RTF 都能本地解;真 OLE 返回空,由上传侧提示转 docx。
+            blob = open(path, 'rb').read(MAX_TEMPLATE_UPLOAD_BYTES + 1)
+            if len(blob) > MAX_TEMPLATE_UPLOAD_BYTES: return ''
+            if blob[:4] == b'PK\x03\x04':
+                _headings, _tables, text = extract_document_structure(
+                    os.path.basename(path) + 'x', blob)      # 加 x 让结构解析按 docx 分支走
+                return str(text or '')[:max(0, budget)]
+            if blob[:5] == b'{\\rtf':
+                return rtf_to_text(blob)[:max(0, budget)]
+            return ''
     except Exception:
         return ''
     return ''
@@ -3330,12 +3568,14 @@ def _pipeline_direct_task(job, node):
         return ('生成商务偏离表，使用 Markdown 表格，覆盖报价、付款、工期、质保、交付、签章等；'
                 '列为“序号｜招标条款/商务要求｜投标响应｜偏离情况｜依据/证据｜备注”。')
     if node_id.startswith('chapter_write:'):
+        user_note = str(node.get('user_note') or '').strip()
         return ('撰写章节“%s”。逐项响应招标要求并标注依据；素材缺失写〔需补充〕。'
                 '本章依据：%s；评分点：%s；素材槽位：%s。正文至少 2500 个中文字符。'
-                '表格必须按具体用途命名列，同一章内禁止反复使用“信息项｜内容”等泛化表头。' % (
+                '表格必须按具体用途命名列，同一章内禁止反复使用“信息项｜内容”等泛化表头。%s' % (
                     node.get('title') or '本章', '、'.join(node.get('basis') or []) or '招标解析版',
                     '、'.join(node.get('scoring_points') or []) or '按响应矩阵核对',
-                    '、'.join(node.get('material_slots') or []) or '无指定素材槽位'))
+                    '、'.join(node.get('material_slots') or []) or '无指定素材槽位',
+                    ('本次为人工发起的单章重写，用户补充要求（必须落实）：%s。' % user_note) if user_note else ''))
     if node_id == 'quality_review':
         return ('复核整册对评分点、废标风险、偏离表和事实边界的覆盖情况，输出明确的质检结论、'
                 '缺口和提交前人工确认项；不改写正文。')
@@ -3622,7 +3862,12 @@ def _pipeline_specialize_repeated_table_headers(content):
 
 
 def _pipeline_validate_execution_contract(job, upstream):
-    """Prevent a resumed job from silently switching gateway credentials."""
+    """Prevent a resumed job from silently switching gateways mid-run.
+
+    只有**网关(base_url)**变化才作废检查点。Key 换新不再拦:任务失败后用户最常见的
+    自救就是去「模型接入」重测/换 Key,旧版把这也判成契约变化,检查点直接作废、
+    已写好的章节全部重打——「无法从断点续跑,必须重新开始」的隐蔽根源之一。
+    同一网关下换 Key 是用户对自己账号的处置,接受并把指纹换到新 Key 上继续。"""
     state = generation_pipeline.load(job)
     routes = state.get('model_routes') if isinstance(state, dict) else {}
     if not isinstance(routes, dict) or not routes:
@@ -3632,12 +3877,89 @@ def _pipeline_validate_execution_contract(job, upstream):
         upstream.get('api_key') or '')
     frozen_base = str(routes.get('base_url') or '')
     current_base = generation_pipeline.safe_base_url(upstream.get('base_url') or '')
-    if ((frozen_key and not hmac.compare_digest(frozen_key, current_key))
-            or (frozen_base and frozen_base != current_base)):
+    if frozen_base and frozen_base != current_base:
         raise generation_pipeline.NodeExecutionError(
             'execution_contract_changed', retryable=False,
-            detail='任务运行期间模型网关或 Key 已变化；请重新测试连接后从当前检查点继续')
+            detail='任务运行期间模型网关已变化；请切回原网关,或重跑本任务')
+    if frozen_key and not hmac.compare_digest(frozen_key, current_key):
+        try:
+            def _accept(state2):
+                r2 = state2.get('model_routes')
+                if isinstance(r2, dict): r2['credential_fingerprint'] = current_key
+                return state2
+            generation_pipeline._mutate(job, _accept)
+            append_diagnostic(job, 'execution_credential_updated',
+                              '检测到同网关下更换了 Key,检查点继续有效', level='info')
+            emit(job, {'type': 'message', 'role': 'agent',
+                       'text': '检测到你更换了模型 Key(网关未变),已用新 Key 从检查点继续;已完成内容不受影响。'})
+        except Exception:
+            pass
 
+
+class _StreamCancelled(Exception):
+    """用户在流式读取期间请求了停止。"""
+
+def _openai_stream_req(base, key, payload, idle_timeout=90, total_cap=1800,
+                       verify=True, cancel_check=None):
+    """流式 /chat/completions:逐 chunk 收内容,以「空闲超时」替代总超时。
+
+    非流式长请求要等整段生成完才有首字节;国内中转网关/CDN/公司代理普遍在
+    60-100 秒空闲后掐连接,章节生成动辄 2-4 分钟,必然被掐——这是「生成频繁中断」
+    的最大元凶。流式下模型只要在吐字连接就有流量;连续 idle_timeout 秒没有新
+    chunk 才判连接死亡。已收到的半截内容按 finish='length' 返回,复用现成的
+    截断补全 + 续写逻辑,断流不再等于从头再来。返回与非流式同构的 dict。"""
+    p2 = dict(payload); p2['stream'] = True
+    hdr = {'Authorization': 'Bearer ' + (key or ''), 'User-Agent': 'bid-assistant/0.9',
+           'Content-Type': 'application/json', 'Accept': 'text/event-stream'}
+    req = urllib.request.Request((base or '').rstrip('/') + '/chat/completions',
+                                 data=json.dumps(p2, ensure_ascii=False).encode('utf-8'), headers=hdr)
+    kinds = ['default', 'certifi'] if verify else ['none']
+    last = None
+    for kind in kinds:
+        try:
+            ctx = _ssl_ctx(kind)
+        except Exception:
+            continue
+        parts, finish, started = [], '', time.time()
+        try:
+            with _retry(lambda: urllib.request.urlopen(req, timeout=idle_timeout, context=ctx)) as r:
+                for raw in r:
+                    if cancel_check and cancel_check(): raise _StreamCancelled()
+                    if time.time() - started > total_cap:
+                        finish = finish or 'length'; break
+                    line = raw.decode('utf-8', 'ignore').strip()
+                    if not line.startswith('data:'): continue
+                    data = line[5:].strip()
+                    if data == '[DONE]': break
+                    try: ev = json.loads(data)
+                    except Exception: continue
+                    ch = (ev.get('choices') or [{}])[0] if isinstance(ev, dict) else {}
+                    delta = ch.get('delta') if isinstance(ch, dict) else {}
+                    if isinstance(delta, dict) and delta.get('content'):
+                        parts.append(str(delta['content']))
+                    if isinstance(ch, dict) and ch.get('finish_reason'):
+                        finish = str(ch['finish_reason'])
+            return {'choices': [{'message': {'content': ''.join(parts)},
+                                 'finish_reason': finish or ('stop' if parts else '')}],
+                    'model': p2.get('model')}
+        except _StreamCancelled:
+            raise
+        except urllib.error.HTTPError:
+            raise                       # 4xx/5xx 交给上层归因(429 限流等)
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, 'reason', None), ssl.SSLCertVerificationError):
+                last = e; continue      # 换 CA 再试一轮
+            if len(''.join(parts)) >= 200:
+                # 断流但已有实质内容:按截断处理,让续写逻辑接着补,别浪费已生成的
+                return {'choices': [{'message': {'content': ''.join(parts)},
+                                     'finish_reason': 'length'}], 'model': p2.get('model')}
+            raise
+        except Exception:
+            if len(''.join(parts)) >= 200:
+                return {'choices': [{'message': {'content': ''.join(parts)},
+                                     'finish_reason': 'length'}], 'model': p2.get('model')}
+            raise
+    raise last
 
 def _pipeline_model_runner(job, node, prompt, model):
     """Run a bounded node as one non-stream completion, then atomically promote files.
@@ -3724,22 +4046,58 @@ def _pipeline_model_runner(job, node, prompt, model):
             2500 if node.get('id') == 'quality_review' else chapter_tokens),
         'temperature': 0.2,
     }
+    # 生成期间的心跳:一次模型调用可长达数分钟且零事件,以前「静默 180 秒」就被
+    # 误判成停滞(「模型响应偏慢」),用户读作中断。每 30 秒摸一次节点活动时间
+    # 并发一行台词,界面上能看到它真的在干活。
+    hb_stop = threading.Event()
+    def _heartbeat():
+        waited = 0
+        while not hb_stop.wait(30):
+            waited += 30
+            try: generation_pipeline.touch_node(job, node.get('id'))
+            except Exception: pass
+            emit(job, {'type': 'worklog',
+                       'lines': ['「%s」模型生成中,已进行 %d 秒(连接正常)' % (node.get('title') or node.get('id'), waited)]})
+    threading.Thread(target=_heartbeat, daemon=True).start()
     try:
-        response = _openai_req(up['base_url'], up['api_key'], '/chat/completions', payload,
-                               timeout=float(os.environ.get('BIDDOG_MODEL_NODE_TIMEOUT_SECONDS', 240)),
-                               verify=up.get('verify_ssl', True))
+        try:
+            # 流式优先:非流式要等整段生成完才有首字节,60-100 秒空闲就被网关掐线。
+            response = _openai_stream_req(up['base_url'], up['api_key'], payload,
+                                          idle_timeout=float(os.environ.get('BIDDOG_STREAM_IDLE_SECONDS', 90)),
+                                          total_cap=float(os.environ.get('BIDDOG_MODEL_NODE_TOTAL_SECONDS', 1800)),
+                                          verify=up.get('verify_ssl', True),
+                                          cancel_check=lambda: _cancel_requested(base))
+        except _StreamCancelled:
+            raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+        except urllib.error.HTTPError as exc:
+            # 400/404/422 可能是网关不支持 stream:降级回非流式再试一次
+            if exc.code in (400, 404, 405, 422):
+                response = _openai_req(up['base_url'], up['api_key'], '/chat/completions', payload,
+                                       timeout=float(os.environ.get('BIDDOG_MODEL_NODE_TIMEOUT_SECONDS', 240)),
+                                       verify=up.get('verify_ssl', True))
+            else:
+                raise
+    except generation_pipeline.NodeExecutionError:
+        hb_stop.set()
+        raise
     except urllib.error.HTTPError as exc:
+        hb_stop.set()
         detail = _http_error_detail(exc, (up.get('api_key'),), 240)
         retryable = exc.code in (408, 409, 425, 429) or 500 <= exc.code < 600
+        mark_connection_check(job, False, '模型请求失败(HTTP %s)' % exc.code)
         raise generation_pipeline.NodeExecutionError(
             'model_rate_limited' if exc.code == 429 else 'model_request_failed',
             retryable=retryable, detail='HTTP %s %s' % (exc.code, detail)) from exc
     except Exception as exc:
+        hb_stop.set()
+        mark_connection_check(job, False, '模型连接中断:%s' % net_hint(exc, (up.get('api_key'),))[:100])
         raise generation_pipeline.NodeExecutionError(
             'model_request_interrupted', retryable=True,
             detail=net_hint(exc, (up.get('api_key'),))) from exc
+    hb_stop.set()
     if _cancel_requested(base):
         raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+    mark_connection_check(job, True, '连接正常,模型按节点生成中')
     choices = response.get('choices') if isinstance(response, dict) else None
     if not choices:
         detail = ((response.get('error') or {}).get('message')
@@ -3779,12 +4137,23 @@ def _pipeline_model_runner(job, node, prompt, model):
                 ]
                 try:
                     _pipeline_validate_execution_contract(job, s2_conf(read_json(conf_path(), {})))
-                    followup = _openai_req(
-                        up['base_url'], up['api_key'], '/chat/completions',
-                        continuation_payload,
-                        timeout=float(os.environ.get(
-                            'BIDDOG_MODEL_NODE_TIMEOUT_SECONDS', 240)),
-                        verify=up.get('verify_ssl', True))
+                    try:
+                        followup = _openai_stream_req(
+                            up['base_url'], up['api_key'], continuation_payload,
+                            idle_timeout=float(os.environ.get('BIDDOG_STREAM_IDLE_SECONDS', 90)),
+                            total_cap=float(os.environ.get('BIDDOG_MODEL_NODE_TOTAL_SECONDS', 1800)),
+                            verify=up.get('verify_ssl', True),
+                            cancel_check=lambda: _cancel_requested(base))
+                    except _StreamCancelled:
+                        raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+                    except urllib.error.HTTPError as _sexc:
+                        if _sexc.code not in (400, 404, 405, 422): raise
+                        followup = _openai_req(
+                            up['base_url'], up['api_key'], '/chat/completions',
+                            continuation_payload,
+                            timeout=float(os.environ.get(
+                                'BIDDOG_MODEL_NODE_TIMEOUT_SECONDS', 240)),
+                            verify=up.get('verify_ssl', True))
                     if _cancel_requested(base):
                         raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
                     follow_choice = ((followup.get('choices') or [{}])[0]
@@ -3959,6 +4328,77 @@ def _pipeline_complete_local(job, node_id, digest, action, *, retryable=True):
         raise
 
 
+def _pipeline_retry_sleep(base):
+    """节点重试退避期间的可中断等待:分钟级退避里用户点「停止」必须秒级生效,
+    不能睡满全程再响应(cancel 会在下一次节点启动检查时抛出)。"""
+    def _sleep(seconds):
+        deadline = time.time() + max(0.0, float(seconds or 0))
+        while time.time() < deadline:
+            if _cancel_requested(base): return
+            time.sleep(min(1.0, max(0.0, deadline - time.time())))
+    return _sleep
+
+def _md_table_rows(path, cells):
+    """Read data rows from one deterministic markdown table (skips header/separator)."""
+    rows = []
+    try:
+        lines = open(path, encoding='utf-8', errors='ignore').read().splitlines()
+    except OSError:
+        return rows
+    for ln in lines:
+        ln = ln.strip()
+        if not ln.startswith('|'): continue
+        parts = [c.strip() for c in ln.strip('|').split('|')]
+        if len(parts) < cells: continue
+        if parts[0] in ('序号',) or set(parts[0]) <= set('-—: '): continue
+        rows.append(parts)
+    return rows
+
+def _parse_confirm_summary(job):
+    """Deterministic key facts for the pre-write confirmation card.
+
+    Everything here is extracted locally from already-produced artifacts; a value
+    we cannot find is reported as such instead of being guessed."""
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    unknown = '未识别，请人工核对招标文件'
+    text = ''
+    try:
+        text = open(os.path.join(job, '招标文件_解析版.md'), encoding='utf-8', errors='ignore').read()[:200000]
+    except OSError:
+        pass
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    def find_line(pattern, limit=140):
+        rx = re.compile(pattern)
+        for ln in lines:
+            if rx.search(ln):
+                return re.sub(r'^[#>*\-\d\.、\s]+', '', ln)[:limit]
+        return ''
+    deadline = find_line(r'(递交|提交|投标).{0,8}(截止|时间)') or find_line(r'开标时间') or unknown
+    qual = find_line(r'资质.{0,30}(等级|要求|承包|资格)') or find_line(r'(施工总承包|安全生产许可证)') or unknown
+    scoring_rows = _md_table_rows(os.path.join(job, '评分点响应矩阵.md'), 6)
+    method_line = find_line(r'(综合评估法|综合评分法|评分办法|经评审的最低投标价)')
+    scoring = ('共 %d 个评分点' % len(scoring_rows)) + ((' · ' + method_line) if method_line else '')
+    veto_rows = _md_table_rows(os.path.join(job, '废标风险清单.md'), 5)
+    cats = []
+    for row in veto_rows:
+        cat = row[1][:12]
+        if cat and cat not in cats: cats.append(cat)
+    veto = ('共 %d 条废标/否决风险' % len(veto_rows)) + (('：' + '、'.join(cats[:4])) if cats else '')
+    return {
+        'project': str(meta.get('name') or meta.get('title')
+                       or os.path.basename(str(meta.get('tender') or '')) or '未命名项目')[:80],
+        'deadline': deadline, 'qualification': qual,
+        'scoring': scoring if scoring_rows else unknown,
+        'veto': veto if veto_rows else unknown,
+    }
+
+CONFIRM_PARSE_ACCEPT = '确认无误，开始撰写'
+
+def _confirm_gate_blocks(job, meta):
+    """True when the job asked for pre-write confirmation and it has not happened."""
+    if not meta.get('confirm_parse'): return False
+    return not bool((read_json(os.path.join(job, '解析确认.json'), {}) or {}).get('confirmed'))
+
 def generation_pipeline_worker(job):
     """Run local parse -> short model nodes -> deterministic Word, resumably."""
     base = os.path.basename(job)
@@ -3992,8 +4432,25 @@ def generation_pipeline_worker(job):
         generation_pipeline.run_model_node(
             job, 'response_plan', lambda node, prompt, model: _pipeline_model_runner(job, node, prompt, model),
             prompt=_pipeline_prompt(job, next(n for n in state['nodes'] if n['id'] == 'response_plan')),
-            input_digest=plan_digest, on_event=lambda event, node: _pipeline_event(job, event, node))
+            input_digest=plan_digest, sleep=_pipeline_retry_sleep(base),
+            on_event=lambda event, node: _pipeline_event(job, event, node))
         state = generation_pipeline.apply_response_plan(job)
+        if _confirm_gate_blocks(job, meta):
+            qid = 'confirm_parse:' + str(meta.get('run_id') or os.path.basename(job))
+            emit(job, {'type': 'progress', 'stage': '响应规划已完成，等待确认关键信息后开始分章撰写',
+                       'pct': 45, 'step': 6, 'total': 12})
+            emit(job, {'type': 'question', 'id': qid, 'kind': 'confirm_parse',
+                       'payload': _parse_confirm_summary(job),
+                       'text': '响应规划已完成。开始分章撰写前，请确认解析出的关键信息——'
+                               '发现读错了现在改一个字，胜过跑完 30 分钟后返工。',
+                       'options': [CONFIRM_PARSE_ACCEPT]})
+            update_runtime(job, execution_path='checkpoint_pipeline', can_pause=False,
+                           pause_disabled_reason='正在等待确认解析结果。')
+            # 落一个明确的可续跑终态:没有它任务会呈现为 unknown,
+            # 右栏会误挂「没出 Word,未完成」红牌——明明只是等确认。
+            write_json(os.path.join(job, 'outcome.json'),
+                       {'state': 'stopped', 'reason': '等待确认解析结果（确认后自动继续）', 'ts': now()})
+            return
         emit(job, {'type': 'progress', 'stage': '响应规划已完成，正在分章撰写',
                    'pct': 45, 'step': 6, 'total': 12})
 
@@ -4004,13 +4461,18 @@ def generation_pipeline_worker(job):
             inputs = [os.path.join(job, name) for name in
                       _pipeline_declared_input_names(job, node, current_state)]
             inputs.extend(_pipeline_material_paths(job))
-            contract = json.dumps({key: node.get(key) for key in
-                                   ('title', 'basis', 'scoring_points', 'material_slots', 'dependencies')},
-                                  ensure_ascii=False, sort_keys=True)
+            contract_fields = {key: node.get(key) for key in
+                               ('title', 'basis', 'scoring_points', 'material_slots', 'dependencies')}
+            # 重写标记只在有值时进入契约:0.20.4 升级上来的旧任务摘要保持不变,
+            # 已完成章节不会因为升级被重跑;单章重写后摘要必然变化,触发精确重做。
+            contract_fields.update({key: node.get(key) for key in ('user_note', 'rewrite_serial')
+                                    if node.get(key)})
+            contract = json.dumps(contract_fields, ensure_ascii=False, sort_keys=True)
             digest = generation_pipeline.file_digest(inputs) + ':' + _sha256_text(contract)
             return generation_pipeline.run_model_node(
                 job, node['id'], lambda current, prompt, model: _pipeline_model_runner(job, current, prompt, model),
                 prompt=_pipeline_prompt(job, node), input_digest=digest,
+                sleep=_pipeline_retry_sleep(base),
                 on_event=lambda event, current: _pipeline_event(job, event, current))
         # 每次恢复都从 DAG 根节点按序校验摘要；摘要未变的 done 节点会立即复用，
         # 依赖产物变化时下游才会被精确重做。
@@ -4056,6 +4518,7 @@ def generation_pipeline_worker(job):
             generation_pipeline.run_model_node(
                 job, 'quality_review', lambda node, prompt, model: _pipeline_model_runner(job, node, prompt, model),
                 prompt=_pipeline_prompt(job, quality_node), input_digest=quality_digest,
+                sleep=_pipeline_retry_sleep(base),
                 on_event=lambda event, node: _pipeline_event(job, event, node))
         else:
             def local_quality(_node):
@@ -4072,10 +4535,18 @@ def generation_pipeline_worker(job):
         def export_word(_node):
             ensure_docx(job, set(list_deliverables(job)), force=True)
             audit = word_format_audit(job, '投标文件_整册.docx')
-            if audit.get('status') != 'pass':
+            # 只有「检查没跑成/Word 不可用」才算节点失败;样式项不符(warn)如实告知,
+            # 进「出件前检查」清单——Word 明明已导出可用,不能把整单打成未完成。
+            if audit.get('status') == 'fail':
                 raise generation_pipeline.OutputValidationError(
                     audit.get('summary') or 'Word 格式门禁未通过')
-        _pipeline_complete_local(job, 'word_export', word_digest, export_word, retryable=False)
+            if audit.get('status') == 'warn':
+                emit(job, {'type': 'message', 'role': 'agent',
+                           'text': '%s。这些属于提交前人工确认项,在「出件前检查」里逐条看即可。' %
+                                   (audit.get('summary') or 'Word 格式自检有不符项')})
+        # word_export 是幂等确定性步骤;Windows 上用户开着 Word 锁住目标文件时
+        # 会抛 PermissionError,必须允许重试(关掉文件点重试即可),不能一锤 blocked。
+        _pipeline_complete_local(job, 'word_export', word_digest, export_word, retryable=True)
         delivery_digest = generation_pipeline.file_digest([
             os.path.join(job, '投标文件_整册.docx'), os.path.join(job, '成品质检报告.md'),
             os.path.join(job, '技术应答偏离表.md'), os.path.join(job, '商务偏离表.md'),
@@ -4111,7 +4582,15 @@ def generation_pipeline_worker(job):
                    'text': text,
                    'actions': [{'act': 'retry_node', 'label': '重试当前节点', 'param': node_id},
                                {'act': 'open_log', 'label': '查看诊断详情'}]})
-        settle(job, stop_reason='已停止（当前节点连接中断）')
+        # 终态归因要诚实:以前所有节点失败一律写「连接中断」,把模型输出不合格、
+        # 限流等都报成断网,用户排查方向全被带偏(反馈 6 的一部分)。
+        reason_map = {
+            'model_request_interrupted': '已停止（模型连接中断，可重试当前节点续跑）',
+            'model_request_failed': '已停止（模型连接中断，可重试当前节点续跑）',
+            'model_rate_limited': '已停止（上游限流，稍后重试当前节点即可）',
+            'model_response_empty': '已停止（模型返回为空，可重试当前节点）',
+        }
+        settle(job, stop_reason=reason_map.get(exc.code, '已停止（节点“%s”执行未通过，可重试该节点）' % title))
     except Exception as exc:
         append_diagnostic(job, 'pipeline_worker_exception', str(exc), level='error')
         problem = generation_pipeline.summary(job).get('problem') or {}
@@ -4605,6 +5084,30 @@ def generation_preflight(job, conf=None):
     return result
 
 
+def mark_connection_check(job, ok, detail=''):
+    """把 preflight.json 里的「模型连接」检查项改成本次运行的真实结果。
+
+    真机反馈 5:该项写的是启动时的静态判断(「将在派发前建立模型连接」),之后
+    连接成功/断开都不再更新,任务导航栏的「模型连接」与实际 100% 脱节。
+    现在:首次真实调用成功置 pass;断连/失败置 fail 并带原因;自动恢复后再置回。"""
+    try:
+        path = os.path.join(job, 'preflight.json')
+        pf = read_json(path, {})
+        changed = False
+        for item in pf.get('checks') or []:
+            if item.get('id') == 'connection':
+                status = 'pass' if ok else 'fail'
+                message = (detail or ('连接已建立' if ok else '连接中断'))[:160]
+                if item.get('status') != status or item.get('message') != message:
+                    item['status'], item['message'] = status, message
+                    changed = True
+        if changed:
+            pf['checked_at'] = now()
+            write_json(path, pf)
+    except Exception:
+        pass
+
+
 def _bootstrap_repair(kind='none', action='', label='无需处理'):
     return {'kind': kind, 'action': action, 'label': label}
 
@@ -4967,12 +5470,15 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
                      files: List[UploadFile] = File(None), relpaths: str = Form(''),
                      prompt: str = Form(''), name: str = Form(''), mock: str = Form('auto'),
                      start: str = Form('1'), template_id: str = Form(''),
-                     project_id: str = Form('')):
+                     project_id: str = Form(''), save_to_assets: str = Form('1'),
+                     confirm_parse: str = Form('0')):
     """建任务(向导版约定):
     - tender = 招标文件(主件,永远落任务根目录——绝不进 素材/,素材库污染是内容变薄的根源之一)
     - files + relpaths = 参考素材(多文件/整文件夹,保留目录结构,落 素材/;相对路径做穿越防护)
     - start='0' 只暂存(任务状态=待开始),等 /v1/jobs/{jid}/start 再跑
     兼容旧调用:只传 tender(+materials zip)行为不变。"""
+    gate = _generation_gate_response()
+    if gate is not None: return gate
     raw_key = str(request.headers.get('idempotency-key') or '')
     idem_key = raw_key[:128] if re.fullmatch(r'[A-Za-z0-9._:-]{8,128}', raw_key) else ''
     create_ledger_path = os.path.join(jobs_dir(), '.create_requests.json')
@@ -5040,6 +5546,7 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
     # 模板推荐只使用有限预览，不能把被截断的预览冒充完整解析结果。
     # 流水线会在后台对已保存主件执行一次完整、有预算的本地解析并固化结果。
     mdir = os.path.join(job, '素材')          # 注意:没有素材就不建目录,空 素材/ 会顶掉全局素材库的回落
+    uploaded_materials = []   # 本单用户亲手导入的清单;任务详情据此与全局库合并件区分开(反馈 7)
     for i, f in enumerate(fl):
         rel = (rels[i] or f.filename or 'file').replace('\\', '/')
         rel = os.path.normpath(rel).replace(os.sep, '/')
@@ -5051,19 +5558,33 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
         if parts and parts[0] == '素材': parts = parts[1:]
         elif len(parts) > 1: parts = parts[1:]
         rel = '/'.join(parts)
-        dest = os.path.join(mdir, rel or os.path.basename(f.filename or 'file'))
+        rel = rel or os.path.basename(f.filename or 'file')
+        dest = os.path.join(mdir, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         open(dest, 'wb').write(await f.read())
+        uploaded_materials.append(rel)
     if materials and materials.filename:
         z = os.path.join(job, '_m.zip'); open(z, 'wb').write(await materials.read())
-        try: zipfile.ZipFile(z).extractall(_mk(mdir))
+        try:
+            zf = zipfile.ZipFile(z)
+            zf.extractall(_mk(mdir))
+            uploaded_materials += [n for n in zf.namelist()
+                                   if not n.endswith('/') and not os.path.basename(n).startswith('.')][:200]
         except Exception: pass
+    if uploaded_materials and (save_to_assets or '1') != '0':
+        # 反馈 3 落地:本单导入的材料自动回流素材库(任务导入/<任务名>/),下一单直接复用。
+        # md5 与库内既有文件去重;失败不阻塞建单。
+        threading.Thread(target=_backflow_job_materials,
+                         args=(job, list(uploaded_materials), (name or tname or jid)[:20]),
+                         daemon=True).start()
     # 先落 staged，再取得 admission 后由 _launch_job_reserved 原子切为运行；
     # 即使 replay/shutdown 暂时拒绝，也不会留下“看似运行但没有 worker”的孤儿。
     write_json(os.path.join(job, '任务.json'), {'name': name or tname, 'created_at': now(),
                'paused': False, 'staged': True, 'tender': tname, 'prompt': prompt,
                'template_id': template_id, 'template_snapshot': template_snapshot,
-               'template_recommendation': template_recommendation})
+               'template_recommendation': template_recommendation,
+               'confirm_parse': (confirm_parse or '0') != '0',
+               'uploaded_materials': uploaded_materials[:200]})
     write_json(os.path.join(job, 'product.json'),
                {'name': name or tname, 'project_id': str(project_id or '').strip()[:120],
                 'version': 1, 'root_job_id': jid, 'parent_job_id': '', 'created_at': now()})
@@ -5342,6 +5863,8 @@ def agent_via_server_or_cli(job, prompt, cmd):
 @app.post('/v1/jobs/{jid}/start')
 def start_job(jid: str, mock: str = 'auto'):
     """启动「待开始」的暂存任务(向导里点「稍后开始」建出来的)"""
+    gate = _generation_gate_response()
+    if gate is not None: return gate
     job = jpath(jid)
     if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
     r = _launch_job(jid, job, mock)
@@ -5864,10 +6387,17 @@ def job_flow(job, state=None, meta=None, prog=None, outcome=None):
         if not phase_finished and phase_started:
             if idx == current_index and state == 'running': phase_finished = clock
             elif idx == current_index and terminal_problem: phase_finished = terminal_at or clock
-            elif phase_state == 'done': phase_finished = terminal_at or _parse_ts(prog.get('ts')) or clock
+            # 已完成的阶段没留下结束证据时,只认真实落盘的时间戳。以前会拿「此刻」兜底,
+            # 于是隔夜再打开旧任务,环境准备就报出「实际 8 小时 · 通常 1 分钟」这种荒唐数字。
+            elif phase_state == 'done': phase_finished = terminal_at or _parse_ts(prog.get('ts'))
         elapsed_seconds = None
         if phase_started and phase_finished:
             elapsed_seconds = max(0, int((phase_finished - phase_started).total_seconds()))
+        # 环境准备是从「建任务」量到「第一步落盘」,中间包含用户去吃饭、隔天才点开始的空档。
+        # 那段等待不是机器耗时,报出来只会让人以为程序卡了 8 小时;超出常规太多就不报实际值。
+        if (definition['id'] == 'environment' and elapsed_seconds is not None
+                and elapsed_seconds > max(expected * 20, 1800)):
+            elapsed_seconds = None
         if phase_state == 'done': remaining_seconds = 0
         elif phase_state in ('attention', 'failed') and terminal_problem: remaining_seconds = 0
         elif elapsed_seconds is None: remaining_seconds = expected
@@ -6121,19 +6651,30 @@ def events(jid: str, offset: int = 0, follow: bool = True):
     async def gen():
         # async 生成器:网页端每个连接不再占死一条线程池线程(多标签页/多次重连曾把线程池耗干,
         # 表现为"页面转半天然后断开、agent 请求全部卡住")。空转时 10 秒一个心跳防反代掐线。
+        # 事件文件按字节偏移**增量**读:旧版每秒全量 read()+splitlines,长任务(数 MB 事件)
+        # 乘以标签页数,机械盘上足以把界面状态拖到落后于实际进度(「状态不准」观感的一部分)。
         sent, idle = max(0, int(offset or 0)), 0
         index = read_json(tsf, {})
+        lines, consumed, pending = [], 0, b''
         for _ in range(3600 * 8):
             burst = False
             if os.path.isfile(path):
                 try:
-                    raw = open(path, encoding='utf-8').read()
-                    lines = raw.splitlines()
-                    # 进程被强退或正在追加时，最后一行可能只有半截 JSON。
-                    # 它尚未构成事件，不能前移 cursor；等换行落盘后再发。
-                    if raw and not raw.endswith(('\n', '\r')) and lines:
-                        lines = lines[:-1]
-                except Exception: lines = []
+                    size = os.path.getsize(path)
+                    if size < consumed:            # 文件被重建:从头再读
+                        lines, consumed, pending = [], 0, b''
+                    if size > consumed:
+                        with open(path, 'rb') as f:
+                            f.seek(consumed)
+                            chunk = f.read()
+                        consumed += len(chunk)
+                        parts = (pending + chunk).split(b'\n')
+                        pending = parts.pop()      # 半截 JSON 不构成事件,等换行落盘再发
+                        for raw_ln in parts:
+                            s = raw_ln.decode('utf-8', 'ignore').strip('\r')
+                            if s: lines.append(s)
+                except Exception:
+                    pass
                 if sent > len(lines):
                     reset = {'type': 'stream_reset', 'cursor': 0, '_cursor': 0,
                              'reason': 'event_log_recreated', 'ts': now()}
@@ -6148,6 +6689,11 @@ def events(jid: str, offset: int = 0, follow: bool = True):
             idle = 0 if burst else idle + 1
             if idle and idle % 10 == 0: yield ': ping\n\n'
             await asyncio.sleep(1)
+        if follow:
+            # 到达连接寿命上限:显式告知前端立即重连,而不是无声断掉靠 onerror 兜底
+            rotate = {'type': 'stream_reset', 'cursor': sent, '_cursor': sent,
+                      'reason': 'rotate', 'ts': now()}
+            yield 'id: %d\ndata: %s\n\n' % (sent, json.dumps(rotate, ensure_ascii=False))
     return StreamingResponse(gen(), media_type='text/event-stream',
                              headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
@@ -6234,10 +6780,12 @@ async def add_attachment(jid: str, file: UploadFile = File(...)):
     fn = os.path.basename(file.filename or '参考资料')
     blob = await file.read()
     open(os.path.join(d, fn), 'wb').write(blob)
-    # 关键一步:进 materialsDir,agent 才够得着
+    # 关键一步:进本任务的 素材/参考资料,agent 才够得着。
+    # 绝不能走 merged_materials():job 没有 素材/ 目录时它返回的是**全局素材库**,
+    # 这一单的参考标书会被写进库里、再被合并进之后每一个新任务——跨项目串档(真机隐患)。
     delivered = False
     try:
-        md = os.path.join(merged_materials(job), '参考资料')
+        md = os.path.join(job, '素材', '参考资料')
         os.makedirs(md, exist_ok=True)
         open(os.path.join(md, fn), 'wb').write(blob)
         idx = os.path.join(os.path.dirname(md), '参考资料清单.md')
@@ -6270,14 +6818,31 @@ async def add_attachment(jid: str, file: UploadFile = File(...)):
 
 @app.get('/v1/jobs/{jid}/attachments')
 def list_attachments(jid: str):
-    d = os.path.join(jpath(jid), '参考资料')
-    if not os.path.isdir(d): return []
-    return [{'name': fn, 'size_kb': round(os.path.getsize(os.path.join(d, fn)) / 1024, 1)}
-            for fn in sorted(os.listdir(d)) if not fn.startswith('.')]
+    """本任务的输入件清单:创建时导入的素材(kind=material)+ 事后添加的参考资料(kind=reference)。
+
+    真机反馈 7:创建任务导入了 7 个素材文件,任务详情什么都不显示——旧版只列 job/参考资料/。
+    创建导入件在 job/素材/,启动后又会被全局库合并进同一目录,没法靠列目录区分;
+    任务.json 的 uploaded_materials 才是「用户本单亲手导入」的可靠清单。"""
+    job = jpath(jid)
+    out = []
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    for rel in (meta.get('uploaded_materials') or [])[:200]:
+        p = os.path.join(job, '素材', rel)
+        if os.path.isfile(p):
+            out.append({'name': rel, 'kind': 'material',
+                        'size_kb': round(os.path.getsize(p) / 1024, 1)})
+    d = os.path.join(job, '参考资料')
+    if os.path.isdir(d):
+        out += [{'name': fn, 'kind': 'reference',
+                 'size_kb': round(os.path.getsize(os.path.join(d, fn)) / 1024, 1)}
+                for fn in sorted(os.listdir(d)) if not fn.startswith('.')]
+    return out
 
 @app.post('/v1/jobs/{jid}/rerun')
 async def rerun_job(jid: str, req: Request = None):
     """用同一份招标文件重开一个任务(素材库补好后重跑,不用再找原文件)"""
+    gate = _generation_gate_response()
+    if gate is not None: return gate
     old = jpath(jid)
     meta = read_json(os.path.join(old, '任务.json'), {})
     tname = meta.get('tender', '')
@@ -6487,7 +7052,7 @@ async def resume_job(jid: str):
                 _release_running(base, owner)
                 return JSONResponse({
                     'ok': False,
-                    'error': '任务运行所用的模型网关或 Key 已变化；请重新测试连接后再继续。'
+                    'error': '任务运行所用的模型网关已变化；请在「模型接入」切回原网关后继续,或重跑本任务。'
                 }, 409)
             # delivery_gate 已落盘、outcome 未落盘时是一个可提交的中间态。
             # 这里只重放幂等收尾，不重启模型节点。
@@ -6571,14 +7136,49 @@ def mock_redo(job, instruction):
 
 @app.get('/v1/jobs/{jid}/log')
 def job_log(jid: str, n: int = 20000):
-    """agent 文本日志 + 引擎观测到的结构化技能证据状态。"""
+    """agent 文本日志 + 引擎观测到的结构化技能证据状态。
+
+    OpenCode server 模式没有 run.log(CLI 模式才有)。真机反馈:任务失败点「查看运行日志」,
+    只看到一句「当前运行方式没有文本日志」——等于没给。事件流 events.jsonl 和
+    diagnostics.jsonl 里其实全程都有记录,这里把它们合成一份带时间戳的可读时间线兜底。"""
     job = jpath(jid)
     txt = read_tail(os.path.join(job, 'run.log'), max(1000, min(int(n or 20000), 200000)))
+    if not (txt or '').strip():
+        lines = []
+        try:
+            for ln in open(os.path.join(job, 'events.jsonl'), encoding='utf-8', errors='ignore').read().splitlines()[-400:]:
+                try: ev2 = json.loads(ln)
+                except Exception: continue
+                t = ev2.get('type'); ts = str(ev2.get('ts') or '')[:19]
+                if t == 'progress':
+                    lines.append('%s [进度] 第 %s/%s 步 · %s' % (ts, ev2.get('step') or '?', ev2.get('total') or 12, ev2.get('stage') or ''))
+                elif t == 'worklog':
+                    for wl in (ev2.get('lines') or [])[:8]: lines.append('%s [动作] %s' % (ts, wl))
+                elif t == 'error':
+                    lines.append('%s [错误] %s' % (ts, ev2.get('text') or ''))
+                elif t == 'message':
+                    lines.append('%s [%s] %s' % (ts, '用户' if ev2.get('role') == 'user' else '中标狗',
+                                                 str(ev2.get('text') or '').replace('\n', ' ')[:200]))
+                elif t == 'health':
+                    lines.append('%s [体检] %s' % (ts, ev2.get('summary') or ''))
+        except OSError:
+            pass
+        try:
+            for ln in open(os.path.join(job, 'diagnostics.jsonl'), encoding='utf-8', errors='ignore').read().splitlines()[-60:]:
+                try: rec2 = json.loads(ln)
+                except Exception: continue
+                lines.append('%s [诊断·%s] %s:%s' % (str(rec2.get('ts') or '')[:19],
+                                                      rec2.get('level') or '', rec2.get('code') or '',
+                                                      str(rec2.get('detail') or '')[:200]))
+        except OSError:
+            pass
+        lines.sort()
+        txt = '\n'.join(lines)
     ev = skill_evidence(job)
     if ev['state'] == 'unverifiable' and _replay_oc_skill_evidence(job):
         ev = skill_evidence(job)
     return {'ok': True,
-            'log': _redact_runtime(txt) or '(当前运行方式没有文本日志；请查看下方结构化检查结果)',
+            'log': _redact_runtime(txt) or '(这一单还没有任何运行记录)',
             'skill_state': ev['state'], 'skill_used': ev['ok'],
             'hits': ev['hits'], 'why': ev['why']}
 
@@ -6654,6 +7254,17 @@ async def retry_pipeline_node(jid: str, node_id: str, request: Request):
                                  'error': '重试请求已派发，正在确认运行状态'}, 202)
         owner, reason = _reserve_running_reason(base)
         if not owner:
+            # 同一节点刚被(另一个 key 的)点击派发过、worker 还在跑:这不是失败,
+            # 是重复点击——回 202 pending,前端显示「重试进行中」,不能弹错误吓用户。
+            if reason == 'running':
+                prior_same_node = next((entry for entry in ledger.values()
+                                        if isinstance(entry, dict)
+                                        and entry.get('node_id') == node_id
+                                        and entry.get('status') in ('accepted', 'dispatching')), None)
+                if prior_same_node:
+                    return JSONResponse({'ok': True, 'node_id': node_id, 'deduplicated': True,
+                                         'pending': True,
+                                         'message': '这一节点的重试已经在跑了，稍等片刻看进度即可。'}, 202)
             return _admission_failure(reason, '这一单正在跑，不用重复重试。')
         accepted_at = (str((ledger.get(ledger_key) or {}).get('accepted_at') or '') or now())
         ledger[ledger_key] = {'node_id': node_id, 'accepted_at': accepted_at,
@@ -6711,6 +7322,117 @@ async def retry_pipeline_node(jid: str, node_id: str, request: Request):
         return JSONResponse({'ok': False, 'code': 'retry_dispatch_failed',
                              'error': '节点重试派发失败，请再次点击重试。'}, 500)
 
+@app.post('/v1/jobs/{jid}/chapters/{node_id:path}/rewrite')
+async def rewrite_chapter(jid: str, node_id: str, request: Request):
+    """单章重写:只重做一个章节节点,其余章节不动。
+
+    机制:把用户补充要求写进节点契约,执行摘要随之变化 → start_node 归档旧稿并
+    重跑本章;汇总/质检/Word 导出是摘要驱动的,会自动跟着重做,不需要级联重置。"""
+    job = jpath(jid)
+    if not os.path.isdir(job):
+        return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    note = str((body or {}).get('note') or '').strip()[:500]
+    try:
+        state = generation_pipeline.load(job)
+    except Exception:
+        state = {}
+    if state.get('version') != generation_pipeline.PIPELINE_VERSION:
+        return JSONResponse({'ok': False, 'error': '该任务使用旧版生成流程，不支持单章重写；请重新生成整单'}, 409)
+    node = next((item for item in state.get('nodes') or [] if item.get('id') == node_id), None)
+    if not node:
+        return JSONResponse({'ok': False, 'error': '章节不存在'}, 404)
+    base = os.path.basename(jid)
+    owner, reason = _reserve_running_reason(base)
+    if not owner:
+        return _admission_failure(reason, '这一单正在生成；等它停下或完成后，再重写单章。')
+    try:
+        # 旧稿另存一份到用户可见的「历史版本/」(流水线内部 .pipeline_attempts 仍是权威归档)
+        serial = int(node.get('rewrite_serial') or 0) + 1
+        for name in node.get('outputs') or []:
+            src = os.path.join(job, os.path.basename(str(name)))
+            if os.path.isfile(src):
+                hist = os.path.join(job, '历史版本')
+                os.makedirs(hist, exist_ok=True)
+                stem, ext = os.path.splitext(os.path.basename(src))
+                shutil.copy2(src, os.path.join(hist, '%s.v%d%s' % (stem, serial, ext)))
+        node = generation_pipeline.rewrite_node(job, node_id, note)
+        try: os.unlink(os.path.join(job, 'outcome.json'))
+        except FileNotFoundError: pass
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': '已开始重写章节「%s」%s。其余章节不动；旧稿已存入「历史版本」文件夹，可随时找回。' % (
+                       node.get('title') or node_id, '，并带上你的补充要求' if note else '')})
+        _start_reserved_worker(base, owner, generation_pipeline_worker, job)
+        return {'ok': True, 'node_id': node_id, 'version': serial + 1}
+    except generation_pipeline.PipelineError as exc:
+        _release_running(base, owner)
+        return JSONResponse({'ok': False, 'error': str(exc)}, 409)
+    except Exception:
+        _release_running(base, owner)
+        raise
+
+COVERAGE_CLEAR_GAPS = ('', '-', '—', '无', '无缺口', '已覆盖', '不适用', '/')
+
+def _coverage_view(job):
+    """把《评分点响应矩阵.md》变成结构化覆盖度:规划矩阵 × 章节完成状态。
+
+    一个评分点算「已覆盖」需要同时满足:缺口列干净(没有〔需补充〕类标记)、
+    响应位置落到了具体章节、且该章节已经写完(章节节点 done;旧版无流水线的
+    任务退化为「整册已生成」)。这是给售前汇报用的数字,口径必须经得起追问。"""
+    rows = _md_table_rows(os.path.join(job, '评分点响应矩阵.md'), 6)
+    if not rows: return None
+    chapter_state = {}
+    try:
+        state = generation_pipeline.load(job)
+        if state.get('version') == generation_pipeline.PIPELINE_VERSION:
+            for node in state.get('nodes') or []:
+                if str(node.get('id') or '').startswith('chapter_write:'):
+                    chapter_state[str(node.get('title') or '')] = \
+                        {'id': node.get('id'), 'state': node.get('state')}
+    except Exception:
+        pass
+    whole_done = os.path.isfile(os.path.join(job, '投标文件_整册.md'))
+    items, covered = [], 0
+    for row in rows[:200]:
+        requirement, score, location, gap = row[1][:140], row[2][:20], row[3][:80], row[5][:140]
+        gap_clear = (gap in COVERAGE_CLEAR_GAPS) or not gap.strip()
+        located = bool(location.strip()) and '需补充' not in location
+        node_id, node_title, chapter_done = '', '', whole_done
+        if chapter_state:
+            hit = next(((title, info) for title, info in chapter_state.items()
+                        if title and (title in location or location in title)), None)
+            if hit:
+                node_title, node_id = hit[0], str(hit[1].get('id') or '')
+                chapter_done = hit[1].get('state') == 'done'
+            else:
+                chapter_done = whole_done
+        ok = gap_clear and located and chapter_done
+        covered += 1 if ok else 0
+        # 界面上「为什么没算覆盖」以前是前端靠 node_id 空不空反推的,于是出现过
+        # 左边写「落位:技术方案」右边写「未定位到章节」这种自相矛盾。原因由这里给准。
+        if ok: reason = ''
+        elif not located: reason = 'unlocated'
+        elif not gap_clear: reason = 'gap'
+        else: reason = 'chapter_pending'
+        items.append({'requirement': requirement, 'score': score, 'location': location,
+                      'gap': gap, 'covered': ok, 'node_id': node_id, 'chapter': node_title,
+                      'reason': reason})
+    return {'total': len(items), 'covered': covered, 'items': items}
+
+@app.get('/v1/jobs/{jid}/coverage')
+def job_coverage(jid: str):
+    job = jpath(jid)
+    if not os.path.isdir(job):
+        return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
+    view = _coverage_view(job)
+    if view is None:
+        return {'ok': True, 'available': False,
+                'note': '响应规划完成后才有评分点矩阵；生成开始后这里会实时更新。'}
+    return {'ok': True, 'available': True, **view}
+
 def _redact_config(value, key=''):
     if _sensitive_config_key(key) or str(key).lower() in ('cmd', 'env'):
         return ('s' + 'k' + '-***') if value else ''
@@ -6747,6 +7469,47 @@ def diagnostic_bundle(job):
         oc_log = os.path.join(DATA, 'opencode-server.log')
         z.writestr('opencode-server.log', '\n'.join(_tail_lines(oc_log, 500)))
     return buf.getvalue()
+
+def _job_verdict(job, state, outcome, recent, pipe):
+    """诊断的第一行必须是人话结论 + 下一步动作。
+
+    真机反馈:任务失败后点「一键诊断」,三项环境检查全绿、技术详情一屏原始 JSON,
+    用户完全看不出这单为什么停 —— 环境检查回答的是「引擎还能不能干活」,
+    没回答「这一单出了什么事」。这里把停止原因、最后一条错误级诊断、
+    卡住的流水线节点拼成一句结论和一条建议,诊断弹窗置顶展示。"""
+    reason = str((outcome or {}).get('reason') or '')
+    last_err = next((r for r in reversed(recent or [])
+                     if isinstance(r, dict) and r.get('level') == 'error'), None)
+    problem = (pipe or {}).get('problem') if isinstance(pipe, dict) else None
+    parts, suggestion = [], ''
+    if state == 'done':
+        return {'summary': '这一单已完成。', 'suggestion': '', 'last_error': ''}
+    if state == 'running':
+        parts.append('这一单正在运行中。')
+        suggestion = '如果长时间没有新动态,可以先「停止」再「从已保存内容继续」。'
+    elif reason:
+        parts.append('这一单停止的直接原因:%s。' % reason.strip('。'))
+    if problem:
+        parts.append('流水线停在节点「%s」(已试 %s/%s 次%s)。' % (
+            problem.get('title') or problem.get('node_id'),
+            problem.get('attempt') or 0, problem.get('max_attempts') or 0,
+            (',错误码 ' + problem['error_code']) if problem.get('error_code') else ''))
+        if not suggestion:
+            suggestion = '建议点「重试当前节点」;已完成节点不会重做。反复失败时检查「设置 · 模型接入」的网络与 Key。'
+    if last_err and not suggestion:
+        code = str(last_err.get('code') or '')
+        if 'stall' in code or 'interrupt' in code or '中断' in str(last_err.get('detail') or ''):
+            suggestion = '多为模型网络瞬断:点「从已保存内容继续」,已写好的内容不会重写。'
+        elif 'export' in code or 'docx' in code:
+            suggestion = '正文已生成,点「重试导出 Word」;仍失败时重启应用后再导出。'
+        else:
+            suggestion = '可点「从已保存内容继续」;反复出现时导出诊断包发给支持人员。'
+    if not parts:
+        parts.append('没有发现这一单的明确故障记录。')
+        suggestion = suggestion or '如任务未完成,可「从已保存内容继续」或「重跑本任务」。'
+    return {'summary': ' '.join(parts),
+            'suggestion': suggestion,
+            'last_error': str((last_err or {}).get('detail') or '')[:300]}
 
 def _diagnostic_snapshot(jid=''):
     """A fast, secret-free support snapshot; expensive network tests stay opt-in."""
@@ -6792,15 +7555,40 @@ def _diagnostic_snapshot(jid=''):
         if not last_activity:
             try: last_activity = datetime.datetime.fromtimestamp(os.path.getmtime(os.path.join(job, 'events.jsonl'))).isoformat(timespec='seconds')
             except OSError: last_activity = now()
+        outcome = read_json(os.path.join(job, 'outcome.json'), {})
+        pipe = generation_pipeline.summary(job)
+        verdict = _job_verdict(job, state, outcome, recent, pipe)
+        # 第 4 项检查:本单执行。前三项是环境体检,任务失败时它们照样全绿——
+        # 用户点「一键诊断」要的答案是「这一单怎么了」,必须让它参与结论。
+        job_ok = state in ('done', 'running') and not (pipe or {}).get('problem')
+        checks.append({'id': 'job', 'label': '本单执行',
+                       'status': 'pass' if job_ok else 'fail',
+                       'message': verdict.get('summary') or ''})
+        result['ok'] = result['ok'] and job_ok
         result['job'] = {'job_id': os.path.basename(jid), 'state': state,
                          'presentation': presentation, 'current_action': current_action,
                          'runtime': job_runtime(job, meta), 'delivery': delivery_summary(job),
-                         'flow': job_flow(job, state, meta, prog,
-                                          read_json(os.path.join(job, 'outcome.json'), {})),
+                         'flow': job_flow(job, state, meta, prog, outcome),
                          'preflight': preflight, 'last_activity': last_activity,
-                         'pipeline': generation_pipeline.summary(job),
+                         'pipeline': pipe,
+                         'verdict': verdict,
                          'recent_diagnostics': recent,
                          'bundle_url': '/v1/jobs/%s/bundle' % os.path.basename(jid)}
+    # 「技术详情」给人话文本;原始 JSON 只进诊断包,不再糊用户一脸
+    lines = ['[%s] %s:%s' % ({'pass': '通过', 'fail': '未通过', 'warning': '警告'}.get(item.get('status'), item.get('status')),
+                             item.get('label'), item.get('message')) for item in checks]
+    jobinfo = result.get('job') or {}
+    if jobinfo:
+        v = jobinfo.get('verdict') or {}
+        if v.get('summary'): lines.append('结论:%s' % v['summary'])
+        if v.get('suggestion'): lines.append('建议:%s' % v['suggestion'])
+        if v.get('last_error'): lines.append('最后错误:%s' % v['last_error'])
+        for rec2 in (jobinfo.get('recent_diagnostics') or [])[-5:]:
+            if isinstance(rec2, dict):
+                lines.append('%s %s:%s' % (str(rec2.get('ts') or '')[:19], rec2.get('code') or '',
+                                           str(rec2.get('detail') or '')[:160]))
+    lines.append('完整数据请点「导出诊断包」。')
+    result['technical_detail'] = '\n'.join(lines)
     return _redact_runtime(result, conf)
 
 @app.get('/v1/diagnostics')
@@ -6956,6 +7744,8 @@ def _redo_job_reserved(jid, job, instruction, owner):
 @app.post('/v1/jobs/{jid}/redo')
 async def redo_job(jid: str, req: Request):
     """定向重做:在当前任务里只重做用户指定的部分,其余产物保留,完成后重新汇总自检"""
+    gate = _generation_gate_response()
+    if gate is not None: return gate
     body = await req.json()
     instruction = (body.get('instruction') or '').strip()
     job = jpath(jid)
@@ -7050,6 +7840,32 @@ async def answer(jid: str, req: Request):
     emit(job, {'type': 'message', 'role': 'user', 'text': txt})
     open(os.path.join(job, 'answers.jsonl'), 'a', encoding='utf-8').write(
         json.dumps(body, ensure_ascii=False) + '\n')     # 留档,便于事后追溯
+    if rid.startswith('confirm_parse:'):
+        # 解析确认门:确认或修正都在这里落地,修正会进入「你的要求.md」,
+        # 响应规划的输入摘要因此变化,重启 worker 后会按修正重新规划再开写。
+        accept = txt.strip() in (CONFIRM_PARSE_ACCEPT, '确认无误', '确认', '')
+        corrections = '' if accept else txt.strip()[:2000]
+        if corrections:
+            with open(os.path.join(job, '你的要求.md'), 'a', encoding='utf-8') as handle:
+                handle.write('\n\n## 解析确认修正（%s）\n\n%s\n' % (now(), corrections))
+        write_json(os.path.join(job, '解析确认.json'),
+                   {'confirmed': True, 'ts': now(), 'corrections': corrections})
+        emit(job, {'type': 'question_closed', 'id': rid})
+        base = os.path.basename(jid)
+        owner, reason = _reserve_running_reason(base)
+        if not owner:
+            if reason == 'running':
+                return {'ok': True, 'delivered': True}   # worker 已在跑,确认文件会被下一步读取
+            emit(job, {'type': 'message', 'role': 'agent',
+                       'text': '确认已记录,但任务当前无法继续(%s)。稍后点「继续」即可从检查点接着跑。' % reason})
+            return JSONResponse({'ok': False, 'error': '任务当前无法继续：%s' % reason}, 409)
+        try: os.unlink(os.path.join(job, 'outcome.json'))
+        except FileNotFoundError: pass
+        emit(job, {'type': 'message', 'role': 'agent',
+                   'text': ('好，已确认关键信息，开始分章撰写。' if not corrections else
+                            '已记下修正并同步进任务要求；会按修正重新核对响应规划后开始撰写。')})
+        _start_reserved_worker(base, owner, generation_pipeline_worker, job)
+        return {'ok': True, 'delivered': True}
     meta = read_json(os.path.join(job, '任务.json'), {})
     if rid and rid in (meta.get('oc_questions') or {}):
         ok, why = oc_answer(job, rid, txt)
@@ -7227,7 +8043,10 @@ def _is_transient(e):
     if isinstance(reason, ssl.SSLCertVerificationError):
         return False                                    # 证书问题重试一万次也一样
     if isinstance(reason, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError,
+                           ConnectionRefusedError, socket.gaierror,
                            ssl.SSLEOFError, ssl.SSLZeroReturnError, TimeoutError, socket.timeout)):
+        # ConnectionRefused/DNS 失败也算瞬时:路由器重连、VPN 抖动、网关重启的窗口期
+        # 都表现为这两种,重试几秒后大多自愈;以前不重试,一次抖动直接把节点打停。
         return True
     if isinstance(reason, (http.client.RemoteDisconnected, http.client.IncompleteRead,
                            http.client.BadStatusLine)):
@@ -7235,7 +8054,9 @@ def _is_transient(e):
     s = str(reason).lower()
     return any(k in s for k in ('connection reset', 'unexpected_eof', 'eof occurred in violation',
                                 'remote end closed', 'connection aborted', 'broken pipe',
-                                'record layer failure', 'timed out'))
+                                'record layer failure', 'timed out', 'connection refused',
+                                'getaddrinfo failed', 'name or service not known',
+                                'temporary failure in name resolution'))
 
 def _retry(call, tries=len(RETRY_WAITS) + 1, on_wait=None):
     """瞬时网络故障重试。上游网关偶发掐连接是常态,不重试就等于把整条任务赌在一次握手上。"""
@@ -8182,9 +9003,15 @@ def assets():
 
 @app.post('/v1/assets')
 async def add_asset(file: UploadFile = File(...), category: str = Form('未分类')):
-    d = os.path.join(assets_dir(), category); os.makedirs(d, exist_ok=True)
-    open(os.path.join(d, file.filename), 'wb').write(await file.read())
-    return {'ok': True, 'path': os.path.join(category, file.filename)}
+    # category/filename 都是外部输入:不做净化的话 '..\\..\\x' 能逃出素材库写任意路径
+    fn = os.path.basename(file.filename or '素材')
+    cat = re.sub(r'[\\/:*?"<>|.]+', '', str(category or ''))[:40] or '未分类'
+    d = os.path.join(assets_dir(), cat)
+    if not os.path.realpath(d).startswith(os.path.realpath(assets_dir())):
+        return JSONResponse({'ok': False, 'error': '分类名不合法'}, 400)
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, fn), 'wb').write(await file.read())
+    return {'ok': True, 'path': os.path.join(cat, fn)}
 
 # ---------- 素材库 · 过往标书自动入库(确定性:拆图/拆章/归类;AI 增强走 AGENT_CMD) ----------
 CAT_RULES = [
@@ -8264,6 +9091,112 @@ def docx_to_sections_and_images(path, img_dir):
                 out.append('\n'.join(rows))
     return split_md_sections('\n\n'.join(out)), images
 
+_CN_NUM = '一二三四五六七八九十百零0-9'
+
+def promote_headings(text):
+    """把中文标书常见编号行提升为 markdown 标题。
+
+    PDF/doc 转出来的纯文本没有样式,split_md_sections 会把整本书当成一节——
+    章节模板一条都拆不出来。按「第X章 / 一、 / 1.1」这类编号行(且行足够短,
+    避免把正文长句误提升)补上 #/##/###,无样式文本也能按章入库。"""
+    if re.search(r'^#{1,3}\s', text, re.M): return text     # 已有 markdown 标题就不动
+    out = []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s and len(s) <= 40:
+            if re.match(r'^第[%s]+[章部分篇卷册]' % _CN_NUM, s):
+                out.append('# ' + s); continue
+            if re.match(r'^[一二三四五六七八九十]+、', s):
+                out.append('## ' + s); continue
+            if re.match(r'^\d+(\.\d+)+\s*[^.\d]', s):
+                out.append('### ' + s); continue
+            if re.match(r'^\d+[、.]\s*[^\d.]', s) and len(s) <= 30:
+                out.append('## ' + s); continue
+        out.append(ln)
+    return '\n'.join(out)
+
+def pdf_to_text(path, max_pages=300, max_chars=800_000):
+    """pypdf 文本层提取(引擎打包依赖里早就带着 pypdf,招标主件链路一直在用)。"""
+    from pypdf import PdfReader
+    reader = PdfReader(path)
+    pages = []
+    remaining = max_chars
+    for pg in reader.pages[:max_pages]:
+        if remaining <= 0: break
+        try: t = (pg.extract_text() or '').strip()
+        except Exception: t = ''
+        if t:
+            pages.append(t[:remaining]); remaining -= len(pages[-1])
+    return '\n\n'.join(pages)
+
+def html_to_text(blob):
+    """HTML 参考资料(资质证书页、网页存档)→ 纯文本。标准库解析,不引第三方。"""
+    from html.parser import HTMLParser
+    class _T(HTMLParser):
+        def __init__(self):
+            super().__init__(); self.buf = []; self.skip = 0
+        def handle_starttag(self, tag, attrs):
+            if tag in ('script', 'style'): self.skip += 1
+            if tag in ('p', 'div', 'br', 'tr', 'li', 'h1', 'h2', 'h3', 'h4', 'table'):
+                self.buf.append('\n')
+        def handle_endtag(self, tag):
+            if tag in ('script', 'style'): self.skip = max(0, self.skip - 1)
+        def handle_data(self, data):
+            if not self.skip and data.strip(): self.buf.append(data)
+    t = _T()
+    try: t.feed(blob.decode('utf-8', 'ignore'))
+    except Exception: pass
+    return re.sub(r'\n{3,}', '\n\n', ''.join(t.buf)).strip()
+
+def rtf_to_text(blob):
+    """RTF → 纯文本(WPS/老系统把 .doc 存成 RTF 很常见)。标准库实现,不引依赖。
+    连续的 \\'xx 十六进制转义按整段解码——GBK 双字节被逐字节解码会全变成乱码。"""
+    txt = blob.decode('latin-1', 'ignore')
+    txt = re.sub(r'\{\\\*[^{}]*\}', '', txt)
+    txt = re.sub(r"(?:\\'[0-9a-fA-F]{2})+",
+                 lambda m: bytes.fromhex(m.group(0).replace("\\'", '')).decode('gbk', 'ignore'), txt)
+    txt = re.sub(r'\\par[d]?\b', '\n', txt)
+    txt = re.sub(r'\\[a-zA-Z]+-?\d*\s?', '', txt)
+    txt = txt.replace('{', '').replace('}', '')
+    return re.sub(r'\n{3,}', '\n\n', txt).strip()
+
+def convert_doc_to_docx(src):
+    """老 .doc → .docx。纯 Python 解不了 OLE2 老格式,借系统自带能力转换:
+    macOS 用 textutil(系统内置);Windows 用已装的 Word COM;两端都认 LibreOffice。
+    转不了就抛 RuntimeError,错误文案直接告诉用户手动另存为 docx。"""
+    dst = os.path.splitext(src)[0] + '.docx'
+    if os.path.isfile(dst): return dst
+    outdir = os.path.dirname(src)
+    tries = []
+    if sys.platform == 'darwin':
+        tries.append(['textutil', '-convert', 'docx', '-output', dst, src])
+    soffice = shutil.which('soffice') or next((p for p in (
+        '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+        r'C:\Program Files\LibreOffice\program\soffice.exe',
+        r'C:\Program Files (x86)\LibreOffice\program\soffice.exe') if os.path.isfile(p)), None)
+    if soffice:
+        tries.append([soffice, '--headless', '--convert-to', 'docx', '--outdir', outdir, src])
+    for cmd in tries:
+        try:
+            subprocess.run(cmd, timeout=180, capture_output=True, **({} if os.name != 'nt' else DETACH))
+            if os.path.isfile(dst): return dst
+        except Exception:
+            continue
+    if os.name == 'nt':
+        # Word COM:多数装了 Office 的 Windows 都走得通;没装 Office 会在 New-Object 处失败
+        ps = ("$ErrorActionPreference='Stop';$w=New-Object -ComObject Word.Application;"
+              "$w.Visible=$false;$d=$w.Documents.Open('%s',$false,$true);"
+              "$d.SaveAs2('%s',16);$d.Close($false);$w.Quit()") % (
+                  src.replace("'", "''"), dst.replace("'", "''"))
+        try:
+            subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
+                           timeout=300, capture_output=True, **DETACH)
+            if os.path.isfile(dst): return dst
+        except Exception:
+            pass
+    raise RuntimeError('本机没有可用的 .doc 转换器(Word/LibreOffice/textutil 都不可用),'
+                       '请用 Word/WPS 打开后「另存为 .docx」再上传')
+
 # ---------- 图片 AI 打标(调用已配的视觉模型:OCR 读图 → 分类/图注/落位锚点) ----------
 CATS = ['架构图', '功能截图', '资质证书', '案例证明', '人员证书', '其他']
 VISION_PROMPT = (
@@ -8275,6 +9208,17 @@ VISION_PROMPT = (
     '"keywords":"适用场景关键词,逗号分隔",'
     '"anchor":"落位锚点=这张图只允许插到标书哪类位置,如 总体架构章·概述段后 / 资质证明章 / 逐条应答证明材料列"}')
 VISION = {'running': False, 'done': 0, 'total': 0, 'updated': 0, 'errors': [], 'ts': ''}
+VISION_LOCK = threading.Lock()   # check-then-set 竞态防护:双击/自动触发并发时只允许一个 worker
+
+def try_start_vision(force=False):
+    """原子地启动打标 worker;已在跑或没配视觉模型返回 False。"""
+    p, err = _vision_provider()
+    if err or not p: return False
+    with VISION_LOCK:
+        if VISION['running']: return False
+        VISION.update(running=True, done=0, total=0, updated=0, degraded=0, errors=[])
+    threading.Thread(target=vision_worker, args=(force,), daemon=True).start()
+    return True
 
 def _vision_provider():
     conf = read_json(conf_path(), {'providers': [], 'routing': {}})
@@ -8289,20 +9233,74 @@ def _vision_provider():
     if not vm: return None, '当前接入点没有指定视觉模型:在「模型接入」的视觉模型一栏填一个多模态模型(如 senseaudio-vl-1.0-260319)'
     return {**p, 'vision_model': vm}, ''
 
+def _lenient_json_load(txt):
+    """容错解析视觉模型返回的 JSON。
+
+    合同截图这类 OCR 文本长的图,模型返回的 JSON 三种常见坏法(真机 120 张里 7 张全倒在这):
+      1) 输出到 max_tokens 截断 → Unterminated string / 缺右括号
+      2) 字符串值里混进裸英文引号或换行 → Expecting ',' delimiter
+      3) 末尾多写了半个键值对
+    先严格解析;失败后逐步保守修复(转义裸控制字符→补关字符串→砍尾部残缺对→补右括号)再试。"""
+    try:
+        return json.loads(txt)
+    except Exception:
+        pass
+    out, in_str, esc = [], False, False
+    for ch in txt:
+        if in_str:
+            if esc: out.append(ch); esc = False; continue
+            if ch == '\\': out.append(ch); esc = True; continue
+            if ch == '"': in_str = False; out.append(ch); continue
+            if ch == '\n': out.append('\\n'); continue
+            if ch == '\r': continue
+            if ch == '\t': out.append('\\t'); continue
+            out.append(ch); continue
+        if ch == '"': in_str = True
+        out.append(ch)
+    fixed = ''.join(out)
+    if in_str: fixed += '"'
+    for _ in range(8):
+        for cand in (fixed, fixed + '}', fixed.rstrip().rstrip(',') + '}'):
+            try:
+                d = json.loads(cand)
+                if isinstance(d, dict): return d
+            except Exception:
+                pass
+        cut = fixed.rfind(',')
+        if cut <= 0: break
+        fixed = fixed[:cut]
+    raise ValueError('模型返回的打标结果不是有效 JSON')
+
+_IMG_MIME = {'.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif',
+             '.bmp': 'image/bmp', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg'}
+
 def tag_one_image(path, p):
     import base64
-    raw = open(path, 'rb').read()
+    with open(path, 'rb') as fh:
+        raw = fh.read()
     if len(raw) > 8 * 1024 * 1024: raise RuntimeError('图片过大(>8MB),已跳过')
-    mime = 'image/png' if path.lower().endswith('.png') else 'image/jpeg'
-    payload = {'model': p['vision_model'], 'max_tokens': 500, 'messages': [{'role': 'user', 'content': [
-        {'type': 'text', 'text': VISION_PROMPT},
-        {'type': 'image_url', 'image_url': {'url': 'data:%s;base64,%s' % (mime, base64.b64encode(raw).decode())}}]}]}
-    resp = _openai_req(p.get('base_url'), p.get('api_key'), '/chat/completions', payload,
-                       timeout=120, verify=p.get('verify_ssl', True))
-    txt = ((resp.get('choices') or [{}])[0].get('message') or {}).get('content', '') or ''
-    txt = txt.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
+    mime = _IMG_MIME.get(os.path.splitext(path)[1].lower(), 'image/jpeg')
+    def ask(extra=''):
+        # max_tokens 只给 500 时,合同截图的长 OCR 会把 JSON 顶断在字符串中间——必须留足余量
+        payload = {'model': p['vision_model'], 'max_tokens': 1000,
+                   'messages': [{'role': 'user', 'content': [
+                       {'type': 'text', 'text': VISION_PROMPT + extra},
+                       {'type': 'image_url', 'image_url': {'url': 'data:%s;base64,%s' % (mime, base64.b64encode(raw).decode())}}]}]}
+        resp = _openai_req(p.get('base_url'), p.get('api_key'), '/chat/completions', payload,
+                           timeout=120, verify=p.get('verify_ssl', True))
+        txt = ((resp.get('choices') or [{}])[0].get('message') or {}).get('content', '') or ''
+        return txt.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
+    txt = ask()
     i, j = txt.find('{'), txt.rfind('}')
-    d = json.loads(txt[i:j + 1])
+    try:
+        d = _lenient_json_load(txt[i:j + 1] if i >= 0 else txt)
+    except Exception:
+        # 换个更严的说法重试一次:引号必须转义、ocr 压到 60 字内
+        txt = ask('\n注意:严格输出合法 JSON。字符串值里的英文双引号必须写成 \\";'
+                  'ocr 只给 60 字以内摘要,宁短勿断。')
+        i, j = txt.find('{'), txt.rfind('}')
+        d = _lenient_json_load(txt[i:j + 1] if i >= 0 else txt)
+    if not isinstance(d, dict): raise ValueError('打标结果不是 JSON 对象')
     if d.get('category') not in CATS: d['category'] = '其他'
     return d
 
@@ -8322,46 +9320,63 @@ def write_image_index(entries):
 def vision_worker(force):
     d = assets_dir(); img_dir = os.path.join(d, '图片')
     entries = read_json(os.path.join(d, '图片索引.json'), [])
-    done_files = {e.get('file') for e in entries if e.get('id') and not str(e.get('id')).startswith('标书图')}
+    # 「标书图」= 入库占位、「待整理」= 上次识别失败的降级行:两者都算未完成,下次继续重试
+    done_files = {e.get('file') for e in entries
+                  if e.get('id') and not str(e.get('id')).startswith(('标书图', '待整理'))}
     p, err = _vision_provider()
     try:
         if err: VISION['errors'] = [err]; return
         files = [f for f in sorted(os.listdir(img_dir)) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')) and not f.startswith('.')] if os.path.isdir(img_dir) else []
         todo = files if force else [f for f in files if f not in done_files]
-        VISION.update(total=len(todo), done=0, updated=0, errors=[])
+        VISION.update(total=len(todo), done=0, updated=0, degraded=0, errors=[])
         used = {e.get('id') for e in entries}
         for fn in todo:
             fp = os.path.join(img_dir, fn)
+            info, tag_err = None, ''
             try:
                 info = tag_one_image(fp, p)
+            except Exception as e:
+                tag_err = str(e)[:120]
+            if info is None:
+                # 识别失败不再让这张图掉出索引:登记降级行(类别=其他、图注=文件名),
+                # 撰写时仍可按文件名引用;错误原因留在 errors 里供用户重试排查。
+                stem0 = os.path.splitext(fn)[0]
+                info = {'category': '其他', 'id': '待整理-' + stem0[-12:],
+                        'caption': stem0, 'ocr': '识别失败,待人工确认',
+                        'keywords': '', 'anchor': '', '_degraded': True}
+                VISION['degraded'] = VISION.get('degraded', 0) + 1
+                VISION['errors'] = (VISION['errors'] + ['%s:%s(已降级登记,可重新打标)' % (fn, tag_err)])[-30:]
+            try:
                 safe = ''.join(c for c in str(info.get('id') or '')[:40] if c not in '\\/:*?"<>|').strip() or (info['category'] + '-未命名')
                 base, n = safe, 2
                 while safe in used: safe = '%s-%d' % (base, n); n += 1
                 used.add(safe)
                 ext = os.path.splitext(fn)[1]
                 newfn = safe + ext
-                if newfn != fn and not os.path.exists(os.path.join(img_dir, newfn)):
+                if info.get('_degraded'):
+                    newfn = fn      # 降级行保留原文件名,重打标时按「未识别」重试
+                elif newfn != fn and not os.path.exists(os.path.join(img_dir, newfn)):
                     os.rename(fp, os.path.join(img_dir, newfn))
                 else:
                     newfn = fn
                 entries = [e for e in entries if e.get('file') not in (fn, newfn)]
                 entries.append({'id': safe, 'file': newfn, 'caption': info.get('caption', ''), 'category': info.get('category', '其他'),
                                 'ocr': info.get('ocr', ''), 'keywords': info.get('keywords', ''), 'anchor': info.get('anchor', '')})
-                VISION['updated'] += 1
+                if not info.get('_degraded'): VISION['updated'] += 1
                 write_image_index(entries)      # 每张即时落盘,中断也不丢
             except Exception as e:
-                VISION['errors'] = (VISION['errors'] + ['%s:%s' % (fn, str(e)[:80])])[-5:]
+                VISION['errors'] = (VISION['errors'] + ['%s:%s' % (fn, str(e)[:80])])[-30:]
             VISION['done'] += 1
     finally:
-        VISION['running'] = False; VISION['ts'] = now()
+        with VISION_LOCK:
+            VISION['running'] = False; VISION['ts'] = now()
 
 @app.post('/v1/assets/vision_index')
 def start_vision(force: bool = False):
-    if VISION['running']: return {'ok': True, 'already': True, **VISION}
     p, err = _vision_provider()
     if err: return JSONResponse({'ok': False, 'error': err}, 400)
-    VISION.update(running=True, done=0, total=0, updated=0, errors=[])
-    threading.Thread(target=vision_worker, args=(force,), daemon=True).start()
+    if not try_start_vision(force):
+        return {'ok': True, 'already': True, **VISION}
     return {'ok': True, 'model': p['vision_model']}
 
 @app.get('/v1/assets/vision_index')
@@ -8397,7 +9412,8 @@ def clear_assets(scope: str = 'ingested'):
 
 @app.post('/v1/assets/ingest')
 async def ingest_asset(file: UploadFile = File(...)):
-    """上传过往标书(docx/md/txt)→ 图片入 图片/、章节拆分归类入 章节模板/<分类>/、缺失的规范素材自动生成"""
+    """上传过往标书/素材(docx/doc/pdf/md/txt/html/图片)→ 图片入 图片/、章节拆分归类入
+    章节模板/<分类>/、缺失的规范素材自动生成;入库出现新图片且配了视觉模型时自动开打标"""
     fn = os.path.basename(file.filename or '过往标书.docx')
     stem, ext = os.path.splitext(fn); ext = ext.lower()
     raw_dir = os.path.join(assets_dir(), '原始标书'); os.makedirs(raw_dir, exist_ok=True)
@@ -8416,17 +9432,54 @@ async def ingest_asset(file: UploadFile = File(...)):
     open(src, 'wb').write(blob)
     img_dir = os.path.join(assets_dir(), '图片')
     sections, images = [], []
-    if ext == '.docx':
+    if ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'):
+        # 单图直接入 图片/,登记占位行;随后可由「AI 识图打标」补全
+        os.makedirs(img_dir, exist_ok=True)
+        dst = os.path.join(img_dir, fn)
+        if not os.path.exists(dst): shutil.copy2(src, dst)
+        images = [fn]
+    elif ext in ('.docx', '.doc'):
+        # .doc 先嗅魔数:不少「.doc」其实是改了后缀的 docx(zip)或 RTF,能直接解析,
+        # 只有真 OLE 老格式才需要借系统转换器(Word/WPS/LibreOffice/textutil)。
+        parse_src, rtf_text = src, ''
+        if ext == '.doc':
+            if blob[:4] == b'PK\x03\x04':
+                pass                                    # 伪 doc,按 docx 解析
+            elif blob[:5] == b'{\\rtf':
+                rtf_text = rtf_to_text(blob)
+            else:
+                try:
+                    parse_src = convert_doc_to_docx(src)
+                except Exception as e:
+                    return JSONResponse({'ok': False, 'error': str(e)}, 400)
+        if rtf_text:
+            sections = split_md_sections(promote_headings(rtf_text))
+        else:
+            try:
+                sections, images = docx_to_sections_and_images(parse_src, img_dir)
+            except ImportError:
+                return JSONResponse({'ok': False, 'error': '解析 docx 需要 python-docx(内置引擎版已自带;源码运行请 pip install python-docx)'}, 501)
+            except Exception as e:
+                return JSONResponse({'ok': False, 'error': 'docx 解析失败:%s' % e}, 400)
+    elif ext == '.pdf':
         try:
-            sections, images = docx_to_sections_and_images(src, img_dir)
-        except ImportError:
-            return JSONResponse({'ok': False, 'error': '解析 docx 需要 python-docx(内置引擎版已自带;源码运行请 pip install python-docx)'}, 501)
+            text = pdf_to_text(src)
         except Exception as e:
-            return JSONResponse({'ok': False, 'error': 'docx 解析失败:%s' % e}, 400)
+            return JSONResponse({'ok': False, 'error': 'PDF 解析失败:%s' % e}, 400)
+        if len(text.strip()) < 50:
+            return JSONResponse({'ok': False, 'error': '这份 PDF 没有可提取的文字层(多半是扫描件)。'
+                                 '请用带文字层的 PDF,或用 Word/WPS 转成 .docx 再上传'}, 400)
+        sections = split_md_sections(promote_headings(text))
+    elif ext in ('.html', '.htm'):
+        text = html_to_text(blob)
+        if not text.strip():
+            return JSONResponse({'ok': False, 'error': 'HTML 里没有可提取的正文'}, 400)
+        sections = split_md_sections(promote_headings(text))
     elif ext in ('.md', '.txt'):
-        sections = split_md_sections(open(src, encoding='utf-8', errors='ignore').read())
+        sections = split_md_sections(promote_headings(open(src, encoding='utf-8', errors='ignore').read()))
     else:
-        return JSONResponse({'ok': False, 'error': '暂支持 .docx/.md/.txt(PDF 请先另存为 Word)'}, 400)
+        return JSONResponse({'ok': False, 'error': '暂支持 .docx/.doc/.pdf/.md/.txt/.html 及图片'
+                             '(png/jpg/webp);其他格式请先转成 Word 再上传'}, 400)
     stamp = datetime.datetime.now().strftime('%m%d')
     safe = lambda s: (''.join(c for c in s if c not in '\\/:*?"<>|').strip() or '未命名')[:40]
     created, cats, canon_new = [], {}, {}
@@ -8444,6 +9497,7 @@ async def ingest_asset(file: UploadFile = File(...)):
         if not os.path.exists(cp):  # 已有的规范素材绝不覆盖,只补缺
             open(cp, 'w', encoding='utf-8').write('\n\n'.join(parts) + '\n')
             created.append(canon)
+    auto_tagging = False
     if images:
         # 先登记占位行(未识别),随后由「AI 识图打标」补全类别/图注/OCR/落位锚点
         entries = read_json(os.path.join(assets_dir(), '图片索引.json'), [])
@@ -8453,9 +9507,15 @@ async def ingest_asset(file: UploadFile = File(...)):
                 entries.append({'id': os.path.splitext(f)[0], 'file': f, 'caption': '〔待AI识图〕', 'category': '未识别',
                                 'ocr': '', 'keywords': '来自 %s' % stem, 'anchor': ''})
         write_image_index(entries)
+        # 反馈落地:图片自动打标 —— 已配视觉模型就直接开跑,不用用户再手点「开始打标」
+        try:
+            auto_tagging = try_start_vision(False)
+        except Exception:
+            pass
     rec = {'ts': now(), 'source': fn, 'md5': digest, 'sections': len(sections), 'images': len(images), 'categories': cats}
     open(log_path, 'a', encoding='utf-8').write(json.dumps(rec, ensure_ascii=False) + '\n')
-    return {'ok': True, **rec, 'created': created[:50], 'folder': assets_dir(), 'engine': 'local-parser'}
+    return {'ok': True, **rec, 'created': created[:50], 'folder': assets_dir(),
+            'engine': 'local-parser', 'auto_tagging': auto_tagging}
 
 @app.post('/v1/transcribe')
 def transcribe():
@@ -8465,7 +9525,15 @@ HOST_GONE = False       # 桌面壳已经退出,但还有任务在跑:跑完自�
 _EXIT_TIMER = [None]
 RELEASES_API = os.environ.get('BIDDOG_RELEASES_URL', os.environ.get(
     'BID_RELEASES_URL', 'https://api.github.com/repos/shandianT/bid-dog/releases/latest'))
+# 发布策略文件(自有域名,国内可达;GitHub API 只作兜底):版本治理的唯一事实源。
+# 商业化后同一文件下发 minimum_supported/sunset,老版本按策略进入提示→强提示→停新单。
+POLICY_URL = os.environ.get('BIDDOG_POLICY_URL', 'https://bid-dog.vercel.app/release_policy.json')
 UPDATE_TIMEOUT = float(os.environ.get('BIDDOG_UPDATE_TIMEOUT', os.environ.get('BID_UPDATE_TIMEOUT', 3)))
+UPDATE_RECHECK_S = float(os.environ.get('BIDDOG_UPDATE_RECHECK_SECONDS', 6 * 3600))
+# 构建级落日:每个发出去的安装包都带一个"保质期"。到期后若拿不到策略文件的
+# 明确许可,新生成需要先升级(已生成内容的查看/导出永不受限)。
+# 每次发版把它前移;策略文件可远程延长任何在外版本的寿命,所以不怕误伤。
+BUILD_SUNSET = os.environ.get('BIDDOG_BUILD_SUNSET', '2026-11-30')
 
 def _env_true(name): return str(os.environ.get(name, '')).strip().lower() in ('1', 'true', 'yes', 'on')
 
@@ -8475,19 +9543,43 @@ def _version_tuple(value):
     nums = re.findall(r'\d+', str(value or ''))[:3]
     return tuple((list(map(int, nums)) + [0, 0, 0])[:3])
 
+def _policy_cache_path(): return os.path.join(DATA, 'release_policy_cache.json')
+
+def _fetch_json(url, opener, accept='application/json'):
+    req = urllib.request.Request(url, headers={'Accept': accept,
+                                               'User-Agent': 'bid-dog/' + ENGINE_VERSION})
+    r = (opener or urllib.request.urlopen)(req, timeout=UPDATE_TIMEOUT)
+    return json.loads(r.read().decode('utf-8', 'ignore'))
+
 def check_for_update(url=None, opener=None):
-    """3 秒内完成的一次升级检查。异常只落状态，不向任务或页面发错误。"""
+    """升级检查:策略文件优先,GitHub Release 兜底。异常只落状态,不打扰任务或页面。
+    成功取得的策略持久化到数据目录——断网期间版本治理仍按最后一次已知策略执行。"""
     global UPDATE_STATE
     if _env_true('BID_NO_UPDATE_CHECK'):
         UPDATE_STATE = {'status': 'disabled'}
         return UPDATE_STATE
-    url = url or RELEASES_API
     opener = opener or urllib.request.urlopen
     try:
-        req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json',
-                                                   'User-Agent': 'bid-dog/' + ENGINE_VERSION})
-        r = opener(req, timeout=UPDATE_TIMEOUT)
-        data = json.loads(r.read().decode('utf-8', 'ignore'))
+        policy = _fetch_json(url or POLICY_URL, opener)
+        if not isinstance(policy, dict) or not policy.get('latest'):
+            raise ValueError('策略文件缺少 latest')
+        latest = str(policy.get('latest'))
+        page = str(policy.get('url') or policy.get('notes_url')
+                   or 'https://github.com/shandianT/bid-dog/releases')
+        record = {'latest': latest, 'url': page,
+                  'minimum_supported': str(policy.get('minimum_supported') or ''),
+                  'sunset': str(policy.get('sunset') or ''),
+                  'message': str(policy.get('message') or '')[:300],
+                  'checked_at': now()}
+        try: write_json(_policy_cache_path(), record)
+        except Exception: pass
+        UPDATE_STATE = {'status': 'available' if _version_tuple(latest) > _version_tuple(ENGINE_VERSION)
+                        else 'latest', 'latest': latest, 'url': page, 'source': 'policy'}
+        return UPDATE_STATE
+    except Exception:
+        pass
+    try:
+        data = _fetch_json(url or RELEASES_API, opener, accept='application/vnd.github+json')
         releases = data if isinstance(data, list) else [data]
         rel = next((x for x in releases if isinstance(x, dict) and not x.get('draft') and not x.get('prerelease')), None)
         if not rel: raise ValueError('没有可用正式版本')
@@ -8495,15 +9587,68 @@ def check_for_update(url=None, opener=None):
         match = re.search(r'\d+\.\d+\.\d+', tag)
         latest = match.group(0) if match else tag.lstrip('v')
         page = rel.get('html_url') or 'https://github.com/shandianT/bid-dog/releases'
+        try:
+            cached = read_json(_policy_cache_path(), {})
+            cached.update({'latest': latest, 'url': page, 'checked_at': now()})
+            write_json(_policy_cache_path(), cached)
+        except Exception:
+            pass
         UPDATE_STATE = {'status': 'available' if _version_tuple(latest) > _version_tuple(ENGINE_VERSION) else 'latest',
                         'latest': latest, 'url': page}
     except Exception:
         UPDATE_STATE = {'status': 'error'}
     return UPDATE_STATE
 
+def version_gate():
+    """当前版本的治理结论,生成入口据此放行/提示/拦截。
+
+    模式:ok(正常)/ notice(有新版,提示)/ required(低于最低支持版,限期内强提示)
+        / expired(过期:新生成先升级;查看与导出永不受限)。
+    离线不奖励也不惩罚:按最后一次已知策略执行;从未取到策略时只有构建级落日兜底。"""
+    if _env_true('BID_NO_UPDATE_CHECK') or _env_true('BIDDOG_NO_SUNSET'):
+        return {'mode': 'ok'}
+    policy = read_json(_policy_cache_path(), {})
+    update_url = str(policy.get('url') or 'https://github.com/shandianT/bid-dog/releases')
+    today = now()[:10]
+    minimum = str(policy.get('minimum_supported') or '')
+    if minimum and _version_tuple(ENGINE_VERSION) < _version_tuple(minimum):
+        deadline = str(policy.get('sunset') or '')
+        expired = bool(deadline) and today > deadline
+        message = policy.get('message') or (
+            '当前版本 %s 已低于最低支持版本 %s%s。请更新后继续生成;已生成的内容不受影响。' % (
+                ENGINE_VERSION, minimum,
+                ('，并已于 %s 停止支持' % deadline) if expired else ('，将于 %s 停止支持' % (deadline or '近期'))))
+        return {'mode': 'expired' if expired else 'required',
+                'message': message, 'url': update_url, 'deadline': deadline,
+                'minimum_supported': minimum}
+    # 构建级落日:打包版专用(源码/开发运行不受限)。取到过策略且未被列为过低 → 策略说了算。
+    packaged = bool(getattr(sys, 'frozen', False)) or _env_true('BIDDOG_FORCE_SUNSET')
+    if packaged and not policy.get('checked_at') and today > str(BUILD_SUNSET):
+        return {'mode': 'expired', 'url': update_url, 'deadline': str(BUILD_SUNSET),
+                'message': '这个安装包是内测构建,已于 %s 到期且长期未能联网确认版本状态。'
+                           '请下载最新版后继续生成;已生成的内容与素材库完全不受影响。' % BUILD_SUNSET}
+    if UPDATE_STATE.get('status') == 'available':
+        return {'mode': 'notice', 'latest': UPDATE_STATE.get('latest'),
+                'url': UPDATE_STATE.get('url') or update_url,
+                'message': '有新版本 %s 可用。' % UPDATE_STATE.get('latest')}
+    return {'mode': 'ok'}
+
+def _generation_gate_response():
+    """过期版本拦「开新单/续跑/重写」这一类会启动生成的动作;其余一律放行。"""
+    gate = version_gate()
+    if gate.get('mode') != 'expired':
+        return None
+    return JSONResponse({'ok': False, 'code': 'version_sunset', 'action': 'update',
+                         'error': gate.get('message') or '当前版本已停止支持,请更新后继续生成。',
+                         'update_url': gate.get('url') or ''}, 426)
+
 def start_update_check():
     if _env_true('BID_NO_UPDATE_CHECK'): return
-    threading.Thread(target=check_for_update, daemon=True, name='bid-dog-update-check').start()
+    def loop():
+        while True:
+            check_for_update()
+            time.sleep(max(300.0, UPDATE_RECHECK_S))
+    threading.Thread(target=loop, daemon=True, name='bid-dog-update-check').start()
 
 def _exit_process_cleanly():
     """正常退出必须带走 detached OpenCode server；会话数据库保留供下次续做/验签。"""
@@ -8593,7 +9738,7 @@ def health():
         return JSONResponse({'ok': False, 'error': '引擎正在退出，请等待应用自动重连'}, 503)
     return {'ok': True, 'data_dir': DATA, 'agent': bool(config_agent_cmd()),
             'version': ENGINE_VERSION, 'author': AUTHOR, 'features': ENGINE_FEATURES,
-            'update': dict(UPDATE_STATE)}
+            'update': dict(UPDATE_STATE), 'version_gate': version_gate()}
 
 @app.post('/v1/attach')
 def attach():
@@ -8634,8 +9779,64 @@ def migrate_conf():
     conf['engine'] = eng
     write_json(cp, conf)
 
+def reconcile_orphan_jobs():
+    """启动对账:引擎/应用上次异常退出(崩溃、睡眠杀进程、强关)留下的「运行中」任务,
+    重启后没有 worker、没有终态,会被呈现成「任务意外中断」且重试被 409 拒——
+    检查点明明完好,用户却被逼重跑(反馈 6/9 的组合症状之一)。
+    这里把 running/retry_wait 节点归位成 pending、补一个可续跑的停止终态,
+    界面自动给出「从已保存内容继续」入口。"""
+    if MULTIUSER: return
+    try:
+        root = jobs_dir()
+        if not os.path.isdir(root): return
+        for base in sorted(os.listdir(root)):
+            job = os.path.join(root, base)
+            if not os.path.isdir(job) or base.startswith('.'): continue
+            outcome = read_json(os.path.join(job, 'outcome.json'), {})
+            if outcome.get('state') in ('done', 'stopped'): continue
+            try:
+                state = generation_pipeline.load(job)
+            except Exception:
+                continue
+            if state.get('version') != generation_pipeline.PIPELINE_VERSION: continue
+            hanging = [n for n in state.get('nodes') or []
+                       if n.get('state') in ('running', 'retry_wait')]
+            if not hanging: continue
+            try:
+                generation_pipeline.recover(job)
+                emit(job, {'type': 'message', 'role': 'agent',
+                           'text': '检测到应用上次中途退出,已把任务归位到最近的检查点。'
+                                   '已生成的内容全部保留,点「从已保存内容继续」接着跑。'})
+                halt(job, '已停止（应用重启，可从检查点继续）')
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+def backup_docx_template():
+    """把 python-docx 的 default.docx 模板备份到数据目录,并经环境变量交给技能脚本兜底。
+
+    PyInstaller onefile 的 _MEI 临时解压目录放在系统 %TEMP% 下,Windows 磁盘清理/
+    存储感知会在引擎长时间运行(隔夜挂机)后把它删掉——真机报障:
+    「自动补出 Word 失败(Package not found at ...\\_MEI...\\docx\\templates\\default.docx)」。
+    引擎自身启动时模板还在,先复制一份到常驻数据目录;build_tender_docx.py 等脚本
+    在 Document() 抛 PackageNotFound 时改用 BIDDOG_DOCX_TEMPLATE 指向的这份备份。"""
+    try:
+        import docx as _docx
+        src = os.path.join(os.path.dirname(_docx.__file__), 'templates', 'default.docx')
+        dst = os.path.join(DATA, 'docx_default_template.docx')
+        if os.path.isfile(src) and (not os.path.isfile(dst)
+                                    or os.path.getsize(dst) != os.path.getsize(src)):
+            shutil.copy2(src, dst)
+        if os.path.isfile(dst):
+            os.environ['BIDDOG_DOCX_TEMPLATE'] = dst
+    except Exception:
+        pass    # 模板备份是兜底,失败不阻塞启动
+
 ensure_preset()   # 预置配置种子(定制发包用),必须在任何请求处理前完成
 migrate_conf()    # 存量引擎配置归并(撤下的选项不能把老用户晾在空白下拉上)
+backup_docx_template()  # _MEI 被系统清理后 Word 导出的最后一道保险
+reconcile_orphan_jobs() # 上次异常退出留下的「运行中」任务归位到检查点,可续跑
 start_update_check()
 
 web = os.environ.get('BID_WEB_DIR') or os.path.join(HERE, '..', 'app', 'src')

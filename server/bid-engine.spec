@@ -40,7 +40,9 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX 压缩的 exe 是 Windows 杀软误报重灾区,且 CI 命令行构建本就不用 UPX——
+    # 关掉与 CI 保持一致,别让本地包和发布包行为不同
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,

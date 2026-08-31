@@ -1,0 +1,8 @@
+{
+  "latest": "0.20.5",
+  "url": "https://github.com/shandianT/bid-dog/releases/latest",
+  "minimum_supported": "",
+  "sunset": "",
+  "message": "",
+  "_readme": "版本治理的唯一事实源,引擎每 6 小时拉取一次并本地缓存。latest=最新版本号;minimum_supported=最低支持版本(低于它进入 required,超过 sunset 日期进入 expired:停开新单,查看/导出/素材库永不受限);sunset=YYYY-MM-DD;message=覆盖默认提示文案。留空即不启用强制。商业化后按此文件推动全量升级。"
+}

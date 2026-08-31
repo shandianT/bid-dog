@@ -52,14 +52,23 @@ def test_corrupt_or_fake_docx_never_opens_the_delivery_gate(engine, job, payload
     assert engine.job_state(str(job)) == "stopped"
 
 
-def test_word_format_audit_rejects_an_unformatted_docx(engine, job):
+def test_word_format_audit_flags_style_misses_as_warn_not_delivery_failure(engine, job):
+    # 0.20.5 起:Word 能打开、检查能跑完,样式项不符 = warn(提交前人工确认),
+    # 不再把整单判失败——「生成了 Word 还报错」是真机反馈的直接来源。
     _write_body_docx(job / "投标文件_技术标.docx", paragraphs=2)
 
     result = engine.word_format_audit(str(job), "投标文件_技术标.docx")
 
-    assert result["status"] == "fail"
+    assert result["status"] == "warn"
+    assert result["failed"] > 0
+    assert "不符" in result["summary"]
     report = (job / "Word格式自检报告.md").read_text(encoding="utf-8")
     assert "❌" in report
+
+    # 检查根本跑不成(文件损坏)才是 fail:这才是真正的交付失败
+    (job / "投标文件_技术标.docx").write_bytes(b"not a real docx")
+    broken = engine.word_format_audit(str(job), "投标文件_技术标.docx")
+    assert broken["status"] == "fail"
 
 
 def test_word_format_report_is_bound_to_the_exact_docx_bytes(engine, job):
@@ -107,7 +116,10 @@ def test_delivery_cache_cannot_hide_same_size_same_mtime_word_replacement(engine
     second = engine.delivery_summary(str(job))
 
     assert second["ready"] is False
-    assert second["format"]["status"] == "stale"
+    # 替换后的 Word 不能藏在旧的绿色结论后面:stale 触发现场重检,
+    # 结论必须绑定当前字节——绝不允许直接沿用 pass。
+    assert second["format"]["status"] != "pass"
+    assert second["format"]["word_sha256_bound"] is True
 
 
 def test_failed_redo_cannot_reuse_the_previous_word_as_new_success(engine, job):

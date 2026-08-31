@@ -83,6 +83,10 @@ if (start >= 0 && end > start) {
     phaseTimingLabel: typeof phaseTimingLabel === 'function' ? phaseTimingLabel : null,
     nextStreamState: typeof nextStreamState === 'function' ? nextStreamState : null,
     streamReconnectDelay: typeof streamReconnectDelay === 'function' ? streamReconnectDelay : null,
+    checkpointStep: typeof checkpointStep === 'function' ? checkpointStep : null,
+    knownStep: typeof knownStep === 'function' ? knownStep : null,
+    deliveryDeadEnd: typeof deliveryDeadEnd === 'function' ? deliveryDeadEnd : null,
+    phaseElapsedTrustworthy: typeof phaseElapsedTrustworthy === 'function' ? phaseElapsedTrustworthy : null,
   };`, sandbox);
   pure = sandbox.__pure;
 }
@@ -155,6 +159,70 @@ test('稳定模式能力会关闭暂停并给出用户说明', () => {
   }}});
   assert.strictEqual(contract.pause, false);
   assert.match(contract.pauseReason, /稳定模式|连续运行/);
+});
+
+test('runtime.capabilities 只声明部分能力时不得遮蔽 can 列表', () => {
+  // 真机回归：/v1/jobs 对每一单都下发 runtime.capabilities={pause:{...}}，
+  // 一旦拿它整体覆盖 can，can 里的 resume 就永远读不到——任务写着「可从检查点继续」，
+  // 顶栏却没有「从断点继续」按钮，用户被困在半成品任务上无路可走。
+  const stopped = pure.taskCapabilities({
+    state:'stopped', presentation:{code:'incomplete'},
+    can:['resume','rerun','redo','ask','export','delete'],
+    runtime:{capabilities:{pause:{enabled:false, reason:'当前运行方式暂不支持暂停'}}}
+  });
+  assert.strictEqual(stopped.resume, true, 'can 里有 resume 时必须允许从断点继续');
+  assert.strictEqual(stopped.stop, false, '已停止的任务不该再给停止按钮');
+  assert.strictEqual(stopped.archive, true, 'can 不枚举 archive，不能因此把归档一起关掉');
+  assert.strictEqual(stopped.rerun, true);
+
+  // 明细里显式写了的，仍然以明细为准（两个方向都要能压过 can）。
+  assert.strictEqual(pure.taskCapabilities({
+    state:'stopped', presentation:{code:'incomplete'}, can:['resume'],
+    runtime:{capabilities:{resume:false}}
+  }).resume, false, '明细显式关闭时不得被 can 覆盖');
+  assert.strictEqual(pure.taskCapabilities({
+    state:'stopped', presentation:{code:'incomplete'}, can:['export'],
+    runtime:{capabilities:{resume:true}}
+  }).resume, true, '明细显式开启时不需要 can 背书');
+
+  // can 里没有 resume 的任务不能凭空长出按钮：点下去只会失败。
+  assert.strictEqual(pure.taskCapabilities({
+    state:'done', presentation:{code:'completed'}, can:['redo','rerun','ask','export','delete']
+  }).resume, false);
+});
+
+test('还能从断点继续的任务不会被判成「没出 Word」', () => {
+  assert.strictEqual(typeof pure.deliveryDeadEnd, 'function', '缺少 deliveryDeadEnd');
+  // 写到第 3/5 章就停下、但检查点还在的任务:缺的是「还没跑完」，不是「交付物丢了」。
+  // 挂红牌会让人以为白干了，其实点一下「从断点继续」就能接着写。
+  const resumable = {state:'stopped', presentation:{code:'incomplete'},
+    can:['resume','rerun','redo','ask','export','delete'],
+    runtime:{capabilities:{pause:{enabled:false, reason:'x'}}}};
+  assert.strictEqual(pure.deliveryDeadEnd(resumable), false);
+  // 没有任何检查点、跑到第 1 步就断的任务是真的没路可走，该判红。
+  const deadEnd = {state:'stopped', presentation:{code:'incomplete'},
+    can:['rerun','redo','ask','export','delete']};
+  assert.strictEqual(pure.deliveryDeadEnd(deadEnd), true);
+});
+
+test('进度在重开应用后回落到检查点而不是清零', () => {
+  assert.strictEqual(typeof pure.knownStep, 'function', '缺少 knownStep');
+  const job = {flow:{checkpoint:{step:8}}};
+  assert.strictEqual(pure.knownStep(job, {}, 12), 8, 'SSE 还没推进时应采用已落盘的检查点');
+  assert.strictEqual(pure.knownStep(job, {step:10}, 12), 10, '实时步数更靠前时以实时为准');
+  assert.strictEqual(pure.knownStep(job, {step:3}, 12), 8, '实时步数落后于检查点时不得倒退');
+  assert.strictEqual(pure.knownStep({}, {}, 12), 0);
+  assert.strictEqual(pure.knownStep({flow:{checkpoint:{step:99}}}, {}, 12), 12, '不得超出总步数');
+});
+
+test('阶段耗时出现不可能的数值时退回「通常」而不是照播', () => {
+  assert.strictEqual(typeof pure.phaseTimingLabel, 'function', '缺少 phaseTimingLabel');
+  // 隔夜再打开旧任务时，环境准备阶段曾报出「实际 8 小时 · 通常 1 分钟」。
+  const absurd = pure.phaseTimingLabel({state:'done', elapsed_seconds:8*3600, expected_seconds:60});
+  assert.ok(!/实际/.test(absurd), '不可信的耗时不得当作事实播出：' + absurd);
+  assert.match(absurd, /通常/);
+  const sane = pure.phaseTimingLabel({state:'done', elapsed_seconds:95, expected_seconds:60});
+  assert.match(sane, /实际 1分35秒/);
 });
 
 test('运行方式回落只显示友好文案，技术原因留在诊断详情', () => {
@@ -442,7 +510,7 @@ test('六段流程台只展示后端证据并兼容旧任务', () => {
     ],
   }, {mode:'polling',failures:3});
   assert.deepStrictEqual(Array.from(view.phases, x=>x.label), ['环境准备','招标解析','响应规划','并行撰写','Word 装配','交付质检']);
-  assert.strictEqual(view.connectionLabel, '轮询保障中');
+  assert.strictEqual(view.connectionLabel, '改用定时刷新进度');
   assert.strictEqual(view.checkpoint, '已完成：体检素材');
   assert.strictEqual(view.recoverable, true);
   assert.strictEqual(view.phases[1].state, 'active');
@@ -625,7 +693,9 @@ test('任务列表严格使用五种用户状态，完成与未完成组可折�
 
   sandbox.renderTasks();
   expect(countRows('failed') === 0, `9 个未完成任务应默认折叠，实际渲染 ${countRows('failed')} 行`);
-  expect(countRows('completed') === 0, `5 个已完成任务应默认完全折叠，实际渲染 ${countRows('completed')} 行`);
+  // 折叠组里只钉住「当前正在看的那一单」：折叠是为了少占地方，不是把用户的当前位置也藏起来。
+  expect(countRows('completed') === 1, `已完成组折叠时只应钉出当前任务 1 行，实际 ${countRows('completed')} 行`);
+  expect(/data-id="done-0"/.test(tasks.innerHTML), '折叠的已完成组里应能看到当前选中的任务');
   expect(countRows('generating') === 1, '生成中任务应默认可见');
   expect(hasWholeHeader('failed'), '未完成整条标题缺少 data-task-group/aria-expanded 切换语义');
   expect(hasWholeHeader('completed'), '已完成整条标题缺少 data-task-group/aria-expanded 切换语义');
@@ -644,7 +714,13 @@ test('任务列表严格使用五种用户状态，完成与未完成组可折�
   sandbox.renderTasks();
   expect(countRows('completed') === 5, '轮询式 renderTasks 重渲染后不应丢失已完成组的展开状态');
   clickGroup('completed');
-  expect(countRows('completed') === 0, `再次点击已完成标题后应完全折叠，实际 ${countRows('completed')} 行`);
+  expect(countRows('completed') === 1, `再次点击已完成标题后应只剩当前任务 1 行，实际 ${countRows('completed')} 行`);
+
+  // 当前任务不在这一组时，折叠就是彻底折叠，不留任何行。
+  sandbox.S.active = 'running-0';
+  sandbox.renderTasks();
+  expect(countRows('completed') === 0, `当前任务不在已完成组时应完全折叠，实际 ${countRows('completed')} 行`);
+  sandbox.S.active = 'done-0';
 
   assert.strictEqual(failures.length, 0, failures.join('；'));
 });

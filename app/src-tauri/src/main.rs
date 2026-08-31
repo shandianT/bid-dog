@@ -288,6 +288,32 @@ fn spawn_engine() -> Option<Child> {
     cmd.env("PORT", ENGINE_PORT.to_string());
     if let Some(data) = data.as_ref() {
         cmd.env("BID_HOME", &data);
+        // PyInstaller onefile 会把 python-docx 模板等数据解压到 %TEMP%\_MEIxxxx。
+        // 引擎跨夜常驻时,Windows 存储感知/磁盘清理会按文件年龄清空系统临时目录,
+        // 之后导 Word 报「Package not found at ..._MEI...default.docx」(真机反馈)。
+        // 把引擎的 TMP/TEMP 指到数据目录下的受控子目录,系统清理策略碰不到;
+        // 顺带清扫历史崩溃残留的 _MEI*(onefile 异常退出不会自清)。
+        let engine_tmp = data.join("engine-tmp");
+        if fs::create_dir_all(&engine_tmp).is_ok() {
+            if let Ok(entries) = fs::read_dir(&engine_tmp) {
+                let week = std::time::Duration::from_secs(7 * 24 * 3600);
+                for entry in entries.flatten() {
+                    let stale = entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .map(|age| age > week)
+                        .unwrap_or(false);
+                    if stale && entry.file_name().to_string_lossy().starts_with("_MEI") {
+                        let _ = fs::remove_dir_all(entry.path());
+                    }
+                }
+            }
+            cmd.env("TMP", &engine_tmp)
+                .env("TEMP", &engine_tmp)
+                .env("TMPDIR", &engine_tmp);
+        }
         if let Ok(log) = fs::File::create(data.join("engine.log")) {
             if let Ok(log2) = log.try_clone() {
                 cmd.stdout(Stdio::from(log)).stderr(Stdio::from(log2));
@@ -802,6 +828,83 @@ fn repair_local_engine_blocking(runtime: &DesktopRuntime) -> EngineRepairResult 
     }
 }
 
+#[derive(Clone, Serialize)]
+struct AppUpdateProgress {
+    stage: String,
+    received: u64,
+    total: u64,
+}
+
+#[derive(Serialize)]
+struct AppUpdateResult {
+    ok: bool,
+    updated: bool,
+    version: String,
+    message: String,
+}
+
+/// 应用内自动更新:检查签名清单 → 下载校验 → 安装 → 重启进入新版。
+/// 更新包必须通过 tauri.conf.json 里 pubkey 对应私钥的签名,清单被篡改或
+/// 下载被劫持都会校验失败——这是"版本由我们把控"的技术底座。
+#[tauri::command]
+async fn install_app_update(app: tauri::AppHandle) -> Result<AppUpdateResult, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("检查更新失败：{error}"))?;
+    let Some(update) = update else {
+        return Ok(AppUpdateResult {
+            ok: true,
+            updated: false,
+            version: String::new(),
+            message: "当前已经是最新版本。".into(),
+        });
+    };
+    let version = update.version.clone();
+    // 下载一个安装包要几十秒到几分钟。以前这两个回调是空的——Tauri 把真实的字节进度
+    // 递到手里,我们直接扔掉,界面只能干转一个圈。用户看不到任何动静,就会以为卡死了
+    // 反复点,每点一次多起一个并发下载。这里把进度原样播给前端,让它能画出真进度条。
+    // 总大小来自响应的 Content-Length,由 on_chunk 的第二个参数递进来;
+    // 服务端没给长度时是 None,前端据此退化成"已下载 X MB"而不是假装有百分比。
+    let downloaded = std::sync::atomic::AtomicU64::new(0);
+    let progress_app = app.clone();
+    let done_app = app.clone();
+    update
+        .download_and_install(
+            move |chunk, total| {
+                let received = downloaded
+                    .fetch_add(chunk as u64, std::sync::atomic::Ordering::Relaxed)
+                    + chunk as u64;
+                emit_update_stage(&progress_app, "downloading", received, total.unwrap_or(0));
+            },
+            move || {
+                // 下载完成,进入安装。安装这一段不可中断,前端据此把"稍后再说"收起来。
+                emit_update_stage(&done_app, "installing", 0, 0);
+            },
+        )
+        .await
+        .map_err(|error| format!("下载或安装更新 {version} 失败：{error}"))?;
+    emit_update_stage(&app, "restarting", 0, 0);
+    // 安装完成直接重启进入新版;退出路径会先让引擎优雅收尾(见 RunEvent 处理)。
+    app.restart()
+}
+
+/// 把更新进度播给前端。播不出去(窗口已关等)不算错误:更新本身照常继续,
+/// 少一条进度提示远好过为了报进度把更新中断掉。
+fn emit_update_stage(app: &tauri::AppHandle, stage: &str, received: u64, total: u64) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "app-update://progress",
+        AppUpdateProgress {
+            stage: stage.to_string(),
+            received,
+            total,
+        },
+    );
+}
+
 #[tauri::command]
 async fn repair_local_engine(
     runtime: tauri::State<'_, Arc<DesktopRuntime>>,
@@ -1008,13 +1111,14 @@ fn main() {
 
     tauri::Builder::default()
         .manage(managed_runtime)
-        .invoke_handler(tauri::generate_handler![repair_local_engine])
+        .invoke_handler(tauri::generate_handler![repair_local_engine, install_app_update])
         // Keep this first. Secondary processes are terminated before setup, so they can
         // neither spawn an engine nor enter this process's shutdown path.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             setup_runtime
                 .primary_instance
@@ -1193,7 +1297,7 @@ mod engine_sidecar_tests {
 
     #[test]
     fn newer_or_non_numeric_bid_dog_engine_is_not_replaced_by_an_older_shell() {
-        for version in ["0.20.4", "1.0.0", "development-build"] {
+        for version in ["0.20.5", "1.0.0", "development-build"] {
             let health = serde_json::json!({
                 "ok": true,
                 "version": version,

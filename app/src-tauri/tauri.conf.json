@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "中标狗",
   "mainBinaryName": "bid-assistant",
-  "version": "0.20.3",
+  "version": "0.20.5",
   "identifier": "com.shandiant.bidassistant",
   "build": {
     "frontendDist": "../src"
@@ -12,7 +12,7 @@
     "windows": [
       {
         "title": "中标狗",
-        "url": "index.html?desktop=0.20.3-18901",
+        "url": "index.html?desktop=0.20.5-18901",
         "incognito": true,
         "width": 1440,
         "height": 940,
@@ -35,13 +35,26 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": "http://timestamp.digicert.com"
     },
-    "externalBin": ["binaries/bid-engine", "binaries/opencode-cli"],
+    "externalBin": [
+      "binaries/bid-engine",
+      "binaries/opencode-cli"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://bid-dog.vercel.app/updater/{{target}}-{{arch}}.json",
+        "https://github.com/shandianT/bid-dog/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUzRENBQzQxQkJGRjUxQUYKUldTdlVmKzdRYXpjVTYyQlZXTmNkK2pSUmhDL0ZYVFJ4RlBCdTJlalErbk9DL3k1aG1XK1VGSy8K"
+    }
   }
 }

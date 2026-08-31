@@ -24,7 +24,10 @@ from typing import Any, Dict, Iterable, List, Optional
 
 PIPELINE_VERSION = 2
 PIPELINE_FILE = "pipeline.json"
-MAX_ATTEMPTS = 3
+# 节点重试预算。旧值 3 次 + 最长 30 秒退避:一次持续一两分钟的网关抖动就能把整单
+# 打停,用户被迫手动重试(「生成频繁中断」反馈的直接来源之一)。连接类错误的退避
+# 上限见 run_model_node —— 拉长到分钟级,等得起一次真实的网络恢复。
+MAX_ATTEMPTS = max(1, min(10, int(os.environ.get("BIDDOG_NODE_MAX_ATTEMPTS", "5"))))
 SOURCE_MIN_CHARS = 80
 SOURCE_MAX_CHARS = 2_000_000
 SOURCE_MAX_FILE_BYTES = 100 * 1024 * 1024
@@ -978,6 +981,11 @@ def run_model_node(
             caught: Exception = exc
         except OutputValidationError as exc:
             code, retryable, caught = "output_validation_failed", True, exc
+        except (PermissionError, OSError) as exc:
+            # Windows 上用户用 Word/WPS 打开中间产物会锁文件,os.replace/copy2 抛
+            # PermissionError。旧版归为不可重试 → 节点 blocked、整单死掉;
+            # 实际上关掉文件再试就好,必须可重试。
+            code, retryable, caught = "file_locked", True, exc
         except Exception as exc:
             code, retryable, caught = "node_runner_exception", False, exc
 
@@ -989,7 +997,12 @@ def run_model_node(
                 raise caught
             raise NodeExecutionError(code, retryable=True, detail=str(caught)) from caught
         attempt = int(started.get("attempt") or 1)
-        retry_after = min(30, 2 ** attempt) if retryable else 0
+        if retryable and code in ("model_request_interrupted", "model_rate_limited",
+                                  "model_request_failed", "model_response_empty"):
+            # 连接/限流类故障:秒级重试等不到网络恢复,按 8s→24s→72s→216s(封顶 240s)拉开
+            retry_after = min(240, 8 * (3 ** max(0, attempt - 1)))
+        else:
+            retry_after = min(30, 2 ** attempt) if retryable else 0
         failed = fail_node(root, node_id, code, retryable=retryable, retry_after=retry_after)
         if on_event:
             on_event("retry" if failed.get("state") == "retry_wait" else "failed", dict(failed))
@@ -1063,6 +1076,44 @@ def retry_node(job: os.PathLike[str] | str, node_id: str) -> Dict[str, Any]:
                 "retry_after_seconds": 0,
             }
         )
+        return dict(node)
+
+    result, _ = _mutate(job, apply)
+    return result
+
+
+def rewrite_node(job: os.PathLike[str] | str, node_id: str, note: str = "") -> Dict[str, Any]:
+    """Human-driven rewrite of one chapter node; every other node stays untouched.
+
+    A done chapter keeps its ``done`` state here: the note/serial change alters the
+    execution contract digest, so ``start_node`` archives the old draft and re-runs
+    it (and digest-driven downstream nodes follow) without any explicit cascade.
+    Failed/blocked chapters are reset the same way a human retry would.
+    """
+    note = str(note or "").strip()[:500]
+
+    def apply(state):
+        node = _find_node(state, node_id)
+        if not str(node.get("id") or "").startswith("chapter_write:"):
+            raise PipelineError("只有章节节点支持单章重写：%s" % node_id)
+        if node.get("state") == "running":
+            raise PipelineError("这一章正在写，等它停下或完成后再重写")
+        node["user_note"] = note
+        node["rewrite_serial"] = int(node.get("rewrite_serial") or 0) + 1
+        if node.get("state") in ("failed", "blocked", "retry_wait"):
+            node.update(
+                {
+                    "state": "pending",
+                    "attempt": 0,
+                    "started_at": "",
+                    "finished_at": "",
+                    "last_activity_at": "",
+                    "error_code": "",
+                    "retry_after_seconds": 0,
+                }
+            )
+        if state.get("state") == "done":
+            state["state"] = "pending"
         return dict(node)
 
     result, _ = _mutate(job, apply)
