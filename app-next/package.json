@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:core": "node tests/core-smoke.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.0",
