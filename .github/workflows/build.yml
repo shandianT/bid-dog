@@ -82,7 +82,11 @@ jobs:
         include:
           - platform: macos-latest
             artifact: installer-macos
-            build_args: "-- --bundles dmg"
+            # 必须带 app:mac 的自动更新包是 .app.tar.gz,由 app 这个 bundle 目标产出。
+            # 只给 dmg 的话 dmg 照常出,但 .app.tar.gz 和它的 .sig 一个都没有——
+            # latest.json 里就不会有 darwin-aarch64 这一项,mac 用户永远收不到更新,
+            # 而且不报错:客户端查到清单里没有自己的平台,只会一直说「已经是最新版」。
+            build_args: "-- --bundles app,dmg"
             artifact_paths: |
               app/src-tauri/target/release/bundle/dmg/*.dmg
           - platform: windows-latest
