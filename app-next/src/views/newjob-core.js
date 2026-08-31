@@ -41,6 +41,7 @@ export function njOpen(){
   NJ.open = true;
   if(!NJ.req.trim()) NJ.req = NJ_DEFAULT_REQ;   // 空着就补默认;用户改过的原样保留
   NJ.step = 1; bump();
+  loadJobTemplates();
 }
 
 export function njAddFiles(files, _isFolder){
@@ -71,6 +72,8 @@ export async function njStart(startNow){
     if(IS_WEB && !FORCE_DEMO && typeof Notification!=='undefined' && Notification.permission==='default') Notification.requestPermission();
     const tender = NJ.items[NJ.tenderIdx],tname = tender.rel.split('/').pop();
     if(!S.online){ NJ.open=false; ui.closeAll(); demoNew(tname); njReset(); return; }
+    // 推荐预览不能阻塞建任务;后端会在创建请求内做唯一一次权威选择并冻结快照。(经典同注释)
+    if(String(NJ.template||'auto')==='auto'&&!NJ.recommendation)recommendTemplateForTender();
     const fd = new FormData();fd.append('tender', tender.file, tname);
     const rest = NJ.items.filter((_,i)=>i!==NJ.tenderIdx),rels = [];
     for(const it of rest){ fd.append('files', it.file, it.rel.split('/').pop()); rels.push(it.rel); }
@@ -134,4 +137,68 @@ export function walkEntries(items, done){
     else { const f = it.getAsFile && it.getAsFile(); if(f) out.push(f); }
   }
   walked = true; finish();
+}
+
+/* ---------- 场景模板工具链(经典 loadJobTemplates/recommend/derive/save/delete 逐字, ----------
+   el('njXxx') 读值改为 NJ 字段/入参) */
+export async function loadJobTemplates(){
+  if(!S.online)return;
+  try{
+    const r=await api('/v1/templates'),list=Array.isArray(r)?r:(r.templates||[]);S.templates=list;
+    if(NJ.template!=='auto' && !list.some(x=>String(x.id)===String(NJ.template))) NJ.template='auto';
+    bump();
+  }catch(_){}
+}
+
+export async function recommendTemplateForTender(){
+  if(!S.online||NJ.tenderIdx<0||!NJ.items[NJ.tenderIdx])return;
+  const seq=++NJ.recommendSeq,fd=new FormData();fd.append('file',NJ.items[NJ.tenderIdx].file);fd.append('scene_hint',NJ.req.trim());
+  try{
+    const r=await api('/v1/templates/recommend',{method:'POST',body:fd});if(seq!==NJ.recommendSeq)return;NJ.recommendation=r;bump();
+  }catch(_){if(seq!==NJ.recommendSeq)return;NJ.recommendation=null;bump();}
+}
+
+export async function deriveTemplateFromFile(file){
+  if(!file)return;
+  if(!S.online){ui.toast('请先连接本地服务');return;}
+  NJ.templateDraft={_loading:true};bump();
+  const fd=new FormData();fd.append('file',file);
+  try{
+    const draft=await api('/v1/templates/derive',{method:'POST',body:fd});NJ.templateDraft=draft;bump();
+  }catch(e){NJ.templateDraft={_error:'模板生成失败:'+(e&&e.message||'请换用可提取文字的 Word/PDF')};bump();}
+}
+
+export async function saveDerivedTemplate(name, outlineText){
+  const draft=NJ.templateDraft;if(!draft)return;
+  if(!(draft.validation||{}).ready){ui.toast('这份草稿结构不足,暂不能保存');return;}
+  try{
+    const finalName=(name||'').trim()||draft.name;
+    const titles=String(outlineText||'').split(/\n/).map(x=>x.trim()).filter(Boolean).slice(0,30);
+    if(titles.length<5){ui.toast('请至少保留 5 个目录章节');return;}
+    const old=((draft.package||{}).outline||[]),byTitle=new Map(old.map(x=>[x.title,x]));
+    draft.package.outline=titles.map(title=>byTitle.get(title)||{title,purpose:'按招标文件对应要求组织本章，明确响应、证据、缺口和人工确认项',required:true,evidence:[]});
+    const saved=await api('/v1/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:finalName,description:draft.description,prompt:draft.prompt,settings:draft.settings,package:draft.package})});
+    await loadJobTemplates();NJ.template=String(saved.id||'auto');discardDerivedTemplate();ui.toast('场景模板已保存');
+  }catch(e){ui.toast('模板保存失败');}
+}
+export function discardDerivedTemplate(){NJ.templateDraft=null;bump();}
+
+export async function saveCurrentTemplate(name){
+  const nm=String(name||'').trim();if(!nm){ui.toast('请先填写模板名称');return;}
+  const chosen=NJ.template||'auto',base=chosen==='auto'?String((NJ.recommendation||{}).template_id||'government'):chosen;
+  try{
+    const r=await api('/v1/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:nm,prompt:NJ.req.trim(),base_template_id:base,settings:{project_id:NJ.project.trim()}})});
+    await loadJobTemplates();const id=String((r&&r.id)||(r&&r.template_id)||'');if(id)NJ.template=id;bump();ui.toast('自定义模板已保存');
+  }catch(e){
+    ui.toast('模板保存失败');presentProblem({level:'error',title:'自定义模板保存失败',text:'当前任务填写内容仍然保留。',detail:e&&e.message||'',actions:[{act:'retry_template_save',label:'重试保存'}]});
+  }
+}
+
+export async function deleteSelectedTemplate(){
+  const built=new Set(['auto','government','construction','service','government-it','goods','consulting']),id=String(NJ.template||'');
+  if(!id||built.has(id)){ui.toast('内置模板不能删除');return;}
+  const item=(S.templates||[]).find(x=>String(x.id)===id),name=item?(item.name||item.title||id):id;
+  if(!await ui.askConfirm('删除自定义模板「'+name+'」？','已创建的任务不会受影响。',true))return;
+  try{await api('/v1/templates/'+encodeURIComponent(id),{method:'DELETE'});NJ.template='auto';await loadJobTemplates();ui.toast('模板已删除');}
+  catch(e){ui.toast('模板删除失败');presentProblem({level:'error',title:'自定义模板删除失败',text:'模板仍然保留，可以稍后重试。',detail:e&&e.message||'',actions:[{act:'retry_template_delete',label:'重试删除',param:id}]});}
 }

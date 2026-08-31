@@ -456,3 +456,7 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .attrow{display:flex;align-items:center;gap:6px;font:400 12px/1.7 inherit;color:var(--sub)}
 .attrow .attn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .attrow .as{color:var(--faint);font-size:11px;flex:none}
+
+/* 新建任务:模板面板与草稿卡 */
+.njTemplatePreview{border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:400 12px/1.7 inherit;color:var(--sub)}
+.njdraft{border:1px solid #f3ddb5;background:#fdf9f0;border-radius:10px;padding:10px 12px;font:400 12px/1.7 inherit;color:var(--sub)}

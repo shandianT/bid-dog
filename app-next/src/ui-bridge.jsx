@@ -39,9 +39,9 @@ export function installUiBridge(){
   ui.openArtifact = (name, url) => import('./views/artifacts.js').then(m => m.openArtifact(name, url));
   ui.openJobFolder = () => import('./views/artifacts.js').then(m => m.openJobFolder());
   ui.repairJob = () => { S.sheet = { name:'check' }; bump(); };   // 经典 repair 动作=打开检查抽屉并清洗;清洗按钮在抽屉里
+  ui.downloadDiagnosticBundle = () => import('./views/diagnostic-bundle.js').then(m => m.downloadDiagnosticBundle());
   // 视图 D 落地前的占位:入口保留、当面说明,不做死按钮。
   const migrating = label => () => { S.sheet = { name:'migrating', label }; bump(); };
-  ui.downloadDiagnosticBundle = migrating('导出诊断包');
   ui.openUpdatePanel = migrating('更新面板');
 }
 

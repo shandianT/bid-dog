@@ -1,6 +1,6 @@
 // 输入区:加号菜单(参考资料/新建任务)、回答横幅(ansBar)、输入框、快捷问题。
 // send() 的通道选择逐字对应经典:AI 在等回答时走 /answers,否则走 /messages。
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Dropdown } from 'antd';
 import { PlusOutlined, ArrowUpOutlined } from '@ant-design/icons';
 import { S, ui, say, answer } from '../core/index.js';
@@ -12,6 +12,8 @@ export default function Composer(){
   const refIn = useRef(null), fileIn = useRef(null);
   const answering = S.active && S.answering[S.active];
   const q = S.active && S.chips[S.active];
+  const draftRef = useRef(null);
+  useEffect(() => { if(answering && draftRef.current) draftRef.current.focus(); }, [!!answering]);
   const { delivery, caps } = S.active ? headModel() : { delivery: {}, caps: {} };
   function send(){
     const v = draft.trim(); if(!v) return;
@@ -43,7 +45,7 @@ export default function Composer(){
           <Dropdown menu={menu} trigger={['click']} placement="topLeft">
             <span className="plus" title="添加文件"><PlusOutlined /></span>
           </Dropdown>
-          <input id="draft" value={draft}
+          <input id="draft" ref={draftRef} value={draft}
             placeholder={answering ? '把答案打在这里,发出去就回到 AI 那边' : '问问进度、提要求,或把文件拖进来'}
             onChange={e => setDraft(e.target.value)}
             onKeyDown={e => { if(e.key === 'Enter' && !e.nativeEvent.isComposing) send(); }} />
