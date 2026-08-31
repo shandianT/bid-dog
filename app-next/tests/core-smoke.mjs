@@ -25,6 +25,9 @@ await test('纯逻辑块与经典源码(main+PR#10)逐字一致', () => {
   assert.strictEqual(gen, base, '抽取产物与基准源码有差异——重跑 tools/extract-core.mjs');
 });
 
+// node 里没有 EventSource;桩一个不吐事件的,让 select() 在「在线」用例里也能走 attachES。
+globalThis.EventSource = class { constructor(){ this.readyState = 0; } close(){ this.readyState = 2; } };
+
 const core = await import('../src/core/index.js');
 const { S, ui, handle, select, taskPresentation, completionGate, wordPresence, knownStep,
         nextStreamState, streamReconnectDelay, recordStreamFailure, markStreamOpen,
@@ -62,11 +65,11 @@ await test('提问事件:无选项自动切回答通道,question_closed 收回',
   handle('j3', {type:'question', id:'q9', text:'项目经理的证书编号是多少?', options:[], ts:NOW()});
   assert.ok(S.chips.j3 && S.chips.j3.qid==='q9');
   assert.strictEqual(S.jobs[0].needs_attention, true);
-  assert.strictEqual(S.answering.j3, true, '开放式提问应自动进入回答通道');
+  assert.strictEqual(S.answering.j3, 'q9', '开放式提问应自动进入回答通道(经典语义:存 qid)');
   handle('j3', {type:'question_closed', id:'q9', ts:NOW()});
   assert.strictEqual(S.chips.j3, null);
   assert.strictEqual(S.jobs[0].needs_attention, false);
-  assert.strictEqual(S.answering.j3, false);
+  assert.strictEqual(S.answering.j3, null);
 });
 
 await test('产物事件:识别正文 Word 并标记 has_word,重复产物不叠加', () => {
@@ -176,6 +179,56 @@ await test('checkForUpdate:离线时说清原因;已知有新版直接进面板'
   await checkForUpdate();
   ui.openUpdatePanel = orig;
   assert.ok(opened, '已知新版应直接进更新面板');
+});
+
+const { answer, rerunJob, errAction } = core;
+
+await test('「我来输入」是切通道不是交答案:不发请求,不出气泡', async () => {
+  S.online = true;
+  S.jobs = [{job_id:'j12', name:'开放题', state:'running'}];
+  select('j12');
+  S.chips.j12 = {qid:'q12', options:['A','B'], text:'选哪个?'};
+  let called = 0; globalThis.fetch = async () => { called++; throw new Error('不该发请求'); };
+  const before = (S.msgs.j12||[]).length;
+  await answer('我来输入');
+  assert.strictEqual(called, 0, '点「我来输入」不该发任何请求');
+  assert.strictEqual((S.msgs.j12||[]).length, before, '不该出用户气泡');
+  assert.strictEqual(S.answering.j12, 'q12', '应切进回答通道并记住 qid');
+  assert.ok(S.chips.j12, '问题必须保留');
+});
+
+await test('答案未送达:问题保留、回答通道不丢,可直接重试', async () => {
+  S.online = true;
+  select('j13');
+  S.jobs = [{job_id:'j13', name:'送达失败', state:'running'}];
+  S.chips.j13 = {qid:'q13', options:[], text:'编号?'};
+  S.answering.j13 = 'q13';
+  globalThis.fetch = async () => { throw new Error('网络断了'); };
+  await answer('BJ-2026-001');
+  assert.ok(S.chips.j13 && S.chips.j13.qid==='q13', '失败后问题不能被吞掉');
+  assert.strictEqual(S.answering.j13, 'q13', '失败后仍在回答通道');
+  assert.ok(/答案未送达/.test(S.toastMsg.text));
+});
+
+await test('重新生成:成功清幂等键,失败保留旧键防重复起单', async () => {
+  select('j14');
+  S.jobs = [{job_id:'j14', name:'重跑', state:'failed'}];
+  globalThis.fetch = async () => { throw new Error('boom'); };
+  await rerunJob(true);
+  const kept = S.rerunKeys.j14;
+  assert.ok(kept, '失败后必须保留幂等键');
+  await rerunJob(true);
+  assert.strictEqual(S.rerunKeys.j14, kept, '重试必须复用同一个键');
+  globalThis.fetch = async (u) => ({ ok:true, status:200, headers:{get:()=>''},
+    json: async () => String(u).endsWith('/rerun') ? {job_id:'j14b'} : [] });
+  await rerunJob(true);
+  assert.ok(!S.rerunKeys.j14, '成功后应清掉幂等键');
+});
+
+await test('引擎发来不认识的动作:当面说不认识,不做死按钮', async () => {
+  S.toastMsg = null;
+  await errAction('teleport_to_moon', '', '');
+  assert.ok(/不认识「teleport_to_moon」/.test(S.toastMsg.text));
 });
 
 console.log(`\n${passed} 通过, ${failed} 失败`);

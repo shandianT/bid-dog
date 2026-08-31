@@ -4,6 +4,8 @@ export { S, ui, bump, subscribe, getVersion } from './store.js';
 export * from './gen/pure.js';
 export { api } from './gen/api.js';
 export * from './gen/jobs.js';
+export * from './gen/tasks.js';
+export * from './gen/actions.js';
 export { demoBoot, demoNew, demoRun, DEMO_LOG } from './gen/demo.js';
 export { presentProblem, clearProblem } from './problems.js';
 export * from './update.js';

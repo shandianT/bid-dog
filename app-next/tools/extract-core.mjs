@@ -37,6 +37,24 @@ function transform(code){
     .replace(/\banswerMode\(/g, 'ui.answerMode(')
     .replace(/\bnotify\(/g, 'ui.notify(')
     .replace(/\btoast\(/g, 'ui.toast(')
+    .replace(/renderTaskFilters\(\)/g, "ui.render('taskFilters')")
+    .replace(/\baskConfirm\(/g, 'ui.askConfirm(')
+    .replace(/\bopenProjectMove\(/g, 'ui.openProjectMove(')
+    .replace(/\bcloseAll\(\)/g, 'ui.closeAll()')
+    .replace(/\bshowDiagnosticDetail\(/g, 'ui.showDiagnosticDetail(')
+    .replace(/\brunDiagnostics\(\)/g, 'ui.runDiagnostics()')
+    .replace(/\bautoUpdate\(\)/g, 'ui.openUpdatePanel()')
+    .replace(/\bopenRevision\(\)/g, 'ui.openRevision()')
+    .replace(/\bdownloadDiagnosticBundle\(\)/g, 'ui.downloadDiagnosticBundle()')
+    .replace(/\bopenSheet\(/g, 'ui.openSheet(')
+    .replace(/\bopenLog\(\)/g, 'ui.openLog()')
+    .replace(/\bopenRedo\(\)/g, 'ui.openRedo()')
+    .replace(/\bopenCheck\(\)/g, 'ui.openCheck()')
+    .replace(/\brepairJob\(\)/g, 'ui.repairJob()')
+    .replace(/\bopenArtifact\(/g, 'ui.openArtifact(')
+    .replace(/\bopenJobFolder\(\)/g, 'ui.openJobFolder()')
+    .replace(/\(el\('problemHost'\)&&el\('problemHost'\)\._detail\)/g,
+             "((S.problems[S.active||'_global']||S.problems._global||{}).detail)")
     .replace(/\bAPI\b/g, 'net.API');
 }
 
@@ -89,6 +107,48 @@ const header = f => `// 由 tools/extract-core.mjs 从经典前端自动抽取(�
     + '  eventIsRecent, handle, refreshArts, loadAtts, DEFAULT_STAGES, ts2ms, fmtDur, timing,\n'
     + '  jobState, verdict };\n';
   fs.writeFileSync(path.join(outDir, 'jobs.js'), out);
+}
+
+// ---------- tasks.js:任务列表数据层与批量/归档/导出/删除动作 ----------
+{
+  const listing = between('/* ================= 任务列表(事件委托,名字含引号也安全) ================= */',
+                          'function renderTaskFilters(){');
+  const scope = between('async function setTaskScope(scope){', "el('taskScope').addEventListener");
+  const bulk = between('function setTaskBulkMode(enabled){', 'function renderTasks(){');
+  const rowActs = between('async function archiveJob(id){', 'function openProjectMove(ids){');
+  const bulkActs = between('async function runBulkTaskAction(action){', 'async function delJob(id){');
+  const del = between('async function delJob(id){', '/* ================= 选择任务 + SSE(断线自动重连) ================= */');
+  fs.writeFileSync(path.join(outDir, 'tasks.js'), header('tasks')
+    + "import { net, FORCE_DEMO } from '../env.js';\n"
+    + "import { S, ui } from '../store.js';\n"
+    + "import { api } from './api.js';\n"
+    + "import { presentProblem } from '../problems.js';\n"
+    + "import { clearStreamRecovery } from './jobs.js';\n"
+    + "import { rerunJob } from './actions.js';\n\n"
+    + transform(listing) + transform(scope) + transform(bulk) + transform(rowActs)
+    + transform(bulkActs) + transform(del)
+    + '\nexport { taskSourceJobs, archivedOnly, visibleTaskJobs, setTaskScope, setTaskProjectFilter,\n'
+    + '  setTaskBulkMode, toggleTaskSelection, toggleAllTaskSelection, archiveJob, restoreJob,\n'
+    + '  exportJobs, runBulkTaskAction, runTaskRowAction, delJob, deleteSelectedJobs };\n');
+}
+
+// ---------- actions.js:任务控制/消息动作(继续、暂停、停止、重跑、回答、errAction) ----------
+{
+  const control = between('async function resumeJob(){', 'function openRevision(){');
+  const rerun = between('async function rerunJob(skipAsk){', 'function renderWorklog(){');
+  const err = between('async function errAction(act, file, param){', '/* ================= 右栏卡片 ================= */');
+  const sayFn = between('async function say(text){', '/* 点了「我来输入」不是把「我来输入」四个字当答案发出去');
+  const answerFn = between('async function answer(choice){', 'function notify(t){');
+  fs.writeFileSync(path.join(outDir, 'actions.js'), header('actions')
+    + "import { ASK_SELF } from '../env.js';\n"
+    + "import { S, ui } from '../store.js';\n"
+    + "import { api } from './api.js';\n"
+    + "import { presentProblem } from '../problems.js';\n"
+    + "import { taskCapabilities, _friendlyText } from './pure.js';\n"
+    + "import { select, loadJobs, refreshArts } from './jobs.js';\n"
+    + "import { openUpdate } from '../update.js';\n\n"
+    + transform(control) + transform(rerun) + transform(err) + transform(sayFn) + transform(answerFn)
+    + '\nexport { resumeJob, togglePause, stopJob, rerunJob, errAction, say, answer, addLocal };\n');
 }
 
 // ---------- demo.js:演示模式,与真实运行同一条 handle() 通道 ----------
