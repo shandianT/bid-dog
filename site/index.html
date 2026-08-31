@@ -308,12 +308,12 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 
 <main>
 <div class="hero"><div class="wrap">
-  <div class="badge"><i></i><span id="relVer">v0.20.5</span> · macOS / Windows · 数据留本机 · 粘一串 Key 就能用</div>
+  <div class="badge"><i></i><span id="relVer">v0.20.6</span> · macOS / Windows · 数据留本机 · 粘一串 Key 就能用</div>
   <h1>招标文件丢进去,<br>出一份能直接交的 <span class="gr">Word 标书</span></h1>
   <p class="hsub">中标狗装在自己电脑上,macOS / Windows 都能装,<b style="color:var(--ink)">原始文件和产物存放本机</b>。生成所需文本或图片会发送给你绑定的模型服务，不经过中标狗自有服务器。</p>
   <div class="hbtns" id="get">
-    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.5/bid-dog_0.20.5_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片（M 系列）· dmg</em></a>
-    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.5/bid-dog_0.20.5_x64-setup.exe">下载 Windows 版<em class="dls">Windows 10 / 11 x64 · exe</em></a>
+    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.6/bid-dog_0.20.6_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片（M 系列）· dmg</em></a>
+    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.6/bid-dog_0.20.6_x64-setup.exe">下载 Windows 版<em class="dls">Windows 10 / 11 x64 · exe</em></a>
     <a class="cta g big" href="app/index.html?demo=1">在线体验(不用装)</a>
   </div>
   <div class="download-meta" id="releaseMeta"><b>兼容性：</b>Intel Mac 暂不支持、暂无安装包；Windows ARM 暂不支持。安装包目前未完成商业签名，首次打开可能需要按系统提示放行。</div>
@@ -459,7 +459,7 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
     <details><summary>我的标书和素材会上传到哪里吗?</summary><p>原始文件和产物存在你电脑的「文稿/中标狗」文件夹，不上传到中标狗自有服务器。生成时所需的文本或图片会发送给你主动绑定的模型服务，请同时遵守该服务的数据规则。</p></details>
     <details><summary>不填写 Key 能用吗?</summary><p>能先用内置演示完整走通流程；产真实标书时粘贴发放的 Key，即可完成完整生成。</p></details>
     <details><summary>生成用的是谁的额度?</summary><p>使用发放的 Key 时，生成、追问与识图都走对应套餐；应用会自动使用内置 OpenCode，无需另装 Node.js，也无需登录 OpenCode 账号。你也可以在高级设置里改用自己的 SoWork、Claude Code 或 Codex 订阅。</p></details>
-    <details><summary>怎么更新版本?</summary><p>从 v0.20.5 起支持应用内一键更新：有新版时左下角会出现「有新版 v… → 查看并更新」，点开能看到这一版改了什么，再点「立即更新」就会自动下载、校验签名、安装并重启，全程有进度可看。若此时有任务正在生成，更新前会先提示——任务会停在当前检查点，已写完的章节不会丢，重启后点「从断点继续」即可接着跑。</p><p><b>v0.20.5 这一版需要手动安装一次</b>：v0.20.4 及更早的安装包里没有更新能力，收不到推送。手动更新的老办法一直可用：等任务结束后从托盘真正退出旧版，再下载新安装包覆盖安装，数据与配置会自动保留。</p></details>
+    <details><summary>怎么更新版本?</summary><p>从 v0.20.5 起支持应用内一键更新：有新版时左下角会出现「有新版 v… → 查看并更新」，点开能看到这一版改了什么，再点「立即更新」就会自动下载、校验签名、安装并重启，全程有进度可看。若此时有任务正在生成，更新前会先提示——任务会停在当前检查点，已写完的章节不会丢，重启后点「从断点继续」即可接着跑。</p><p><b>从 v0.20.4 或更早升上来，需要手动安装一次</b>：那些版本的安装包里没有更新能力，收不到推送。手动更新的老办法一直可用：等任务结束后从托盘真正退出旧版，再下载新安装包覆盖安装，数据与配置会自动保留。</p></details>
     <details><summary>macOS 提示「已损坏,无法打开」?</summary><p>文件并没有损坏。当前安装包尚未使用 Apple Developer ID 完成公证，macOS 会对每次新下载或覆盖安装重新加隔离标记；在商业证书配置完成前，代码本身无法冒充系统公证。更新前先从托盘退出旧版，把新版拖入「应用程序」并替换、推出 DMG 后执行下面命令；也可到「系统设置 → 隐私与安全性」点「仍要打开」。</p><div class="mac-fix"><code>xattr -dr com.apple.quarantine "/Applications/中标狗.app"</code><button class="copy-fix" id="copyMacFix" type="button">复制首次放行命令</button></div></details>
   </div>
 </div></section>
@@ -468,8 +468,8 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   <h2 style="margin-top:0">拿一份招标文件试一遍</h2>
   <p class="lead center" style="margin:0 auto 26px">不填配置也能跑一遍内置演示。要出真件,粘一串 Key 就行,不用注册 AI 账号,也能接自己已有的 Claude Code / Codex 订阅。</p>
   <div class="hbtns">
-    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.5/bid-dog_0.20.5_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片（M 系列）· dmg</em></a>
-    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.5/bid-dog_0.20.5_x64-setup.exe">下载 Windows 版<em class="dls">Windows 10 / 11 x64 · exe</em></a>
+    <a class="cta p big dl-mac" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.6/bid-dog_0.20.6_aarch64.dmg">下载 macOS 版<em class="dls">Apple 芯片（M 系列）· dmg</em></a>
+    <a class="cta g big dl-win" href="https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.6/bid-dog_0.20.6_x64-setup.exe">下载 Windows 版<em class="dls">Windows 10 / 11 x64 · exe</em></a>
     <a class="cta g big" href="app/index.html?demo=1">在线体验</a>
   </div>
 </div></div></section>
