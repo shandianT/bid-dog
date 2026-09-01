@@ -111,10 +111,16 @@ function FlowConsole(){
 
 function ChatMessages(){
   const boxRef = useRef(null);
+  const stick = useRef(true);            // 只在用户本来就贴着底时才跟随(经典 nearBottom 同语义)
   const list = S.msgs[S.active] || [];
+  // 滚的是中栏 .mid(经典的 el('chat')),.chatwrap 自身不滚——写它等于什么都没做。
+  const scroller = () => boxRef.current && boxRef.current.closest('.mid');
+  // 渲染阶段读到的是「这批新内容提交之前」的位置,正是经典在改 innerHTML 之前算 nearBottom 的时刻。
+  const before = scroller();
+  if(before) stick.current = before.scrollTop + before.clientHeight > before.scrollHeight - 90;
   useLayoutEffect(() => {
-    const box = boxRef.current; if(!box) return;
-    box.scrollTop = box.scrollHeight;    // 挂载/更新后贴底;用户上翻的场景由外层滚动容器判断保留
+    const sc = scroller();               // 用户上翻读历史时不打断,回到底部后重新跟随
+    if(sc && stick.current) sc.scrollTop = sc.scrollHeight;
   });
   // 解析确认问题不走通用气泡:confirmHost 里有结构化确认卡(经典同注释)
   const q = S.chips[S.active] && S.chips[S.active].kind === 'confirm_parse' ? null : S.chips[S.active];
@@ -154,6 +160,14 @@ function ChatMessages(){
 }
 
 function Worklog(){
+  // 日志会长到几百行:容器限高滚动,并且只在用户本来就贴着底时跟到最新(经典 stick 同语义)。
+  const logRef = useRef(null), stick = useRef(true);
+  const beforeLog = logRef.current;      // 同上:提交前的位置才是「用户此刻在看哪儿」
+  if(beforeLog) stick.current = beforeLog.scrollTop + beforeLog.clientHeight >= beforeLog.scrollHeight - 30;
+  useLayoutEffect(() => {
+    const b = logRef.current;
+    if(b && stick.current) b.scrollTop = b.scrollHeight;
+  });
   const id = S.active, wl = (id && S.worklog[id]) || [];
   const p0 = S.prog[id] || {};
   const j0 = (S.jobs || []).find(x => x.job_id === id);
@@ -189,7 +203,7 @@ function Worklog(){
     <Card variant="borderless" className="lcard-a" title={live ? '它正在做什么' : '工作过程回放'}
       extra={live ? <Tag color="processing" bordered={false}>进行中</Tag>
                   : <span className="lx num">{wl.length} 行</span>}>
-      <div className="wl-scroll">
+      <div className="wl-scroll" ref={logRef}>
         <ThoughtChain collapsible items={items.map((it, i) => ({
           key: String(i),
           title: it.title,

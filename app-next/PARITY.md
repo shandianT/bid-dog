@@ -51,6 +51,8 @@
 - api():超时/网络错误分开措辞;version_sunset 弹全局横幅;Idempotency-Key 建任务;retry_dispatch_failed 才清重试键
 - 文案翻译层 _friendlyText/_friendlyActionLabel 全保留(黑话→人话)
 - 演示模式 ?demo=1:纯前端完整流程,含提问-回答-出件-质检黄牌
+- 对话新消息自动跟到底,但用户上翻读历史时不打断(滚的是中栏 .mid,阈值 90px)
+- 工作日志限高可滚(300px),只在用户本来就贴着底时跟到最新一行(阈值 30px)
 
 ## 生成效果提升(本次迁移随带,引擎不动)
 

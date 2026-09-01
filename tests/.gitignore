@@ -3,6 +3,8 @@ node_modules/
 __pycache__/
 .artifacts/
 playwright-report/
+playwright-report-next/
 test-results/
+test-results-next/
 acceptance_samples.local.json
 acceptance-results-*.md

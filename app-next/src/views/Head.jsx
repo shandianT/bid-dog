@@ -6,7 +6,7 @@ import { PauseOutlined, CaretRightOutlined, ReloadOutlined, FileTextOutlined,
          SafetyCertificateOutlined, StopOutlined } from '@ant-design/icons';
 import { S, ui, jobState, publicTaskState, taskPresentation, taskCapabilities, wordPresence,
          completionGate, deliveryDeadEnd, verdict, timing, fmtDur, knownStep, PUBLIC_TASK_LABELS,
-         resumeJob, togglePause, stopJob, rerunJob, say, deliveryViewModel } from '../core/index.js';
+         resumeJob, togglePause, stopJob, deliveryViewModel } from '../core/index.js';
 import { startStaged } from './newjob-core.js';
 
 const PauseIcon = ({ paused }) => paused ? <CaretRightOutlined /> : <PauseOutlined />;
@@ -26,20 +26,6 @@ export function headModel(){
   return { p, j, st, t, state, present, caps, word, delivery, missingWord };
 }
 
-function Quick({ done, caps }){
-  if(!S.active) return null;
-  let items = done
-    ? [['q', '出件前我还差哪几项?'], ['q', '各章分别写了多少字?'], ['cmd:rerun', '重新生成']]
-    : [['q', '现在到哪了?'], ['q', '有哪些废标风险?'], ['cmd:pause', S.paused[S.active] ? '继续生成' : '暂停一下']];
-  if(!done && caps && caps.pause === false) items = items.filter(x => x[0] !== 'cmd:pause').concat([['q', '为什么当前不能暂停?']]);
-  return (
-    <div className="quick" id="quick">
-      {items.map(([k, label]) => <span key={k + label} data-k={k} data-v={label}
-        onClick={() => { if(k === 'q') say(label); else if(k === 'cmd:pause') togglePause(); else if(k === 'cmd:rerun') rerunJob(); }}>{label}</span>)}
-    </div>
-  );
-}
-export { Quick };
 
 export default function Head(){
   if(!S.active) return null;
