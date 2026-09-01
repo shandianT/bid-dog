@@ -3,7 +3,7 @@
 import React, { useRef } from 'react';
 import { PlusOutlined } from '@ant-design/icons';
 import { S, ui, bump, verdict, timing, fmtDur, DEFAULT_STAGES, _friendlyText, wordPresence,
-         completionGate, deliveryDeadEnd, knownStep, jobState } from '../core/index.js';
+         completionGate, deliveryDeadEnd, knownStep, jobState, deliveryViewModel } from '../core/index.js';
 import { IS_WEB } from '../core/env.js';
 import { addRef } from './newjob-core.js';
 import { ART_GROUPS, artGroup, artKind, artPurpose, openArtifact, openJobFolder } from './artifacts.js';
@@ -64,8 +64,31 @@ export default function Rail(){
     <div className="attrow" title={a.name}><span className="attn">{a.name}</span><span className="as">{a.size_kb || 0} KB</span></div>
   );
 
+  const vm = deliveryViewModel(job || {}, S.arts[id] || []);
+  const primary = vm.primary;
   return (
     <div className="rail" id="rail">
+      {/* 交付物永远是右栏第一张卡(原型定的规矩):还没出件时也先告诉用户「将要交付什么」 */}
+      <div className="card" style={{ flex: 'none' }}>
+        <div className="ch"><span className="ct">{primary ? '最终交付' : '将要交付'}</span>
+          {primary && <span className="addref" onClick={openJobFolder}>在文件夹中显示</span>}</div>
+        <div className="wordrow">
+          <div className={'wordicon' + (primary ? '' : ' dim')}>WORD</div>
+          <div className="wordcopy">
+            <b>{primary ? (primary.name || '投标文件.docx') : '投标文件_整册.docx'}</b>
+            <span>{primary
+              ? ('Word 文档' + (primary.size_kb ? ' · ' + Math.round(primary.size_kb) + ' KB' : '') + ' · 请人工复核后提交')
+              : (terminalDelivery ? '本单尚未生成最终 Word' : '生成完成后出现在这里,过程中随时可看已产出')}</span>
+          </div>
+        </div>
+        {primary && (
+          <div className="result-actions">
+            <button className="primary" type="button"
+              onClick={() => openArtifact(primary.name || '投标文件.docx', primary.url || '')}>打开</button>
+            <button type="button" onClick={() => ui.openCheck()}>出件前检查</button>
+          </div>
+        )}
+      </div>
       <div className="card" style={{ flex: 'none' }}>
         <div className="ch"><span className="ct">进度
           <span className="tgl" id="stepsTgl" onClick={() => { S.stepsOpen = !S.stepsOpen; bump(); }}>{S.stepsOpen ? '收起' : '展开'}</span></span>
@@ -92,7 +115,8 @@ export default function Rail(){
           </div>
         )}
       </div>
-      <div className="card" style={{ flex: 1, minHeight: 0 }}>
+      {/* 自然高度:产物少时不撑出空白,多了由 .cardlist 自己滚(整列也可滚) */}
+      <div className="card" style={{ flex: 'none' }}>
         <div className="ch"><span className="ct">已产出 <span id="artCount">{arts.length ? '· ' + arts.length : ''}</span></span>
           <span className="addref" onClick={openJobFolder}>打开任务文件夹</span></div>
         <div className="cardlist" id="files">

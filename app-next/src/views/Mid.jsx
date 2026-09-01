@@ -1,18 +1,14 @@
 // 中栏:页签(标书大纲/执行过程/对话与要求)+ 流程台 + 对话 + 工作日志。
 // 页签默认逻辑、流程台视图模型、消息渲染逐字对应经典 currentMidTab/renderFlowConsole/renderChat/renderWorklog。
-import React, { useLayoutEffect, useRef } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { S, ui, bump, flowConsoleView, taskPresentation, phaseTimingLabel, timing, fmtDur,
          jobState, _friendlyText, _friendlyActionLabel, errAction, answer, ASK_SELF } from '../core/index.js';
 import { mdHtml } from '../lib.js';
-import Outline from './Outline.jsx';
+import Outline, { _chapterNodes, _fmtWords } from './Outline.jsx';
 import ConfirmCard from './ConfirmCard.jsx';
 
 const MID_TABS = [['outline', '标书大纲'], ['flow', '执行过程'], ['chat', '对话与要求']];
 
-function _chapterNodes(id){
-  const p = S.pipeline[id]; const nodes = (p && p.pipeline && p.pipeline.nodes) || [];
-  return nodes.filter(n => String(n.id || '').indexOf('chapter_write:') === 0);
-}
 export function currentMidTab(id){
   if(S.midTab[id]) return S.midTab[id];
   if(_chapterNodes(id).length) return 'outline';
@@ -133,15 +129,17 @@ function ChatMessages(){
 
 function Worklog(){
   const id = S.active, wl = (id && S.worklog[id]) || [];
-  const preRef = useRef(null);
+  const bodyRef = useRef(null);
   const stickRef = useRef(true);
+  const [open, setOpen] = useState(true);
   useLayoutEffect(() => {
-    const b = preRef.current; if(!b) return;
+    const b = bodyRef.current; if(!b) return;
     if(stickRef.current) b.scrollTop = b.scrollHeight;
   });
   const p0 = S.prog[id] || {};
   const j0 = (S.jobs || []).find(x => x.job_id === id);
   const running = j0 ? jobState(j0) === 'running' : (p0.pct || 0) < 100 && p0.step;
+  // 没有台词时降级成「进度 + 已等多久」(经典同注释:至少让人知道它还活着、活在哪一步)
   if(!wl.length){
     if(!running) return null;
     const t = timing(id);
@@ -149,16 +147,73 @@ function Worklog(){
     if(p0.step) bits.push('第 ' + p0.step + '/' + (p0.total || 12) + ' 步');
     if(t && t.elapsed) bits.push('已用 ' + fmtDur(t.elapsed));
     return (
-      <details className="wl" open><summary>⚙ 它正在做什么</summary>
-        <pre>{bits.join(' · ')}{'\n\n'}当前生成方式没有返回完整过程记录，所以这里只显示阶段进度。{'\n'}产物会在右侧「已产出」里逐个出现——那是它真的在干活的证据。</pre>
-      </details>
+      <div className="lcard wl">
+        <div className="wl-head"><span className="lt">它正在做什么</span>
+          <span className="wl-live"><i className="pulse" style={{ width: 7, height: 7 }} />进行中</span></div>
+        <div className="wl-body"><div className="wl-line step">{bits.join(' · ')}</div></div>
+        <div className="wl-note">当前生成方式没有返回完整过程记录,所以这里只显示阶段进度。产物会在右侧「已产出」里逐个出现——那是它真的在干活的证据。</div>
+      </div>
     );
   }
   const live = (p0.pct || 0) < 100;
   return (
-    <details className="wl" open={live}><summary>{live ? '⚙ 它正在做什么' : '⚙ 工作过程回放 · ' + wl.length + ' 行'}</summary>
-      <pre id="wlBody" ref={preRef} onScroll={e => { const b = e.target; stickRef.current = b.scrollTop + b.clientHeight >= b.scrollHeight - 30; }}>{wl.join('\n')}</pre>
-    </details>
+    <div className="lcard wl">
+      <div className="wl-head">
+        <span className="lt">{live ? '它正在做什么' : '工作过程回放'}</span>
+        {live ? <span className="wl-live"><i className="pulse" style={{ width: 7, height: 7 }} />进行中</span>
+              : <span className="lx num">{wl.length} 行</span>}
+        <span className="tg" onClick={() => setOpen(v => !v)}>{open ? '收起' : '展开'}</span>
+      </div>
+      {open && (
+        <div className="wl-wrap"><div className="wl-body" ref={bodyRef}
+          onScroll={e => { const b = e.target; stickRef.current = b.scrollTop + b.clientHeight >= b.scrollHeight - 30; }}>
+          {wl.map((line, i) => {
+            const step = /^──/.test(line);
+            return <div key={i} className={'wl-line' + (step ? ' step' : '') + (live && i === wl.length - 1 ? ' last' : '')}>
+              {step ? line.replace(/^──\s*|\s*──$/g, '') : line}</div>;
+          })}
+        </div></div>
+      )}
+    </div>
+  );
+}
+
+// 章节撰写:原型的双列网格,数据来自真实 pipeline(写完的显示字数,正在写的有呼吸点)
+function Chapters(){
+  const id = S.active; if(!id) return null;
+  const nodes = _chapterNodes(id);
+  if(!nodes.length) return null;
+  const arts = S.arts[id] || [];
+  const done = nodes.filter(n => n.state === 'done').length;
+  return (
+    <div className="lcard">
+      <div className="lcard-head">
+        <span className="lt">章节撰写 <span className="num" style={{ color: 'var(--dim)', fontWeight: 450 }}>{done}/{nodes.length}</span></span>
+        <span className="lx">每写完一节即存检查点 · 中途停下不丢内容</span>
+      </div>
+      <div className="chgrid">
+        {nodes.map(n => {
+          const out = (n.outputs && n.outputs[0]) || '';
+          const art = arts.find(a => a.name === out);
+          const st = n.state === 'done' ? 'done'
+            : (n.state === 'running' || n.state === 'retry_wait') ? 'writing'
+            : (n.state === 'failed' || n.state === 'blocked') ? 'failed' : 'queued';
+          const meta = st === 'done' ? (_fmtWords(art && art.size_kb) || '已完成')
+            : st === 'writing' ? '撰写中 ↑'
+            : st === 'failed' ? '未完成' : '排队中';
+          return (
+            <div className={'chrow ' + st} key={n.id}
+              onClick={() => { if(st === 'done' && out) ui.openPreview(out); }}>
+              {st === 'done' ? <span className="chok">✓</span>
+                : st === 'writing' ? <i className="pulse" />
+                : st === 'failed' ? <i className="chfail" /> : <i className="qdot" />}
+              <span className="chname" title={n.title || n.id}>{n.title || n.id}</span>
+              <span className="chmeta num">{meta}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -177,7 +232,8 @@ export default function Mid(){
       )}
       <div className="cwrap"><ConfirmCard /></div>
       {on && tab === 'outline' && <div className="cwrap" id="outlineHost"><Outline /></div>}
-      {(!on || tab === 'flow') && <div className="cwrap" id="flowHost"><FlowConsole /></div>}
+      {(!on || tab === 'flow') && <div className="cwrap" id="flowHost"><div className="lcard"><FlowConsole /></div></div>}
+      {on && tab === 'flow' && <div className="cwrap"><Chapters /></div>}
       {(!on || tab === 'chat') && <div className="cwrap"><ChatMessages /></div>}
       {(!on || tab === 'chat') && <div className="cwrap"><Worklog /></div>}
     </div>
