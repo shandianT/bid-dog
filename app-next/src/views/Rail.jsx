@@ -1,7 +1,9 @@
 // 右栏:进度(刻度条+当前步语义)/ 已产出(四组分层)/ 参考资料(素材与参考两组)/ 出件前检查。
 // 全部判定逐字对应经典 renderRail(含等待确认停表、停止不转圈、PR #10 的检查卡句式)。
 import React, { useRef } from 'react';
-import { PlusOutlined } from '@ant-design/icons';
+import { Card, List, Tag, Button, Progress, Collapse, Empty } from 'antd';
+import { PlusOutlined, FileWordOutlined, FolderOpenOutlined, DownloadOutlined,
+         ExportOutlined } from '@ant-design/icons';
 import { S, ui, bump, verdict, timing, fmtDur, DEFAULT_STAGES, _friendlyText, wordPresence,
          completionGate, deliveryDeadEnd, knownStep, jobState, deliveryViewModel } from '../core/index.js';
 import { IS_WEB } from '../core/env.js';
@@ -69,11 +71,11 @@ export default function Rail(){
   return (
     <div className="rail" id="rail">
       {/* 交付物永远是右栏第一张卡(原型定的规矩):还没出件时也先告诉用户「将要交付什么」 */}
-      <div className="card" style={{ flex: 'none' }}>
-        <div className="ch"><span className="ct">{primary ? '最终交付' : '将要交付'}</span>
-          {primary && <span className="addref" onClick={openJobFolder}>在文件夹中显示</span>}</div>
+      <Card variant="borderless" className="rcard" size="small"
+        title={primary ? '最终交付' : '将要交付'}
+        extra={primary ? <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={openJobFolder}>文件夹</Button> : null}>
         <div className="wordrow">
-          <div className={'wordicon' + (primary ? '' : ' dim')}>WORD</div>
+          <div className={'wordicon' + (primary ? '' : ' dim')}><FileWordOutlined style={{ fontSize: 20 }} /></div>
           <div className="wordcopy">
             <b>{primary ? (primary.name || '投标文件.docx') : '投标文件_整册.docx'}</b>
             <span>{primary
@@ -82,17 +84,17 @@ export default function Rail(){
           </div>
         </div>
         {primary && (
-          <div className="result-actions">
-            <button className="primary" type="button"
-              onClick={() => openArtifact(primary.name || '投标文件.docx', primary.url || '')}>打开</button>
-            <button type="button" onClick={() => ui.openCheck()}>出件前检查</button>
+          <div className="result-actions" style={{ marginTop: 12 }}>
+            <Button type="primary" size="small"
+              onClick={() => openArtifact(primary.name || '投标文件.docx', primary.url || '')}>打开</Button>
+            <Button size="small" onClick={() => ui.openCheck()}>出件前检查</Button>
           </div>
         )}
-      </div>
-      <div className="card" style={{ flex: 'none' }}>
-        <div className="ch"><span className="ct">进度
-          <span className="tgl" id="stepsTgl" onClick={() => { S.stepsOpen = !S.stepsOpen; bump(); }}>{S.stepsOpen ? '收起' : '展开'}</span></span>
-          <span className="cr" id="etaTop">{etaTop}</span></div>
+      </Card>
+      <Card variant="borderless" className="rcard" size="small"
+        title={<span>进度<Button type="link" size="small" id="stepsTgl"
+          onClick={() => { S.stepsOpen = !S.stepsOpen; bump(); }}>{S.stepsOpen ? '收起' : '展开'}</Button></span>}
+        extra={<span className="cr" id="etaTop">{etaTop}</span>}>
         <div id="miniProg">
           <div className="ticks">{ticks}</div>
           <div className="curstep" style={railColor ? { color: railColor } : undefined}>
@@ -114,46 +116,52 @@ export default function Rail(){
             })}
           </div>
         )}
-      </div>
+      </Card>
       {/* 自然高度:产物少时不撑出空白,多了由 .cardlist 自己滚(整列也可滚) */}
-      <div className="card" style={{ flex: 'none' }}>
-        <div className="ch"><span className="ct">已产出 <span id="artCount">{arts.length ? '· ' + arts.length : ''}</span></span>
-          <span className="addref" onClick={openJobFolder}>打开任务文件夹</span></div>
+      <Card variant="borderless" className="rcard" size="small"
+        title={<span>已产出 <span id="artCount" className="num">{arts.length ? '· ' + arts.length : ''}</span></span>}
+        extra={<Button type="link" size="small" onClick={openJobFolder}>任务文件夹</Button>}>
         <div className="cardlist" id="files">
-          {!arts.length ? <span style={{ font: '400 12px/1.6 inherit', color: 'var(--faint)' }}>生成过程中陆续出现</span>
-            : groups.map(g => {
-              const open = S.openGrp[g.key] !== false;
-              return (
-                <React.Fragment key={g.key}>
-                  <div className={'grp' + (open ? ' on' : '')} onClick={() => { S.openGrp[g.key] = S.openGrp[g.key] === false ? true : false; bump(); }}>
-                    <span className="gt">{g.title}</span><span className="gc">{g.items.length}</span><span className="gx">›</span>
-                  </div>
-                  {open && g.items.map(a => {
-                    const md = /\.md$/i.test(a.name);
-                    return (
-                      <div className="file" key={a.name}>
-                        <div className="fmain">
-                          <div className="ftop"><span className="tag">{artKind(a)}</span>
-                            <span className={'fn' + (md ? ' pv' : '')} title={a.name}
-                              onClick={md ? () => ui.openPreview(a.name, a.url || '') : undefined}>{a.name}</span></div>
-                          <span className="fdesc">{artPurpose(a)}</span>
-                        </div>
-                        <span className="openart" onClick={() => openArtifact(a.name, a.url || '')}>{IS_WEB ? '下载' : '打开'}</span>
-                      </div>
-                    );
-                  })}
-                </React.Fragment>
-              );
-            })}
+          {!arts.length
+            ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="生成过程中陆续出现" style={{ margin: '6px 0' }} />
+            : (
+              <Collapse ghost size="small" className="artgrp"
+                activeKey={groups.filter(g => S.openGrp[g.key] !== false).map(g => String(g.key))}
+                onChange={keys => { groups.forEach(g => { S.openGrp[g.key] = keys.includes(String(g.key)); }); bump(); }}
+                items={groups.map(g => ({
+                  key: String(g.key),
+                  label: <span className="grp"><span className="gt">{g.title}</span><span className="gc num">{g.items.length}</span></span>,
+                  children: (
+                    <List size="small" split={false} dataSource={g.items}
+                      renderItem={a => {
+                        const md = /\.md$/i.test(a.name);
+                        return (
+                          // 右栏只有 316px:操作用图标按钮,把宽度让给文件名
+                          <List.Item className="file"
+                            actions={[<Button key="o" type="text" size="small" className="openart"
+                              title={IS_WEB ? '下载' : '用默认应用打开'}
+                              icon={IS_WEB ? <DownloadOutlined /> : <ExportOutlined />}
+                              onClick={() => openArtifact(a.name, a.url || '')} />]}>
+                            <div className="fmain">
+                              <div className="ftop"><Tag bordered={false} className="tag">{artKind(a)}</Tag>
+                                <span className={'fn' + (md ? ' pv' : '')} title={a.name}
+                                  onClick={md ? () => ui.openPreview(a.name, a.url || '') : undefined}>{a.name}</span></div>
+                              <span className="fdesc">{artPurpose(a)}</span>
+                            </div>
+                          </List.Item>
+                        );
+                      }} />
+                  ),
+                }))} />
+            )}
         </div>
-      </div>
-      <div className="card" style={{ flex: 'none' }}>
-        <div className="ch"><span className="ct">参考资料</span>
-          <span className="addref" onClick={() => {
+      </Card>
+      <Card variant="borderless" className="rcard" size="small" title="参考资料"
+        extra={<Button type="link" size="small" icon={<PlusOutlined />} onClick={() => {
             if(!S.active){ ui.toast('先选中一个任务,参考资料是加给具体任务的'); return; }
             if(!S.online){ ui.toast('未连接本地服务'); return; }
             refIn.current && refIn.current.click();
-          }}><PlusOutlined style={{ fontSize: 12 }} /> 添加</span></div>
+          }}>添加</Button>}>
         <div id="attsList">
           {mats.length > 0 && <><div className="attgrp">本单导入素材 · {mats.length} 个(生成时与素材库合并,同名以本单为准)</div>
             {mats.map((a, i) => <AttRow key={'m' + i} a={a} />)}</>}
@@ -164,12 +172,12 @@ export default function Rail(){
         <input ref={refIn} type="file" multiple style={{ display: 'none' }}
           accept=".docx,.doc,.pdf,.md,.txt,.html,.htm,.png,.jpg,.jpeg,.webp"
           onChange={e => { const fs = Array.from(e.target.files); (async () => { for(const f of fs) await addRef(f); })(); e.target.value = ''; }} />
-      </div>
-      <div className="card warncard" onClick={() => ui.openCheck()}>
+      </Card>
+      <Card variant="borderless" className="rcard warncard" size="small" onClick={() => ui.openCheck()} hoverable>
         <div className="t"><span className="dot" id="warnDot" style={{ background: hth ? verdict(id).color : 'var(--amber)' }} />
           <span id="warnT">{hth ? '提交前需处理 ' + openGaps.length + ' 项' : '出件前检查'}</span></div>
         <div className="d" id="warnD">{warnD}</div>
-      </div>
+      </Card>
     </div>
   );
 }

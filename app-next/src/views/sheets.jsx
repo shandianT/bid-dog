@@ -1,7 +1,7 @@
 // 视图 B 的弹层组:出件前检查 / 评分点覆盖 / 单章重写(预演 diff)/ 修改结果 / 产物预览。
 // 数据路径逐字对应经典 renderCheck/repairJob/openCoverage/submitRewrite/doRedo/openPreview。
 import React, { useEffect, useState } from 'react';
-import { Modal, Input, Checkbox, Button } from 'antd';
+import { Modal, Input, Checkbox, Button, List, Progress, Tag, Alert, Empty, Segmented } from 'antd';
 import { S, ui, bump, api, select, errAction, presentProblem, refreshArts, loadPipeline, loadCoverage,
          covReasonHint, _friendlyText, _friendlyActionLabel } from '../core/index.js';
 import { IS_WEB } from '../core/env.js';
@@ -34,19 +34,19 @@ export function CheckSheet(){
       {h && <div id="ckLv" className={'cklv ' + (h.level || '')}>{h.level === 'red' ? '不可交付' : '仅可作初稿'}</div>}
       {/* 每条只在后端给了可执行动作时才画按钮(经典同注释:假按钮比没有更糟) */}
       <div className="ckList" id="check"><div id="ckList" style={{display:'contents'}}>
-        {gaps.map((g, i) => (
-          <div className="lrow" key={i}>
-            <span className="dot" style={{ background: DOT[g.level] || 'var(--amber)' }} />
-            <div className="c"><span className="n">{_friendlyText(g.title)}</span><span className="s">{_friendlyText(g.detail)}</span></div>
-            {(g.actions || []).length > 0 && (
-              <span style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                {(g.actions || []).map((a, ai) => <span key={ai} className="gap-act" data-eact={a.act} data-eparam={a.param || ''}
-                  onClick={() => { ui.closeAll(); errAction(a.act, a.file || '', a.param || ''); }}>{_friendlyActionLabel(a.label)}</span>)}
-              </span>
-            )}
-          </div>
-        ))}
-        {!gaps.length && h && <div className="outline-note">没有待处理项。</div>}
+        <List split={false} dataSource={gaps} locale={{ emptyText: h ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有待处理项" /> : <span /> }}
+          renderItem={g => (
+            <List.Item className="lrow"
+              actions={(g.actions || []).map((a, ai) => (
+                <Button key={ai} size="small" type="link" className="gap-act" data-eact={a.act} data-eparam={a.param || ''}
+                  onClick={() => { ui.closeAll(); errAction(a.act, a.file || '', a.param || ''); }}>{_friendlyActionLabel(a.label)}</Button>
+              ))}>
+              <List.Item.Meta
+                avatar={<span className="dot" style={{ background: DOT[g.level] || 'var(--amber)' }} />}
+                title={<span className="n">{_friendlyText(g.title)}</span>}
+                description={<span className="s">{_friendlyText(g.detail)}</span>} />
+            </List.Item>
+          )} />
       </div></div>
       {canRepair && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 }}>
@@ -85,26 +85,30 @@ export function CoverageSheet(){
       {cov && cov.available ? (
         <>
           <div className="covHead" id="covHead">评分点是评标专家打分的依据。已覆盖 <b>{cov.covered}/{cov.total}</b> 项——「已覆盖」= 规划无缺口 + 落到具体章节 + 该章节已写完。</div>
-          <div className="covBar"><b id="covBarFill" style={{ width: (cov.total ? Math.round(cov.covered / cov.total * 100) : 0) + '%' }} /></div>
+          <Progress className="covBar" percent={cov.total ? Math.round(cov.covered / cov.total * 100) : 0}
+            showInfo={false} strokeColor="var(--blue)" trailColor="var(--line-soft)" id="covBarFill" />
           <div className="covList" id="covList">
-            {un.length ? un.map((x, i) => (
-              <div className="covitem" key={i}>
-                <div className="ci2"><b>{x.requirement}</b>
-                  <span>{[x.gap && ('缺口:' + x.gap), x.location && ('落位:' + x.location)].filter(Boolean).join(' · ') || '待落实'}</span></div>
-                {x.score && x.score !== '未知' ? <span className="score">{x.score} 分</span> : null}
-                {x.node_id
-                  ? <button type="button" data-cov={i} disabled={busyIdx === i} onClick={() => dispatch(i)}>{busyIdx === i ? '派发中…' : '补写应答'}</button>
-                  : <span style={{ color: 'var(--faint)', fontSize: 11 }}>{covReasonHint(x)}</span>}
-              </div>
-            )) : <div className="outline-note">全部评分点都已覆盖。</div>}
+            {un.length ? (
+              <List split={false} dataSource={un} renderItem={(x, i) => (
+                <List.Item className="covitem"
+                  actions={[
+                    x.score && x.score !== '未知' ? <Tag key="s" color="warning" bordered={false} className="score">{x.score} 分</Tag> : <span key="s" />,
+                    x.node_id
+                      ? <Button key="b" size="small" data-cov={i} loading={busyIdx === i} onClick={() => dispatch(i)}>补写应答</Button>
+                      : <span key="b" style={{ color: 'var(--faint)', fontSize: 11 }}>{covReasonHint(x)}</span>,
+                  ]}>
+                  <List.Item.Meta title={<b>{x.requirement}</b>}
+                    description={[x.gap && ('缺口:' + x.gap), x.location && ('落位:' + x.location)].filter(Boolean).join(' · ') || '待落实'} />
+                </List.Item>
+              )} />
+            ) : <div className="outline-note">全部评分点都已覆盖。</div>}
             {ok.length > 0 && <>
               <div className="outline-note" style={{ marginTop: 4 }}>已覆盖 {ok.length} 项</div>
-              {ok.slice(0, 60).map((x, i) => (
-                <div className="covitem ok" key={'ok' + i}>
-                  <div className="ci2"><b>{x.requirement}</b><span>{x.chapter || x.location || ''}</span></div>
-                  <span style={{ color: 'var(--green)', fontSize: 12 }}>✓</span>
-                </div>
-              ))}
+              <List split={false} dataSource={ok.slice(0, 60)} renderItem={x => (
+                <List.Item className="covitem ok" actions={[<span key="c" style={{ color: 'var(--green)' }}>✓</span>]}>
+                  <List.Item.Meta title={<b>{x.requirement}</b>} description={x.chapter || x.location || ''} />
+                </List.Item>
+              )} />
             </>}
           </div>
         </>
@@ -257,10 +261,9 @@ export function PreviewSheet(){
       title={open ? sh.pv : ''} footer={null}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         {state.md && (
-          <div className="midtabs" style={{ marginTop: 0 }}>
-            <button type="button" className={word ? 'on' : ''} onClick={() => { S.pvPref = 'word'; bump(); }}>Word 视图</button>
-            <button type="button" className={!word ? 'on' : ''} onClick={() => { S.pvPref = 'md'; bump(); }}>原文</button>
-          </div>
+          <Segmented size="small" value={word ? 'word' : 'md'}
+            onChange={v => { S.pvPref = v; bump(); }}
+            options={[{ label: 'Word 视图', value: 'word' }, { label: '原文', value: 'md' }]} />
         )}
         <span style={{ flex: 1 }} />
         <Button size="small" onClick={() => { import('./artifacts.js').then(m => m.openArtifact(sh.pv, sh.url || '')); }}>{IS_WEB ? '下载' : '打开'}</Button>

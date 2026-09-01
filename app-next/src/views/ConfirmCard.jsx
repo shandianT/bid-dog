@@ -1,5 +1,6 @@
 // 解析确认卡:开始撰写前确认项目名/截止/资质/评分/废标风险。逐字对应经典 renderConfirmCard。
 import React, { useState } from 'react';
+import { Card, Descriptions, Button, Input } from 'antd';
 import { S, ui, bump, api, answer } from '../core/index.js';
 
 export default function ConfirmCard(){
@@ -18,30 +19,31 @@ export default function ConfirmCard(){
     }catch(err){ ui.toast(err && err.message || '修正未送达,问题已保留,可重试'); }
   }
   return (
-    <div id="confirmHost"><div className="confirm-card">
-      <h4>开始撰写前,确认解析出的关键信息</h4>
+    <div id="confirmHost"><Card variant="borderless" className="confirm-card"
+      title="开始撰写前,确认解析出的关键信息">
       <div className="chd">发现读错了现在改一个字,胜过跑完 30 分钟后返工。修正会同步进任务要求,响应规划会按修正重新核对。</div>
-      <dl className="confirm-kv">
-        <dt>项目名称</dt><dd>{p.project || ''}</dd>
-        <dt>递交截止</dt><dd>{p.deadline || ''}</dd>
-        <dt>资质要求</dt><dd>{p.qualification || ''}</dd>
-        <dt>评分办法</dt><dd>{p.scoring || ''}</dd>
-        <dt>废标风险</dt><dd className="veto">{p.veto || ''}</dd>
-      </dl>
+      <Descriptions className="confirm-kv" column={1} size="small" colon={false}
+        items={[
+          { key: 'p', label: '项目名称', children: p.project || '' },
+          { key: 'd', label: '递交截止', children: p.deadline || '' },
+          { key: 'q', label: '资质要求', children: p.qualification || '' },
+          { key: 's', label: '评分办法', children: p.scoring || '' },
+          { key: 'v', label: '废标风险', children: <span className="veto">{p.veto || ''}</span> },
+        ]} />
       <div className="confirm-acts">
-        <button type="button" className="btn-primary" data-cfok="1" onClick={() => answer((chip.options || [])[0] || '确认无误，开始撰写')}>
-          {(chip.options || [])[0] || '确认无误，开始撰写'}</button>
-        <button type="button" className="btn-plain" data-cffix="1" onClick={() => setFixOpen(v => !v)}>有误,需要修正</button>
+        <Button type="primary" data-cfok="1" onClick={() => answer((chip.options || [])[0] || '确认无误，开始撰写')}>
+          {(chip.options || [])[0] || '确认无误，开始撰写'}</Button>
+        <Button data-cffix="1" onClick={() => setFixOpen(v => !v)}>有误,需要修正</Button>
       </div>
       {fixOpen && (
         <div className="confirm-fix" id="cfFix" style={{ display:'block' }}>
-          <textarea id="cfFixText" autoFocus value={fixText} onChange={e => setFixText(e.target.value)}
+          <Input.TextArea id="cfFixText" autoFocus rows={3} value={fixText} onChange={e => setFixText(e.target.value)}
             placeholder="写清楚哪一项有误、应为什么。例:项目名应为「清湖片区二期」;资质要求应为市政公用工程总承包贰级" />
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
-            <button type="button" className="btn-primary" data-cfsend="1" onClick={sendFix}>提交修正并开始</button>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <Button type="primary" data-cfsend="1" onClick={sendFix}>提交修正并开始</Button>
           </div>
         </div>
       )}
-    </div></div>
+    </Card></div>
   );
 }

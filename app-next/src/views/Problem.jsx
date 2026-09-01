@@ -1,6 +1,7 @@
 // 三段式问题横幅:发生了什么 → 内容是否保留 → 主按钮+次按钮,其余收进「更多」。
 // 结构与按钮策略逐字对应经典 renderProblem/problemAction。
 import React, { useState } from 'react';
+import { Alert, Button, Dropdown } from 'antd';
 import { S, ui, bump, clearProblem, errAction, resumeJob, stopJob, archiveJob, restoreJob,
          exportJobs, setTaskScope, _friendlyActionLabel } from '../core/index.js';
 import { applyProjectMoveWith } from './project-move.js';
@@ -34,28 +35,32 @@ export default function Problem(){
   if(p.detail && !acts.some(a => a.act === 'show_detail')) acts.push({ act: 'show_detail', label: '查看原因' });
   if(!acts.some(a => a.act === 'diagnose')) acts.push({ act: 'diagnose', label: '一键诊断' });
   const primary = acts[0], secondary = acts[1], rest = acts.slice(2);
-  const Btn = ({ a, pp }) => <button type="button" className={pp ? 'pp' : ''}
+  const Btn = ({ a, pp }) => <Button size="small" type={pp ? 'primary' : 'default'}
     data-problem-action={a.act} data-param={a.param || ''}
-    onClick={() => problemAction(a.act, a.param || '')}>{_friendlyActionLabel(a.label)}</button>;
+    onClick={() => problemAction(a.act, a.param || '')}>{_friendlyActionLabel(a.label)}</Button>;
   return (
     <div className="problem-host" id="problemHost" aria-live="assertive">
-      <div className={'problem-card ' + p.level}>
-        <span className="pi">{p.level === 'info' ? 'i' : p.level === 'warn' ? '!' : '×'}</span>
-        <div className="problem-copy">
-          <b>{p.title}</b><span>{p.text}</span>
-          <div className="problem-actions">
-            <Btn a={primary} pp />
-            {secondary && <Btn a={secondary} />}
-            {rest.length > 0 && (
-              <span className="problem-more">
-                <button type="button" onClick={e => { e.stopPropagation(); setMoreOpen(v => !v); }}>更多 ▾</button>
-                <span className={'problem-more-menu' + (moreOpen ? ' open' : '')}>{rest.map((a, i) => <Btn key={i} a={a} />)}</span>
-              </span>
-            )}
+      <Alert className={'problem-card ' + p.level} showIcon closable
+        type={p.level === 'info' ? 'info' : p.level === 'warn' ? 'warning' : 'error'}
+        onClose={() => problemAction('dismiss')}
+        message={p.title}
+        description={
+          <div className="problem-copy">
+            <span>{p.text}</span>
+            <div className="problem-actions">
+              <Btn a={primary} pp />
+              {secondary && <Btn a={secondary} />}
+              {rest.length > 0 && (
+                <Dropdown trigger={['click']} menu={{
+                  items: rest.map((a, i) => ({ key: String(i), label: _friendlyActionLabel(a.label) })),
+                  onClick: ({ key }) => { const a = rest[Number(key)]; if(a) problemAction(a.act, a.param || ''); },
+                }}>
+                  <Button size="small">更多 ▾</Button>
+                </Dropdown>
+              )}
+            </div>
           </div>
-        </div>
-        <button className="problem-close" type="button" aria-label="关闭" data-problem-action="dismiss" onClick={() => problemAction('dismiss')}>×</button>
-      </div>
+        } />
     </div>
   );
 }

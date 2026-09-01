@@ -2,8 +2,9 @@
 // 分组任务列表(批量管理/归档/行菜单)、素材库/设置/更新入口/连接状态。
 // 渲染公式逐字对应经典 renderTasks/taskRow/renderTaskFilters/renderBrandVersion。
 import React, { useRef } from 'react';
-import { Checkbox, Tooltip } from 'antd';
-import { PlusOutlined, FolderOutlined, SettingOutlined } from '@ant-design/icons';
+import { Checkbox, Tooltip, Segmented, Button, Select, Empty, Badge } from 'antd';
+import { PlusOutlined, FolderOutlined, SettingOutlined, MoreOutlined,
+         InboxOutlined, ArrowUpOutlined } from '@ant-design/icons';
 import { S, ui, bump, taskPresentation, publicTaskState, taskGroupOpen, checkForUpdate,
          visibleTaskJobs, setTaskScope, setTaskProjectFilter, setTaskBulkMode,
          toggleTaskSelection, toggleAllTaskSelection, runBulkTaskAction, deleteSelectedJobs,
@@ -36,7 +37,7 @@ function TaskRow({ j, compact }){
             onClick={e => { e.stopPropagation(); archived ? restoreJob(j.job_id) : archiveJob(j.job_id); }}>
             {archived ? '恢复' : '归档'}</button>
           <button className="task-more" type="button" aria-label="更多操作"
-            onClick={e => { e.stopPropagation(); S.taskMore = S.taskMore === j.job_id ? null : j.job_id; bump(); }}>•••</button>
+            onClick={e => { e.stopPropagation(); S.taskMore = S.taskMore === j.job_id ? null : j.job_id; bump(); }}><MoreOutlined /></button>
         </>}
       </div>
       <div className="st">
@@ -135,16 +136,13 @@ export default function Sidebar(){
       </div>
 
       <div className="task-scope" id="taskScope">
-        <div className="scope-tabs">
-          <button className={S.taskScope === 'active' ? 'on' : ''} type="button" data-task-scope="active" onClick={() => setTaskScope('active')}>当前任务</button>
-          <button className={S.taskScope === 'archived' ? 'on' : ''} type="button" data-task-scope="archived" onClick={() => setTaskScope('archived')}>已归档</button>
-        </div>
+        <Segmented block className="scope-tabs" value={S.taskScope}
+          onChange={v => setTaskScope(v)}
+          options={[{ label: '当前任务', value: 'active' }, { label: '已归档', value: 'archived' }]} />
         {projects.length > 0 && (
-          <select className="project-filter" id="taskProjectFilter" aria-label="按项目筛选"
-            value={S.projectFilter || ''} onChange={e => setTaskProjectFilter(e.target.value)}>
-            <option value="">全部项目</option>
-            {projects.map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
+          <Select className="project-filter" id="taskProjectFilter" size="small" aria-label="按项目筛选"
+            value={S.projectFilter || ''} onChange={v => setTaskProjectFilter(v)}
+            options={[{ value: '', label: '全部项目' }, ...projects.map(n => ({ value: n, label: n }))]} />
         )}
       </div>
 
@@ -156,12 +154,14 @@ export default function Sidebar(){
           {grp('needs_input', '需要你确认', false)}
           {grp('completed', '已完成', true)}
           {grp('failed', '未完成', false)}
-          {!visibleJobs.length && <div className="empty-side">{S.taskScope === 'archived' ? '归档里还没有任务' : '还没有任务'}</div>}
+          {!visibleJobs.length && <div className="empty-side">
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={S.taskScope === 'archived' ? '归档里还没有任务' : '还没有任务'} /></div>}
         </div>
       </div>
 
       <div className="side-links">
-        <span className="sl" onClick={() => ui.openSheet('assets')}><FolderOutlined /> 素材库</span>
+        <span className="sl" onClick={() => ui.openSheet('assets')}><InboxOutlined /> 素材库</span>
         <span className="sl" onClick={() => ui.openSheet('providers')}><SettingOutlined /> 设置 · 模型接入</span>
         {info && <span className="sl" id="updateLink" style={{ color: 'var(--blue)' }} onClick={() => ui.openUpdatePanel()}>
           {IS_WEB_LINK ? '有修复版 v' + info.version + ' → 去下载' : '有新版 v' + info.version + ' → 查看并更新'}</span>}

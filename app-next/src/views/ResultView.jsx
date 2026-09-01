@@ -1,15 +1,18 @@
 // 交付结果主视图:逐字对应经典 renderResult(warn/ok 双态、已保住的过程文件、
 // 三项交付检查、用量四格),按钮接真实 openArtifact/downloadResultWord。
 import React from 'react';
+import { Card, Button, Statistic } from 'antd';
+import { FileWordOutlined, CheckCircleFilled, WarningFilled, CloseCircleFilled,
+         QuestionCircleFilled } from '@ant-design/icons';
 import { S, ui, bump, deliveryViewModel, publicTaskState, taskPresentation, _shortDuration } from '../core/index.js';
 import { openArtifact, downloadResultWord } from './artifacts.js';
 
 function checkRow(label, item){
   const x = item || { state: 'unknown', detail: '尚未检查' };
-  const icon = { pass: '✓', warn: '!', fail: '×', unknown: '?' }[x.state] || '?';
+  const Icon = { pass: CheckCircleFilled, warn: WarningFilled, fail: CloseCircleFilled }[x.state] || QuestionCircleFilled;
   return (
     <div className={'result-check ' + (x.state || 'unknown')} key={label}>
-      <span className="ci">{icon}</span><strong>{label}</strong><span>{x.detail || '尚未检查'}</span>
+      <span className="ci"><Icon /></span><strong>{label}</strong><span>{x.detail || '尚未检查'}</span>
     </div>
   );
 }
@@ -38,6 +41,8 @@ export default function ResultView({ job }){
   return (
     <div className="result-view" id="resultView">
       <div className="result-wrap">
+        {/* 这里不能用 Segmented:它渲染成 label+radio,而契约(以及无障碍读屏)按 button 找
+            「过程与诊断」。保留原生按钮,样式已经是同一套分段控件观感。 */}
         <div className="result-nav"><button className="tab on" type="button">交付结果</button>
           <button className="tab" type="button" onClick={() => { S.processView[S.active] = true; bump(); }}>过程与诊断</button></div>
         <div className="result-hero">
@@ -48,36 +53,34 @@ export default function ResultView({ job }){
           </div>
         </div>
         <div className="result-shell">
-          <section className="result-card">
-            <div className="lbl2">主交付文件</div>
+          <Card variant="borderless" className="result-card" title="主交付文件">
             <div className="result-word">
-              <div className="word-icon">WORD</div>
+              <div className="word-icon"><FileWordOutlined style={{ fontSize: 21 }} /></div>
               <div className="word-copy"><b id="resultWordName">{word ? (word.name || '投标文件.docx') : '尚未找到可交付 Word'}</b><span>{meta}</span></div>
             </div>
             <div className="result-actions">
-              <button className="primary" type="button" disabled={!word} onClick={() => word && openArtifact(word.name || '投标文件.docx', word.url || '')}>打开</button>
-              <button type="button" disabled={!word} onClick={downloadResultWord}>下载</button>
-              <button type="button" disabled={!word} onClick={() => ui.openRevision()}>继续修改</button>
+              <Button type="primary" disabled={!word} onClick={() => word && openArtifact(word.name || '投标文件.docx', word.url || '')}>打开</Button>
+              <Button disabled={!word} onClick={downloadResultWord}>下载</Button>
+              <Button disabled={!word} onClick={() => ui.openRevision()}>继续修改</Button>
             </div>
             <div className="result-note">提交前仍请人工确认投标人名称、报价、资质有效期和签章。</div>
-          </section>
-          <section className="result-card">
-            <div className="lbl2">交付检查</div>
+          </Card>
+          <Card variant="borderless" className="result-card" title="交付检查">
             <div className="result-checks" id="resultChecks">
               {checkRow('目录完整性', vm.toc)}{checkRow('偏离表', vm.deviations)}{checkRow('内容质量', vm.quality)}
             </div>
             <div className="result-actions">
-              <button type="button" onClick={() => ui.openCheck()}>查看待确认项</button>
-              <button type="button" onClick={() => { S.processView[S.active] = true; bump(); }}>查看过程</button>
+              <Button onClick={() => ui.openCheck()}>查看待确认项</Button>
+              <Button onClick={() => { S.processView[S.active] = true; bump(); }}>查看过程</Button>
             </div>
-          </section>
+          </Card>
         </div>
-        <section className="result-card">
-          <div className="lbl2">本次用量</div>
+        <Card variant="borderless" className="result-card" title="本次用量">
           <div className="usage-grid" id="resultUsage">
-            {usage.map(x => <div className="usage-item" key={x[0]}><b>{x[1]}</b><span>{x[0]}</span></div>)}
+            {usage.map(x => <div className="usage-item" key={x[0]}>
+              <Statistic title={x[0]} value={x[1]} valueStyle={{ fontSize: 16, fontWeight: 600 }} /></div>)}
           </div>
-        </section>
+        </Card>
       </div>
     </div>
   );

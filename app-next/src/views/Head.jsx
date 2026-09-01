@@ -1,14 +1,15 @@
 // 任务头部:标题/徽章/副题/进度条/动作(暂停·停止·修改·从断点继续·开始·日志·交付结果·覆盖·出件前检查)。
 // 全部判定公式逐字对应经典 renderHead(含 PR #10 的「待处理」徽章与「Word 已生成」lead)。
 import React from 'react';
+import { Tag, Button, Progress, Tooltip } from 'antd';
+import { PauseOutlined, CaretRightOutlined, ReloadOutlined, FileTextOutlined,
+         SafetyCertificateOutlined, StopOutlined } from '@ant-design/icons';
 import { S, ui, jobState, publicTaskState, taskPresentation, taskCapabilities, wordPresence,
          completionGate, deliveryDeadEnd, verdict, timing, fmtDur, knownStep, PUBLIC_TASK_LABELS,
          resumeJob, togglePause, stopJob, rerunJob, say, deliveryViewModel } from '../core/index.js';
 import { startStaged } from './newjob-core.js';
 
-const PauseIcon = ({ paused }) => paused
-  ? <svg className="i" viewBox="0 0 24 24" fill="currentColor" style={{width:13,height:13}}><polygon points="6 3 20 12 6 21 6 3"/></svg>
-  : <svg className="i" viewBox="0 0 24 24" fill="currentColor" style={{width:13,height:13}}><rect x="5" y="4" width="4.5" height="16" rx="1"/><rect x="14.5" y="4" width="4.5" height="16" rx="1"/></svg>;
+const PauseIcon = ({ paused }) => paused ? <CaretRightOutlined /> : <PauseOutlined />;
 
 export function headModel(){
   const p = S.prog[S.active] || {};
@@ -51,11 +52,14 @@ export default function Head(){
 
   // 徽章:PR #10——出了整册 Word 的 failed 不是失败,是待处理
   let badge;
-  if(missingWord) badge = <span className="badge bad" id="hBadge"><span className="bdot" />没出 Word，未完成</span>;
-  else if(state === 'failed' && word === 'ready') badge = <span className="badge warn" id="hBadge"><span className="bdot" />待处理</span>;
+  const Badge = ({ cls, children }) => (
+    <Tag bordered={false} id="hBadge" className={'badge ' + cls} icon={<span className="bdot" />}>{children}</Tag>
+  );
+  if(missingWord) badge = <Badge cls="bad">没出 Word，未完成</Badge>;
+  else if(state === 'failed' && word === 'ready') badge = <Badge cls="warn">待处理</Badge>;
   else {
     const cls = { preparing: 'none', generating: 'none', needs_input: 'warn', completed: 'ok', failed: 'bad' }[state] || 'none';
-    badge = <span className={'badge ' + cls} id="hBadge"><span className="bdot" />{PUBLIC_TASK_LABELS[state] || '未完成'}</span>;
+    badge = <Badge cls={cls}>{PUBLIC_TASK_LABELS[state] || '未完成'}</Badge>;
   }
 
   // 副题 lead:PR #10——出了件先说出了件,再说还差什么
@@ -82,8 +86,8 @@ export default function Head(){
     un.forEach(x => { const r = String(x.reason || '') || 'unlocated'; tally[r] = (tally[r] || 0) + 1; });
     const tip = !un.length ? '全部评分点都已覆盖'
       : '未覆盖 ' + un.length + ' 项:' + Object.keys(tally).sort((a, b) => tally[b] - tally[a]).map(r => (names[r] || r) + ' ' + tally[r] + ' 项').join('、') + '。点开逐条查看,可直接补写应答。';
-    covPill = <span className={'pill covpill' + (cov.covered >= cov.total ? ' on' : '')} id="covPill" title={tip}
-      onClick={() => ui.openCoverage()}>评分点覆盖 {cov.covered}/{cov.total}</span>;
+    covPill = <Button id="covPill" title={tip} className={'pill covpill' + (cov.covered >= cov.total ? ' on' : '')}
+      onClick={() => ui.openCoverage()}>评分点覆盖 <span className="num">{cov.covered}/{cov.total}</span></Button>;
   }
 
   return (
@@ -91,31 +95,37 @@ export default function Head(){
       <div className="ht">
         <h1 id="hTitle">{(j && j.name) || S.active}</h1>
         <div className="sub" id="hSub">{parts.join(' · ')}</div>
-        <div className="bar"><b id="hBar" style={{ width: barW }} /></div>
+        <Progress percent={parseFloat(barW)} showInfo={false} size={['100%', 4]}
+          strokeColor="var(--blue)" trailColor="var(--line-soft)" className="hbar" id="hBar" />
       </div>
       {badge}
       {state === 'generating' && S.online && (
-        <span className="iconbtn" id="pauseBtn" aria-disabled={caps.pause ? 'false' : 'true'}
+        <Button shape="circle" id="pauseBtn" className="iconbtn" aria-disabled={caps.pause ? 'false' : 'true'}
           style={{ opacity: caps.pause ? '' : 0.45 }}
           title={caps.pause ? (S.paused[S.active] ? '继续' : '暂停') : caps.pauseReason}
-          onClick={caps.pause ? togglePause : () => ui.toast(caps.pauseReason)}>
-          <PauseIcon paused={S.paused[S.active]} /></span>
+          icon={<PauseIcon paused={S.paused[S.active]} />}
+          onClick={caps.pause ? togglePause : () => ui.toast(caps.pauseReason)} />
       )}
       {S.online && caps.stop && (state === 'generating' || st === 'paused') &&
-        <span className="pill" id="stopBtn" onClick={stopJob}>停止</span>}
+        <Button id="stopBtn" className="pill" icon={<StopOutlined />} onClick={stopJob}>停止</Button>}
       {(state === 'completed' || state === 'failed' || state === 'needs_input') && S.online &&
-        <span className="pill" id="redoBtn" title="对已生成的结果提修改要求,出一个新版本" onClick={() => ui.openRedo()}>修改结果</span>}
+        <Button id="redoBtn" className="pill" icon={<ReloadOutlined />}
+          title="对已生成的结果提修改要求,出一个新版本" onClick={() => ui.openRedo()}>修改结果</Button>}
       {S.online && caps.resume &&
-        <span className="pill on" id="resumeBtn" title="从上次中断的检查点接着往下跑,已完成内容不重写" onClick={resumeJob}>从断点继续</span>}
+        <Button id="resumeBtn" className="pill on" icon={<CaretRightOutlined />}
+          title="从上次中断的检查点接着往下跑,已完成内容不重写" onClick={resumeJob}>从断点继续</Button>}
       {j && (j.staged || state === 'preparing') && !S._startBusy &&
-        <span className="pill on" id="startBtn" onClick={startStaged}>▶ 开始生成</span>}
-      <span className="pill" id="logBtn" onClick={() => ui.openLog()}>运行日志</span>
+        <Button type="primary" id="startBtn" className="pill on" icon={<CaretRightOutlined />} onClick={startStaged}>开始生成</Button>}
+      <Button id="logBtn" className="pill" icon={<FileTextOutlined />} onClick={() => ui.openLog()}>运行日志</Button>
       {deliverable && !showResult &&
-        <span className="pill primary" id="resultTabBtn" onClick={() => { S.processView[S.active] = false; ui.render('main'); }}>交付结果</span>}
+        <Button type="primary" id="resultTabBtn" className="pill primary"
+          onClick={() => { S.processView[S.active] = false; ui.render('main'); }}>交付结果</Button>}
       {covPill}
-      <span className={'pill' + ((state === 'completed' || state === 'failed' || state === 'needs_input') ? ' primary' : '')} id="hAct"
+      <Button id="hAct" icon={<SafetyCertificateOutlined />}
+        type={(state === 'completed' || state === 'failed' || state === 'needs_input') ? 'primary' : 'default'}
+        className={'pill' + ((state === 'completed' || state === 'failed' || state === 'needs_input') ? ' primary' : '')}
         onClick={() => ui.openCheck()}>
-        {missingWord ? '查看未完成原因' : (state === 'completed' || state === 'needs_input' ? '查看待确认项' : '出件前检查')}</span>
+        {missingWord ? '查看未完成原因' : (state === 'completed' || state === 'needs_input' ? '查看待确认项' : '出件前检查')}</Button>
     </div></div>
   );
 }

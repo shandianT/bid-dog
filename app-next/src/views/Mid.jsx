@@ -1,6 +1,9 @@
 // 中栏:页签(标书大纲/执行过程/对话与要求)+ 流程台 + 对话 + 工作日志。
 // 页签默认逻辑、流程台视图模型、消息渲染逐字对应经典 currentMidTab/renderFlowConsole/renderChat/renderWorklog。
 import React, { useLayoutEffect, useRef, useState } from 'react';
+import { Card, Steps, List, Tag, Alert, Empty, Badge } from 'antd';
+import { ThoughtChain } from '@ant-design/x';
+import { CheckCircleFilled, LoadingOutlined, CloseCircleFilled, ClockCircleOutlined } from '@ant-design/icons';
 import { S, ui, bump, flowConsoleView, taskPresentation, phaseTimingLabel, timing, fmtDur,
          jobState, _friendlyText, _friendlyActionLabel, errAction, answer, ASK_SELF } from '../core/index.js';
 import { mdHtml } from '../lib.js';
@@ -28,6 +31,13 @@ function FlowConsole(){
   const selected = vm.phases.find(x => x.id === selectedId) || vm.phases[0];
   const checks = Array.isArray(selected.checks) ? selected.checks : [];
   const selectedTiming = phaseTimingLabel(selected), selectedIsCurrent = selected.id === vm.currentPhase;
+  const currentIndex = Math.max(0, vm.phases.findIndex(x => x.id === vm.currentPhase));
+  const trackRef = useRef(null);
+  // antd Steps 不透传任意 DOM 属性,契约要的 data-phase 在渲染后按顺序打上(幂等)
+  useLayoutEffect(() => {
+    const nodes = trackRef.current ? trackRef.current.querySelectorAll('.ant-steps-item') : [];
+    vm.phases.forEach((ph, i) => { if(nodes[i]) nodes[i].setAttribute('data-phase', ph.id); });
+  });
   // 排队中的节点本来就没有细节可说(经典同注释)
   const nodeDetail = x => x.detail || ({ done: '已写完', active: '正在处理', attention: '需要你确认',
     failed: '未完成,可重试', pending: '排队等待,前面的节点完成后自动开始' }[String(x.state)] || '排队等待');
@@ -43,16 +53,22 @@ function FlowConsole(){
         </div>
         <span className={'flow-connection ' + vm.connectionMode}><i className="dot" style={{ background: 'currentColor' }} />{vm.connectionLabel}</span>
       </div>
-      <div className="flow-track">
-        {vm.phases.map(x => (
-          <button key={x.id} type="button" className={'flow-phase ' + x.state + (x.id === selected.id ? ' selected' : '')}
-            data-phase={x.id} aria-pressed={x.id === selected.id}
-            onClick={() => { S.flowPhaseSelection[id] = x.id; bump(); }}>
-            <div className="flow-phase-head"><i className="flow-phase-dot" /><b>{x.label}</b></div>
-            <span title={x.evidence || x.detail}>{x.detail || x.evidence || '等待执行'}</span>
-            {phaseTimingLabel(x) ? <small className="flow-phase-time">{phaseTimingLabel(x)}</small> : null}
-          </button>
-        ))}
+      {/* 真 antd Steps:测试钉的是 .flow-phase[data-phase],用 items.className + 副作用打点保住 */}
+      <div className="flow-track" ref={trackRef}>
+        <Steps size="small" labelPlacement="vertical" current={currentIndex}
+          onChange={i => { const ph = vm.phases[i]; if(ph){ S.flowPhaseSelection[id] = ph.id; bump(); } }}
+          items={vm.phases.map(x => ({
+            className: 'flow-phase ' + x.state + (x.id === selected.id ? ' selected' : ''),
+            status: x.state === 'done' ? 'finish' : x.state === 'active' ? 'process'
+              : (x.state === 'attention' || x.state === 'failed') ? 'error' : 'wait',
+            title: <span className="fp-t">{x.label}</span>,
+            description: (
+              <span className="fp-d">
+                <span title={x.evidence || x.detail}>{x.detail || x.evidence || '等待执行'}</span>
+                {phaseTimingLabel(x) ? <small className="flow-phase-time num">{phaseTimingLabel(x)}</small> : null}
+              </span>
+            ),
+          }))} />
       </div>
       <section className="flow-detail" aria-live="polite">
         <div className="flow-detail-head">
@@ -72,11 +88,21 @@ function FlowConsole(){
         </div>
         <div className="flow-detail-evidence"><b>本阶段产物：</b>{selected.evidence || '开始后生成验收证据'}</div>
         <div className="flow-node-list">
-          {checks.length ? checks.map((x, i) => (
-            <div key={i} className={'flow-node-row ' + x.state}><i className="flow-node-dot" />
-              <div className="flow-node-copy"><b>{x.label || x.id || '未命名节点'}</b><span>{nodeDetail(x)}</span></div>
-              <small className="flow-node-state">{STATE_LABELS[x.state] || '等待中'}</small></div>
-          )) : <div className="flow-node-empty">该阶段尚无子节点记录；开始执行后会在这里展示每个节点的状态、耗时和重试情况。</div>}
+          {checks.length ? (
+            <List size="small" split={false} dataSource={checks}
+              renderItem={x => (
+                <List.Item className={'flow-node-row ' + x.state}>
+                  <List.Item.Meta
+                    avatar={x.state === 'done' ? <CheckCircleFilled style={{ color: 'var(--green)' }} />
+                      : x.state === 'active' ? <LoadingOutlined style={{ color: 'var(--blue)' }} />
+                      : (x.state === 'attention' || x.state === 'failed') ? <CloseCircleFilled style={{ color: 'var(--red)' }} />
+                      : <ClockCircleOutlined style={{ color: 'var(--faint)' }} />}
+                    title={<span className="fn-t">{x.label || x.id || '未命名节点'}</span>}
+                    description={<span className="fn-d">{nodeDetail(x)}</span>} />
+                  <span className="flow-node-state">{STATE_LABELS[x.state] || '等待中'}</span>
+                </List.Item>
+              )} />
+          ) : <div className="flow-node-empty">该阶段尚无子节点记录；开始执行后会在这里展示每个节点的状态、耗时和重试情况。</div>}
         </div>
       </section>
     </section>
@@ -105,9 +131,9 @@ function ChatMessages(){
               {u ? m.text : <span dangerouslySetInnerHTML={{ __html: mdHtml(m.text) }} />}
               {!u && m.actions && m.actions.length ? (
                 <div className="chips" style={{ marginTop: 8 }}>
-                  {m.actions.map((a, ai) => <span key={ai} className={'chip' + (ai ? ' gy' : '')}
+                  {m.actions.map((a, ai) => <Tag.CheckableTag key={ai} checked={!ai} className={'chip' + (ai ? ' gy' : '')}
                     data-eact={a.act} data-eparam={a.param || ''}
-                    onClick={() => errAction(a.act, a.file || '', a.param || '')}>{_friendlyActionLabel(a.label)}</span>)}
+                    onChange={() => errAction(a.act, a.file || '', a.param || '')}>{_friendlyActionLabel(a.label)}</Tag.CheckableTag>)}
                 </div>
               ) : null}
             </div>
@@ -119,8 +145,8 @@ function ChatMessages(){
         );
       })}
       {q && options.length > 0 && (
-        <div className="chips">{options.map((o, i) => <span key={o} className={'chip' + (i ? ' gy' : '')}
-          onClick={() => answer(o)}>{o}</span>)}</div>
+        <div className="chips">{options.map((o, i) => <Tag.CheckableTag key={o} checked={!i} className={'chip' + (i ? ' gy' : '')}
+          onChange={() => answer(o)}>{o}</Tag.CheckableTag>)}</div>
       )}
       {S.typing[S.active] && <div className="typing"><span className="tdot" /><span className="tdot" /><span className="tdot" /><span>中标狗 正在回复…</span></div>}
     </div>
@@ -129,52 +155,49 @@ function ChatMessages(){
 
 function Worklog(){
   const id = S.active, wl = (id && S.worklog[id]) || [];
-  const bodyRef = useRef(null);
-  const stickRef = useRef(true);
-  const [open, setOpen] = useState(true);
-  useLayoutEffect(() => {
-    const b = bodyRef.current; if(!b) return;
-    if(stickRef.current) b.scrollTop = b.scrollHeight;
-  });
   const p0 = S.prog[id] || {};
   const j0 = (S.jobs || []).find(x => x.job_id === id);
   const running = j0 ? jobState(j0) === 'running' : (p0.pct || 0) < 100 && p0.step;
-  // 没有台词时降级成「进度 + 已等多久」(经典同注释:至少让人知道它还活着、活在哪一步)
+  const live = (p0.pct || 0) < 100;
+  // 台词按「── 第 N 步 · 名称 ──」分段,正好落成 ThoughtChain 的一节:
+  // 标题=这一步在干什么,内容=它逐行报的事实。
+  const items = [];
+  wl.forEach(line => {
+    const m = String(line).match(/^──\s*(.+?)\s*──$/);
+    if(m) items.push({ title: m[1], lines: [] });
+    else {
+      if(!items.length) items.push({ title: '准备中', lines: [] });
+      items[items.length - 1].lines.push(line);
+    }
+  });
   if(!wl.length){
+    // 没有台词时降级成「进度 + 已等多久」(经典同注释:至少让人知道它还活着、活在哪一步)
     if(!running) return null;
     const t = timing(id);
     const bits = [p0.stage ? '正在:' + _friendlyText(p0.stage) : '正在启动'];
     if(p0.step) bits.push('第 ' + p0.step + '/' + (p0.total || 12) + ' 步');
     if(t && t.elapsed) bits.push('已用 ' + fmtDur(t.elapsed));
     return (
-      <div className="lcard wl">
-        <div className="wl-head"><span className="lt">它正在做什么</span>
-          <span className="wl-live"><i className="pulse" style={{ width: 7, height: 7 }} />进行中</span></div>
-        <div className="wl-body"><div className="wl-line step">{bits.join(' · ')}</div></div>
-        <div className="wl-note">当前生成方式没有返回完整过程记录,所以这里只显示阶段进度。产物会在右侧「已产出」里逐个出现——那是它真的在干活的证据。</div>
-      </div>
+      <Card variant="borderless" className="lcard-a" title="它正在做什么"
+        extra={<Tag color="processing" bordered={false}>进行中</Tag>}>
+        <ThoughtChain items={[{ key: 'now', title: bits.join(' · '), status: 'pending',
+          description: '当前生成方式没有返回完整过程记录,所以这里只显示阶段进度。产物会在右侧「已产出」里逐个出现——那是它真的在干活的证据。' }]} />
+      </Card>
     );
   }
-  const live = (p0.pct || 0) < 100;
   return (
-    <div className="lcard wl">
-      <div className="wl-head">
-        <span className="lt">{live ? '它正在做什么' : '工作过程回放'}</span>
-        {live ? <span className="wl-live"><i className="pulse" style={{ width: 7, height: 7 }} />进行中</span>
-              : <span className="lx num">{wl.length} 行</span>}
-        <span className="tg" onClick={() => setOpen(v => !v)}>{open ? '收起' : '展开'}</span>
+    <Card variant="borderless" className="lcard-a" title={live ? '它正在做什么' : '工作过程回放'}
+      extra={live ? <Tag color="processing" bordered={false}>进行中</Tag>
+                  : <span className="lx num">{wl.length} 行</span>}>
+      <div className="wl-scroll">
+        <ThoughtChain collapsible items={items.map((it, i) => ({
+          key: String(i),
+          title: it.title,
+          status: (live && i === items.length - 1) ? 'pending' : 'success',
+          content: <div className="wl-lines">{it.lines.map((l, k) => <div className="wl-line" key={k}>{l}</div>)}</div>,
+        }))} />
       </div>
-      {open && (
-        <div className="wl-wrap"><div className="wl-body" ref={bodyRef}
-          onScroll={e => { const b = e.target; stickRef.current = b.scrollTop + b.clientHeight >= b.scrollHeight - 30; }}>
-          {wl.map((line, i) => {
-            const step = /^──/.test(line);
-            return <div key={i} className={'wl-line' + (step ? ' step' : '') + (live && i === wl.length - 1 ? ' last' : '')}>
-              {step ? line.replace(/^──\s*|\s*──$/g, '') : line}</div>;
-          })}
-        </div></div>
-      )}
-    </div>
+    </Card>
   );
 }
 
@@ -186,11 +209,9 @@ function Chapters(){
   const arts = S.arts[id] || [];
   const done = nodes.filter(n => n.state === 'done').length;
   return (
-    <div className="lcard">
-      <div className="lcard-head">
-        <span className="lt">章节撰写 <span className="num" style={{ color: 'var(--dim)', fontWeight: 450 }}>{done}/{nodes.length}</span></span>
-        <span className="lx">每写完一节即存检查点 · 中途停下不丢内容</span>
-      </div>
+    <Card variant="borderless" className="lcard-a"
+      title={<span>章节撰写 <span className="num" style={{ color: 'var(--dim)', fontWeight: 450 }}>{done}/{nodes.length}</span></span>}
+      extra={<span className="lx">每写完一节即存检查点 · 中途停下不丢内容</span>}>
       <div className="chgrid">
         {nodes.map(n => {
           const out = (n.outputs && n.outputs[0]) || '';
@@ -213,7 +234,7 @@ function Chapters(){
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -232,7 +253,8 @@ export default function Mid(){
       )}
       <div className="cwrap"><ConfirmCard /></div>
       {on && tab === 'outline' && <div className="cwrap" id="outlineHost"><Outline /></div>}
-      {(!on || tab === 'flow') && <div className="cwrap" id="flowHost"><div className="lcard"><FlowConsole /></div></div>}
+      {(!on || tab === 'flow') && <div className="cwrap" id="flowHost">
+        <Card variant="borderless" className="lcard-a"><FlowConsole /></Card></div>}
       {on && tab === 'flow' && <div className="cwrap"><Chapters /></div>}
       {(!on || tab === 'chat') && <div className="cwrap"><ChatMessages /></div>}
       {(!on || tab === 'chat') && <div className="cwrap"><Worklog /></div>}

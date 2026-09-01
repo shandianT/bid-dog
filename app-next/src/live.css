@@ -148,7 +148,9 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .qdot{width:8px;height:8px;border-radius:50%;border:1.5px solid #c9cdd4;flex:none}
 .chfail{width:9px;height:9px;border-radius:50%;background:var(--red);flex:none}
 
-/* 流程台:阶段轨道做成 Steps 观感(圆点 + 连接线 + 竖排标签) */
+/* 流程台:阶段轨道现在是真的 antd Steps。这里只调色与字号,布局交给组件——
+   之前我给 .flow-phase 写的绝对定位/flex 规则会打在 .ant-steps-item 上,
+   把组件的内部布局挤坏(真机截图里「环境准备」被压成一列竖字)。 */
 .flow-console{display:flex;flex-direction:column;gap:16px}
 .flow-top{display:flex;align-items:flex-start;gap:12px}
 .flow-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
@@ -160,29 +162,12 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .flow-connection .dot{width:6px;height:6px;border-radius:50%}
 .flow-connection.connected,.flow-connection.recovered{color:var(--green);background:var(--green-bg)}
 .flow-connection.reconnecting,.flow-connection.polling{color:var(--amber);background:var(--amber-bg)}
-.flow-track{display:grid;grid-template-columns:repeat(6,1fr);gap:0;padding:2px 0 4px}
-.flow-phase{position:relative;background:transparent;border:0;padding:26px 6px 0;cursor:pointer;
-  display:flex;flex-direction:column;gap:4px;text-align:center;min-width:0;transition:opacity .16s}
-.flow-phase:hover{opacity:.78}
-.flow-phase:before,.flow-phase:after{content:'';position:absolute;top:6px;height:2px;background:var(--line)}
-.flow-phase:before{left:0;right:50%;margin-right:7px}
-.flow-phase:after{left:50%;right:0;margin-left:7px}
-.flow-phase:first-child:before,.flow-phase:last-child:after{display:none}
-.flow-phase.done:after,.flow-phase.done:before{background:#bfe6d4}
-.flow-phase.active:before{background:#bfe6d4}
-.flow-phase-dot{position:absolute;top:0;left:50%;transform:translateX(-50%);width:13px;height:13px;
-  border-radius:50%;background:#fff;border:2px solid #d5d9e0;box-sizing:border-box}
-.flow-phase.done .flow-phase-dot{background:var(--green);border-color:var(--green)}
-.flow-phase.active .flow-phase-dot{background:var(--blue);border-color:var(--blue);
-  box-shadow:0 0 0 4px rgba(15,98,214,.14)}
-.flow-phase.attention .flow-phase-dot,.flow-phase.failed .flow-phase-dot{background:var(--amber);border-color:var(--amber)}
-.flow-phase-head{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0}
-.flow-phase-head b{font:600 12.5px/1.35 inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.flow-phase.selected .flow-phase-head b{color:var(--blue)}
-.flow-phase.done .flow-phase-head b{color:var(--sub)}
-.flow-phase>span{font:400 11px/1.45 inherit;color:var(--dim);overflow:hidden;text-overflow:ellipsis;
-  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.flow-phase-time{font:400 10.5px/1.3 inherit;color:var(--faint)}
+.flow-track{padding:6px 2px 2px}
+.flow-track .ant-steps-item{cursor:pointer}
+.flow-track .fp-t{font:600 12.5px/1.4 inherit;white-space:nowrap}
+.flow-track .fp-d{display:block;font:400 11px/1.5 inherit;color:var(--dim);max-width:132px;margin:0 auto}
+.flow-track .flow-phase-time{display:block;color:var(--faint);font-size:10.5px;margin-top:2px}
+.flow-track .flow-phase.selected .fp-t{color:var(--blue)}
 .flow-detail{border-top:1px solid var(--line-soft);padding-top:15px;display:flex;flex-direction:column;gap:10px}
 .flow-detail-head{display:flex;align-items:center;gap:10px}
 .flow-detail-heading{flex:1;display:flex;flex-direction:column;gap:3px}
@@ -199,16 +184,10 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .flow-detail-meta{display:flex;gap:16px;flex-wrap:wrap;font:400 11.5px/1.5 inherit;color:var(--dim)}
 .flow-detail-meta b{font-weight:600;color:var(--sub)}
 .flow-detail-evidence{font:400 11.5px/1.6 inherit;color:var(--dim)}
-.flow-node-list{display:flex;flex-direction:column;gap:5px;margin-top:2px}
-.flow-node-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line-soft);border-radius:10px;
-  padding:10px 12px;background:#fff}
-.flow-node-dot{width:7px;height:7px;border-radius:50%;background:#c9cdd4;flex:none}
-.flow-node-row.done .flow-node-dot{background:var(--green)}
-.flow-node-row.active .flow-node-dot{background:var(--blue);box-shadow:0 0 0 3px rgba(15,98,214,.14)}
-.flow-node-row.attention .flow-node-dot,.flow-node-row.failed .flow-node-dot{background:var(--red)}
-.flow-node-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.flow-node-copy b{font:550 12.5px/1.45 inherit}
-.flow-node-copy span{font:400 11.5px/1.45 inherit;color:var(--dim)}
+.flow-node-list{margin-top:2px}
+.flow-node-list .ant-list-item{padding:9px 2px}
+.flow-node-row .fn-t{font:550 12.5px/1.45 inherit}
+.flow-node-row .fn-d{font:400 11.5px/1.45 inherit;color:var(--dim)}
 .flow-node-state{font:500 10.5px/1 inherit;color:var(--dim);flex:none}
 .flow-node-empty{font:400 12.5px/1.7 inherit;color:var(--faint);padding:8px 2px}
 
@@ -288,10 +267,7 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 
 /* ============ 右栏 ============ */
 .rail{display:flex;flex-direction:column;gap:12px;padding:16px 16px 16px 4px;overflow-y:auto;min-height:0}
-.rail .card{background:var(--card);border-radius:var(--r-card);box-shadow:var(--sh);padding:16px 17px;
-  display:flex;flex-direction:column;gap:11px}
-.rail .ch{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:20px}
-.rail .ct{font:600 12.5px/1 inherit;color:var(--ink);display:flex;align-items:center;gap:6px}
+/* 右栏卡片现在是 antd Card(.rcard);这里只留下不由组件负责的内容样式 */
 .rail .cr{font:400 11px/1 inherit;color:var(--dim)}
 .rail .tgl{font:400 10.5px/1 inherit;color:var(--blue);cursor:pointer;margin-left:5px}
 .rail .addref{font:450 11px/1 inherit;color:var(--blue);cursor:pointer;display:flex;align-items:center;gap:4px}
@@ -519,10 +495,12 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 /* ============ 状态栏 / 全局 ============ */
 .statusbar{height:28px;display:flex;align-items:center;gap:8px;padding:0 16px;border-top:1px solid var(--line-soft);
   background:var(--card);font:400 10.5px/1 inherit;color:var(--faint)}
-/* 顶部正中会压住任务标题(真机截图里「滨江新区智慧管…」被挡掉半行),挪到底部状态栏上方 */
-.demo-tag{position:fixed;bottom:38px;left:50%;transform:translateX(-50%);z-index:80;background:var(--amber-bg);
-  color:var(--amber);border:1px solid var(--amber-line);border-radius:999px;padding:7px 16px;
-  font:500 11.5px/1.4 inherit;box-shadow:var(--sh);max-width:76vw;pointer-events:none;text-align:center}
+/* 位置换过两次:顶部正中压任务标题,底部正中压输入框——都在用户的必经动线上。
+   最后落在右下角状态栏上方:那里没有任何操作元素。 */
+.demo-tag{position:fixed;bottom:36px;right:16px;z-index:80;background:var(--amber-bg);
+  color:var(--amber);border:1px solid var(--amber-line);border-radius:999px;padding:7px 15px;
+  font:500 11.5px/1.4 inherit;box-shadow:var(--sh);max-width:min(420px,46vw);pointer-events:none;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #toast{position:fixed;bottom:46px;left:50%;transform:translateX(-50%) translateY(8px);z-index:90;background:#1c1e24;
   color:#fff;border-radius:11px;padding:11px 17px;font:450 12.5px/1.5 inherit;opacity:0;pointer-events:none;
   transition:opacity .2s,transform .2s;max-width:70vw;box-shadow:var(--sh-lift)}
@@ -617,3 +595,41 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
   .tbacts{flex-wrap:wrap}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ============ 与真组件配合的微调(只调令牌,不夺布局) ============ */
+.lcard-a,.rcard,.result-card,.confirm-card{box-shadow:var(--sh);border-radius:var(--r-card)}
+.lcard-a .ant-card-head,.rcard .ant-card-head,.result-card .ant-card-head,.confirm-card .ant-card-head{
+  min-height:auto;padding:14px 20px 0;border-bottom:0;font:600 13.5px/1.4 inherit}
+.lcard-a .ant-card-head-title,.rcard .ant-card-head-title{padding:0}
+.rcard .ant-card-head{padding:12px 16px 0;font-size:12.5px}
+.rcard .ant-card-body{padding:12px 16px 14px}
+.lcard-a .ant-card-body{padding:14px 20px 18px}
+.result-card .ant-card-body{padding:14px 20px 18px}
+.confirm-card .ant-card-body{padding:12px 20px 18px}
+.confirm-card{border-left:3px solid var(--amber)}
+.confirm-kv .ant-descriptions-item-label{color:var(--dim);font-weight:550;width:76px}
+.confirm-kv .ant-descriptions-item-container{align-items:baseline}
+/* Prompts / Sender:与卡片同一套圆角与留白 */
+.compose .ant-prompts{margin-bottom:2px}
+.compose .ant-sender{border-radius:15px}
+.artgrp .ant-collapse-header{padding:8px 2px!important;align-items:center!important}
+.artgrp .ant-collapse-content-box{padding:0 2px 4px!important}
+.artgrp .ant-list-item{padding:7px 2px;align-items:flex-start}
+.artgrp .ant-list-item .ant-list-item-action{margin-left:6px}
+.artgrp .fmain{flex:1;min-width:0}
+.artgrp .ftop{gap:6px}
+.artgrp .ftop .fn{flex:1;min-width:0}
+.artgrp .fdesc{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.openart.ant-btn{color:var(--blue);padding:0 6px;height:24px}
+.outline .ant-list-item{padding:11px 14px;background:#fff;border:1px solid var(--line-soft);
+  border-radius:11px;margin-bottom:4px;cursor:pointer;transition:box-shadow .16s,border-color .16s}
+.outline .ant-list-item:hover{border-color:var(--line);box-shadow:var(--sh)}
+.outline .ant-list-item-meta-title{margin-bottom:1px!important;font:550 13px/1.5 inherit}
+.outline .ant-list-item-meta-description{font:400 11.5px/1.45 inherit;color:var(--dim)}
+.outline-empty{align-items:center}
+.ckList .ant-list-item,.covList .ant-list-item{border:1px solid var(--line-soft);border-radius:11px;
+  padding:11px 14px;margin-bottom:6px}
+.covitem.ok{border-color:#dcefe5!important;background:#f6fbf8}
+.hbar .ant-progress-inner{border-radius:99px}
+.badge.ant-tag{border-radius:999px;padding:5px 11px;margin:0;display:inline-flex;align-items:center;gap:6px}
+.chip.ant-tag{border-radius:999px;padding:8px 14px;margin:0;font-size:12px}
