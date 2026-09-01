@@ -710,3 +710,35 @@ jobs:
           if release.get("tag_name") != "desktop-v0.20.6":
               raise SystemExit("published release tag mismatch")
           PY
+      - name: publish the update manifest to the site (国内直连通道)
+        shell: bash
+        run: |
+          # 为什么要把清单落成静态文件,而不是让 vercel.json 转发到 Release:
+          # GitHub 的 /releases/download/... 会 302 到 release-assets.githubusercontent.com,
+          # Vercel 的 rewrite 把这个 302 原样透传给客户端。结果客户端还是得连上 GitHub,
+          # 「查更新不依赖 GitHub」这个目的一点没达到,还白添一跳(实测过)。
+          # 清单只有 1.3 KB,直接由 CI 提交成静态文件,Vercel 就能 200 直出。
+          #
+          # 注意范围:清单里的下载地址仍指向 GitHub,所以「装更新」依然需要 GitHub。
+          # 这一步买到的是「查更新」这一步不依赖 GitHub——它小、频繁,值得。
+          if [ ! -f out/latest.json ]; then
+            echo "no latest.json (signing key absent); nothing to publish"; exit 0
+          fi
+          cp out/latest.json site/updater/darwin-aarch64.json
+          cp out/latest.json site/updater/windows-x86_64.json
+          git add site/updater/darwin-aarch64.json site/updater/windows-x86_64.json
+          # 先 add 再比对暂存区:git diff 看不见未跟踪的新文件,首次发布会被误判成
+          # 「没有变化」而直接跳过提交。
+          if git diff --cached --quiet -- site/updater; then
+            echo "manifest unchanged; nothing to commit"; exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "site: publish update manifest for desktop-v0.20.6"
+          # 只动 site/**,build.yml 的 push 触发器对它 paths-ignore,不会引发构建回环;
+          # pages.yml 与 Vercel 会照常部署。并发下 main 可能已前进,重试时先 rebase。
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            git fetch origin main && git rebase origin/main || exit 1
+          done
+          echo "could not push the update manifest after 3 attempts"; exit 1
