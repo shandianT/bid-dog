@@ -3,7 +3,7 @@
 import React, { useRef } from 'react';
 import { Card, List, Tag, Button, Progress, Collapse, Empty } from 'antd';
 import { PlusOutlined, FileWordOutlined, FolderOpenOutlined, DownloadOutlined,
-         ExportOutlined } from '@ant-design/icons';
+         ExportOutlined, RightOutlined } from '@ant-design/icons';
 import { S, ui, bump, verdict, timing, fmtDur, DEFAULT_STAGES, _friendlyText, wordPresence,
          completionGate, deliveryDeadEnd, knownStep, jobState, deliveryViewModel } from '../core/index.js';
 import { IS_WEB } from '../core/env.js';
@@ -57,6 +57,8 @@ export default function Rail(){
   const hth = S.health[id];
   const openGaps = hth ? (hth.gaps || []).filter(g => g.level !== 'green') : [];
   const first = openGaps[0];
+  const reds = openGaps.filter(g => g.level === 'red').length;
+  const yellows = openGaps.length - reds;
   const warnD = !hth ? '出 Word 后在这里看结论与补料清单'
     : first ? (_friendlyText(first.title || '') + (first.detail ? ' —— ' + _friendlyText(first.detail) : '')
                + (openGaps.length > 1 ? '(点开看全部 ' + openGaps.length + ' 项)' : '(点开逐条处理)'))
@@ -68,6 +70,7 @@ export default function Rail(){
 
   const vm = deliveryViewModel(job || {}, S.arts[id] || []);
   const primary = vm.primary;
+  const cov = S.coverage[id];
   return (
     <div className="rail" id="rail">
       {/* 交付物永远是右栏第一张卡(原型定的规矩):还没出件时也先告诉用户「将要交付什么」 */}
@@ -117,6 +120,24 @@ export default function Rail(){
           </div>
         )}
       </Card>
+      {/* 评分点覆盖:比例本身就是结论(覆盖率=得分依据),用环形一眼看出还差多少。
+          数据来自 /v1/jobs/{id}/coverage,每写完一章引擎重算一次。 */}
+      {cov && cov.available && (
+        <Card variant="borderless" className="rcard" size="small" title="评分点覆盖 · 实时"
+          extra={<Button type="link" size="small" onClick={() => ui.openCoverage()}>查看明细 <RightOutlined /></Button>}>
+          <div className="covrow">
+            <Progress type="circle" size={68}
+              percent={cov.total ? Math.round(cov.covered / cov.total * 100) : 0}
+              strokeColor={cov.covered >= cov.total ? 'var(--green)' : 'var(--blue)'}
+              trailColor="var(--line-soft)"
+              format={() => <span className="num" style={{ fontSize: 14, fontWeight: 650 }}>{cov.covered}/{cov.total}</span>} />
+            <div className="covwhy">
+              <span>写完一章,自动核对一章</span>
+              <i>每个评分点都能点开看「原文依据 ↔ 落位章节」</i>
+            </div>
+          </div>
+        </Card>
+      )}
       {/* 自然高度:产物少时不撑出空白,多了由 .cardlist 自己滚(整列也可滚) */}
       <Card variant="borderless" className="rcard" size="small"
         title={<span>已产出 <span id="artCount" className="num">{arts.length ? '· ' + arts.length : ''}</span></span>}
@@ -177,6 +198,13 @@ export default function Rail(){
         <div className="t"><span className="dot" id="warnDot" style={{ background: hth ? verdict(id).color : 'var(--amber)' }} />
           <span id="warnT">{hth ? '提交前需处理 ' + openGaps.length + ' 项' : '出件前检查'}</span></div>
         <div className="d" id="warnD">{warnD}</div>
+        {/* 3 项里几项是「不改不能投」、几项是「建议改」,紧急度差很远——只报总数等于让人自己去点开数 */}
+        {openGaps.length > 0 && (
+          <div className="gapmix">
+            {reds > 0 && <Tag color="error" bordered={false}>必办 {reds}</Tag>}
+            {yellows > 0 && <Tag color="warning" bordered={false}>建议 {yellows}</Tag>}
+          </div>
+        )}
       </Card>
     </div>
   );

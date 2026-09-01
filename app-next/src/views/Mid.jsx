@@ -1,7 +1,7 @@
 // 中栏:页签(标书大纲/执行过程/对话与要求)+ 流程台 + 对话 + 工作日志。
 // 页签默认逻辑、流程台视图模型、消息渲染逐字对应经典 currentMidTab/renderFlowConsole/renderChat/renderWorklog。
 import React, { useLayoutEffect, useRef, useState } from 'react';
-import { Card, Steps, List, Tag, Alert, Empty, Badge } from 'antd';
+import { Card, Steps, List, Tag, Alert, Empty, Badge, Progress } from 'antd';
 import { ThoughtChain } from '@ant-design/x';
 import { CheckCircleFilled, LoadingOutlined, CloseCircleFilled, ClockCircleOutlined } from '@ant-design/icons';
 import { S, ui, bump, flowConsoleView, taskPresentation, phaseTimingLabel, timing, fmtDur,
@@ -212,6 +212,8 @@ function Chapters(){
     <Card variant="borderless" className="lcard-a"
       title={<span>章节撰写 <span className="num" style={{ color: 'var(--dim)', fontWeight: 450 }}>{done}/{nodes.length}</span></span>}
       extra={<span className="lx">每写完一节即存检查点 · 中途停下不丢内容</span>}>
+      <Progress percent={Math.round(done / nodes.length * 100)} showInfo={false} size={['100%', 4]}
+        strokeColor="var(--green)" trailColor="var(--line-soft)" style={{ marginBottom: 10 }} />
       <div className="chgrid">
         {nodes.map(n => {
           const out = (n.outputs && n.outputs[0]) || '';
