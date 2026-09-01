@@ -93,6 +93,17 @@
           "value": "public, max-age=300, must-revalidate"
         }
       ]
+    },
+    {
+      "source": "/app/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=3600, s-maxage=31536000, stale-while-revalidate=86400"
+        }
+      ]
     }
-  ]
+  ],
+  "installCommand": "npm ci --prefix app-next",
+  "buildCommand": "npm run build --prefix app-next && rm -rf site/app && mkdir -p site/app && cp -R app-next/dist/. site/app/"
 }

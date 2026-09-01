@@ -35,7 +35,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.21.0'
+ENGINE_VERSION = '0.21.1'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -1904,7 +1904,9 @@ def content_gate(job, names):
     except Exception:
         return {'status': 'unknown', 'level': 'unknown', 'summary': '内容检查组件不可用'}
     gaps, bad = [], []
-    bodies = set(_body_mds(job, names)) | set(_body_docxs(job, names))
+    # 章节稿也要扫:复读循环是**某一章**写坏了,只扫合并后的整册虽然也能看见,
+    # 却说不出是哪一章——而这类问题的处理动作恰恰是「重做那一章」,得有章名才点得动。
+    bodies = set(_body_mds(job, names)) | set(_body_docxs(job, names)) | set(_chapter_mds(job, names))
     for fn in sorted(bodies):
         try:
             r = dq.detect(dq.read_any(os.path.join(job, fn)))
@@ -1913,8 +1915,15 @@ def content_gate(job, names):
         for i in r.get('issues', []):
             bad.append(fn)
             # 每条都挂上真能点的「一键修复」:这类问题的处理动作就是清洗,不用让用户自己去找按钮
+            acts = [{'act': 'repair', 'label': '一键修复'}]
+            # 复读循环是例外:清洗只能把几百遍折成一遍,折完这一章仍旧没有内容。
+            # 首选动作必须是「重做这一章」,否则修完看着干净、交出去还是废稿。
+            if i.get('code') == 'loop':
+                acts = [{'act': 'redo', 'label': '重做这一章',
+                         'param': '重写章节「%s」' % os.path.splitext(fn)[0]},
+                        {'act': 'repair', 'label': '仅折叠复读'}]
             gaps.append({'level': 'red', 'title': '%s:%s' % (fn, i['title']), 'detail': i['detail'],
-                         'actions': [{'act': 'repair', 'label': '一键修复'}]})
+                         'actions': acts})
     if gaps:
         emit(job, {'type': 'message', 'role': 'agent',
                    'text': '⚠ 内容门禁未通过:%s 存在正文被逐字打散或整段重复灌注的问题,直接交付会是废稿。'

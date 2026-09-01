@@ -700,6 +700,25 @@ def _output_text(path: Path) -> str:
     return ""
 
 
+def _degenerate_loop(text: str):
+    """本次产出里有没有段内复读循环。返回 (复读单元, 次数) 或 None。
+
+    判定口径与 doc_quality.degenerate_span 完全共用——同一个「什么叫退化」只能有
+    一处定义，否则出件前检查和节点门禁迟早各说各话。"""
+    try:
+        import doc_quality
+    except Exception:
+        return None
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("|"):
+            continue
+        hit = doc_quality.degenerate_span(stripped)
+        if hit:
+            return (hit[0], hit[1])
+    return None
+
+
 def validate_outputs(job: os.PathLike[str] | str, node: Dict[str, Any]) -> None:
     root = Path(job)
     outputs = node.get("outputs") or []
@@ -724,9 +743,20 @@ def validate_outputs(job: os.PathLike[str] | str, node: Dict[str, Any]) -> None:
             except zipfile.BadZipFile as exc:
                 raise OutputValidationError("Word 输出不是有效 DOCX：%s" % path.name) from exc
             continue
-        minimum = int(node.get("min_chars") or 0) if path.suffix.lower() in (".md", ".txt") else 0
-        if minimum and len(_output_text(path).strip()) < minimum:
-            raise OutputValidationError("输出内容不足：%s" % path.name)
+        if path.suffix.lower() in (".md", ".txt"):
+            text = _output_text(path)
+            # 复读循环必须在这里拦住,不能等进了 Word 再清洗:模型卡进循环时字数从来
+            # 不缺，min_chars 这种长度门槛反而在奖励它。抛 OutputValidationError 会被
+            # 归成 node_output_invalid（retryable），本章按既有重试预算自动重跑。
+            # 只查章节稿:组成清单、响应矩阵这类结构化产出里,同一措辞反复出现是正常的
+            # (「逐项响应」在一张表里出现几十次并不是退化),对它们套复读门禁只会误伤。
+            loop = _degenerate_loop(text) if str(node.get("id") or "").startswith("chapter_write:") else None
+            if loop:
+                raise OutputValidationError(
+                    "输出卡进复读循环：%s 里「%s」连着重复 %d 遍" % (path.name, loop[0][:16], loop[1]))
+            minimum = int(node.get("min_chars") or 0)
+            if minimum and len(text.strip()) < minimum:
+                raise OutputValidationError("输出内容不足：%s" % path.name)
     if node.get("id") == "response_plan":
         data = _read(root / "response_plan.json")
         _validated_plan_chapters(data)

@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      # 官网的在线体验就是 app-next 的构建产物,界面改了官网也必须重新部署
+      - "app-next/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -26,6 +28,18 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: build the web app into site/app
+        run: |
+          npm ci --prefix app-next
+          npm run build --prefix app-next
+          rm -rf site/app && mkdir -p site/app
+          cp -R app-next/dist/. site/app/
+          test -f site/app/index.html
 
       - name: configure pages
         uses: actions/configure-pages@v5

@@ -16,12 +16,19 @@ def test_proprietary_license_names_the_confirmed_individual_rights_holder():
 
 
 def test_user_visible_copyright_statement_is_present_in_all_frontend_copies():
+    # 用户真正看得见的前端有两份:新界面(桌面与官网在线体验共用同一份构建产物)
+    # 和留作回滚的经典单文件前端。site/demo.html 与 site/app/index.html 曾经也在这张
+    # 清单上——前者已改为 0.5 秒跳转页(没有正文可署名),后者从 0.21.0 起是构建产物、
+    # 不再进仓库,署名跟着 app-next 的源码走。
     for relative in (
+        "app-next/src/App.jsx",
         "app/src/index.html",
-        "site/demo.html",
-        "site/app/index.html",
     ):
         assert "© 2026 张家涛" in (ROOT / relative).read_text(encoding="utf-8")
+
+    # 跳转页本身不需要署名,但它必须真的把人送到署了名的那一份去
+    demo = (ROOT / "site/demo.html").read_text(encoding="utf-8")
+    assert "/app/index.html?demo=1" in demo
 
     homepage = (ROOT / "site/index.html").read_text(encoding="utf-8")
     assert "中标狗 · 作者 FDE 家涛" in homepage
