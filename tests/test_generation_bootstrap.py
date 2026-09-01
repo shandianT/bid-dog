@@ -396,7 +396,9 @@ def test_truncated_chapter_continues_once_without_discarding_first_response(
         "# 采购要求\n\n必须提供完整实施、验收与运维方案。", encoding="utf-8"
     )
     calls = []
-    first = "# 实施方案\n\n" + "第一部分逐项响应招标要求，并给出验收依据。" * 140
+    # 同上:变化的是句尾序号,断言里的「第一部分逐项响应」前缀原样保留
+    first = "# 实施方案\n\n" + "".join(
+        "第一部分逐项响应招标要求，并给出验收依据（第%d项）。" % j for j in range(1, 141))
     second = "## 运维与验收\n\n第二部分补齐运维安排和量化验收标准。" * 12
 
     def fake_openai(_base, _key, _path, payload=None, **_kwargs):
@@ -705,7 +707,10 @@ def test_pipeline_worker_runs_local_parse_short_nodes_and_word_checkpoint(engine
                      "dependencies": ["plan_a"]},
                 ]})
             else:
-                text = "# %s\n\n%s" % (node["title"], "逐项依据招标要求响应。" * 120)
+                # 假模型也得写「像样的正文」:同一句连着重复 120 遍正是复读退化的形状,
+                # 章节门禁会(正确地)把它判成废稿,stub 也就不再代表正常产出了。
+                text = "# %s\n\n%s" % (node["title"], "".join(
+                    "逐项依据招标要求响应第%d条。" % j for j in range(1, 121)))
                 (Path(path) / output).write_text(text, encoding="utf-8")
 
     def export_word(path, known, force=False):
