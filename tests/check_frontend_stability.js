@@ -10,7 +10,9 @@ const root = path.resolve(__dirname, '..');
 const htmlPath = path.join(root, 'app', 'src', 'index.html');
 const html = fs.readFileSync(htmlPath, 'utf8');
 const demoHtml = fs.readFileSync(path.join(root, 'site', 'demo.html'), 'utf8');
-const siteAppHtml = fs.readFileSync(path.join(root, 'site', 'app', 'index.html'), 'utf8');
+const vercelConf = fs.readFileSync(path.join(root, 'vercel.json'), 'utf8');
+const pagesWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'pages.yml'), 'utf8');
+const rootIgnore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
 const rustMain = fs.readFileSync(path.join(root, 'app', 'src-tauri', 'src', 'main.rs'), 'utf8');
 const tauriConf = JSON.parse(fs.readFileSync(path.join(root, 'app', 'src-tauri', 'tauri.conf.json'), 'utf8'));
 const appVersion = JSON.parse(fs.readFileSync(path.join(root, 'app', 'package.json'), 'utf8')).version;
@@ -425,9 +427,28 @@ test('本地引擎离线时提供真正的桌面修复，源码预览不冒充�
   assert.match(discovery, /clearTimeout/);
 });
 
-test('桌面、在线体验与站点应用三个前端副本保持完全一致', () => {
-  assert.strictEqual(demoHtml, html, 'site/demo.html 与桌面前端发生漂移');
-  assert.strictEqual(siteAppHtml, html, 'site/app/index.html 与桌面前端发生漂移');
+test('官网的在线体验由构建产出,不再是经典前端的手工副本', () => {
+  // 旧规矩是「site/demo.html 与 site/app/index.html 必须与桌面前端逐字一致」——那是
+  // 单文件前端时代唯一可行的办法。0.21.0 起在线体验就是 app-next 的构建产物,
+  // 再留手工副本只会和它越漂越远,所以这条断言换了职责:守住「产物是现做的」。
+  assert.ok(!fs.existsSync(path.join(root, 'site', 'app', 'index.html'))
+            || /site\/app\//.test(rootIgnore),
+    'site/app/ 必须是构建产物:要么不存在,要么被 .gitignore 挡住,不能作为副本进仓库');
+  assert.match(rootIgnore, /^site\/app\/$/m, '.gitignore 没把 site/app/ 挡住,构建产物会被误提交');
+
+  // 两条部署路径都必须先构建再发布,少一条官网就会停在旧界面
+  assert.match(vercelConf, /npm run build --prefix app-next/,
+    'vercel.json 没有构建 app-next,官网会发出一个空的 /app/');
+  assert.match(vercelConf, /site\/app/, 'vercel.json 没把构建产物放进 site/app');
+  assert.match(pagesWorkflow, /npm run build --prefix app-next/,
+    'pages.yml 没有构建 app-next');
+  assert.match(pagesWorkflow, /"app-next\/\*\*"/,
+    'pages.yml 的触发路径不含 app-next:改了界面官网不会重新部署');
+
+  // 老链接不能断:demo.html 转到构建产物,而不是自己再存一份正文
+  assert.ok(demoHtml.length < 2000, 'site/demo.html 又变成了整份前端的副本');
+  assert.match(demoHtml, /\/app\/index\.html\?demo=1/,
+    'site/demo.html 没有转到在线体验,老链接会断');
 });
 
 test('只有正文 Word 才能宣告完成', () => {

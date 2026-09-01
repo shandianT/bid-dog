@@ -36,3 +36,6 @@ server/bidmultiagenttao_v5.3.zip
 
 # 本机内容资产：可能包含客户标书、资质图片和内部方案，禁止提交到公开仓库
 local-assets/
+
+# 官网的在线体验是 app-next 的构建产物,部署时现做,不进仓库
+site/app/
