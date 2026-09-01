@@ -434,6 +434,14 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
   padding:5px 8px;flex:none}
 .covitem button{border:1px solid var(--blue-line);background:var(--blue-weak);color:var(--blue);border-radius:9px;
   font:500 11.5px/1 inherit;padding:7px 11px;cursor:pointer;flex:none}
+/* 按章分组:同一章的漏项归到一起,组头带「一起补写」——引擎一次只重写一章,分组即批次 */
+.covgroup{display:flex;flex-direction:column}
+.covgroup + .covgroup{margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft)}
+.covgroup-head{display:flex;align-items:center;gap:9px;padding:0 2px 7px}
+.covgroup-head .cg-name{font:600 12.5px/1.4 inherit;color:var(--ink);
+  max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.covgroup-head .cg-n{font:450 11.5px/1 inherit;color:var(--dim)}
+.covgroup-head .ant-btn-primary{border-radius:9px;font-size:11.5px}
 .rw-diff{border:1px solid var(--line-soft);border-radius:12px;overflow:hidden}
 .rw-diff .drow{display:grid;grid-template-columns:92px 1fr;gap:12px;padding:10px 14px;font:400 12.5px/1.6 inherit;
   border-bottom:1px solid var(--line-soft)}

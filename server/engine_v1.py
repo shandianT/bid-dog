@@ -7338,7 +7338,7 @@ async def rewrite_chapter(jid: str, node_id: str, request: Request):
         body = await request.json()
     except Exception:
         body = {}
-    note = str((body or {}).get('note') or '').strip()[:500]
+    note = str((body or {}).get('note') or '').strip()[:generation_pipeline.REWRITE_NOTE_MAX]
     try:
         state = generation_pipeline.load(job)
     except Exception:

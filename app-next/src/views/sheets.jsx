@@ -2,7 +2,7 @@
 // 数据路径逐字对应经典 renderCheck/repairJob/openCoverage/submitRewrite/doRedo/openPreview。
 import React, { useEffect, useState } from 'react';
 import { Modal, Input, Checkbox, Button, List, Progress, Tag, Alert, Empty, Segmented } from 'antd';
-import { S, ui, bump, api, select, errAction, presentProblem, refreshArts, loadPipeline, loadCoverage,
+import { S, ui, bump, api, select, errAction, presentProblem, refreshArts, loadPipeline, loadCoverage, jobState,
          covReasonHint, _friendlyText, _friendlyActionLabel } from '../core/index.js';
 import { IS_WEB } from '../core/env.js';
 import { net } from '../core/env.js';
@@ -58,27 +58,103 @@ export function CheckSheet(){
   );
 }
 
-/* ---------- 评分点覆盖(经典 openCoverage + 补写应答派发) ---------- */
+/* ---------- 评分点覆盖(经典 openCoverage + 补写应答派发) ----------
+   经典只能一条一条点「补写应答」,而引擎的单章重写会把整单锁成 running:第二次
+   点必然被 admission 挡回来。所以一章漏了五条,用户实际只能补一条、等几分钟、
+   再补一条——而且后一次重写会覆盖前一次的稿子。这里按章分组,一章一次把该章
+   所有漏项拼进同一条补充要求下发,既省事也是唯一正确的批法。 */
+
+// 单条漏项 → 补充要求里的一行。措辞与经典单条派发一致,批量只是把它们列成条目。
+export function covGapLine(x){
+  return x.requirement
+    + (x.score && x.score !== '未知' ? '(分值 ' + x.score + ')' : '')
+    + (x.gap ? ';需补齐:' + x.gap : '');
+}
+
+// 引擎侧 note 上限 2000(generation_pipeline.REWRITE_NOTE_MAX),超了会被从句子中间
+// 截断——截断的补充要求比没有更危险。所以这里按整行装,装不下的明说这次先补几条。
+export const COV_NOTE_MAX = 2000;
+export function buildCovNote(items){
+  const head = '补写以下评分点应答,逐条落位到本章合适位置,按评分办法的口径逐项对应:\n';
+  const tail = '\n其余章节不动。';
+  const lines = [], budget = COV_NOTE_MAX - head.length - tail.length;
+  let used = 0;
+  for(const x of items){
+    const line = (lines.length + 1) + '. ' + covGapLine(x);
+    if(used + line.length + 1 > budget) break;
+    lines.push(line); used += line.length + 1;
+  }
+  return { note: head + lines.join('\n') + tail, fitted: lines.length };
+}
+
 export function CoverageSheet(){
   const open = !!(S.sheet && S.sheet.name === 'coverage');
-  const [busyIdx, setBusyIdx] = useState(-1);
+  const [busy, setBusy] = useState('');        // 正在派发的 node_id(或 'i:<下标>' 单条)
+  const [sent, setSent] = useState('');        // 本次面板里已派发的章节,给出「已下发」而不是让人重复点
+  const [drop, setDrop] = useState(new Set()); // 用户手动摘掉的漏项(默认全选)
+  useEffect(() => { if(open){ setBusy(''); setSent(''); setDrop(new Set()); } }, [open]);
   const cov = S.active ? S.coverage[S.active] : null;
   if(open && (!cov || !cov.available)){ /* openCoverage 入口已拦,防御兜底 */ }
   const un = cov ? (cov.items || []).filter(x => !x.covered) : [];
   const ok = cov ? (cov.items || []).filter(x => x.covered) : [];
-  async function dispatch(i){
-    const item = un[i];
-    if(!item || !item.node_id || !S.active) return;
-    setBusyIdx(i);
+
+  // 按章分组,保持 un 的原始顺序;没落到章节的单独一拨(它们派不出去,只能走对话)
+  const groups = [], byNode = new Map(), orphans = [];
+  un.forEach((x, i) => {
+    const row = { x, i };
+    if(!x.node_id){ orphans.push(row); return; }
+    let g = byNode.get(x.node_id);
+    if(!g){ g = { node_id: x.node_id, chapter: x.chapter || x.location || '本章', rows: [] }; byNode.set(x.node_id, g); groups.push(g); }
+    g.rows.push(row);
+  });
+
+  const job = S.active ? (S.jobs || []).find(x => x.job_id === S.active) : null;
+  const running = !!(job && jobState(job) === 'running');
+  // 引擎把整单锁成 running 才重写,所以同一时间只能有一章在补——这一点必须写在脸上,
+  // 而不是等用户点了第二章再弹一句「这一单正在生成」。
+  const lockedReason = running ? '这一单正在生成,等它停下再补写' : (sent ? '引擎一次只重写一章,等这章跑完再补下一章' : '');
+
+  async function dispatch(key, rows, chapter){
+    if(!S.active || !rows.length) return;
+    const picked = rows.filter(r => !drop.has(r.i)).map(r => r.x);
+    if(!picked.length){ ui.toast('这一章的漏项都被你摘掉了,没有可补写的内容'); return; }
+    const node_id = picked[0].node_id;
+    const built = picked.length > 1
+      ? buildCovNote(picked)
+      : { note: '补写评分点应答:' + covGapLine(picked[0]) + '。落位到本章合适位置,逐条对应评分办法。', fitted: 1 };
+    setBusy(key);
     try{
-      const note = '补写评分点应答:' + item.requirement + (item.score && item.score !== '未知' ? '(分值 ' + item.score + ')' : '') + (item.gap ? ';需补齐:' + item.gap : '') + '。落位到本章合适位置,逐条对应评分办法。';
-      const r = await api('/v1/jobs/' + S.active + '/chapters/' + encodeURIComponent(item.node_id) + '/rewrite',
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }) });
+      const r = await api('/v1/jobs/' + S.active + '/chapters/' + encodeURIComponent(node_id) + '/rewrite',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: built.note }) });
       if(r && r.ok === false) throw new Error(r.error || '补写没能启动');
-      ui.closeAll(); ui.toast('已开始补写「' + item.chapter + '」章的这条应答,其余章节不动');
+      setBusy(''); setSent(node_id);
+      const missed = picked.length - built.fitted;
+      ui.toast('已开始补写「' + chapter + '」章的 ' + built.fitted + ' 条应答,其余章节不动'
+        + (missed > 0 ? ';这一章漏项太多,还剩 ' + missed + ' 条等这轮跑完再补' : ''));
       setTimeout(() => { loadPipeline(S.active); loadCoverage(S.active); }, 800);
-    }catch(err){ setBusyIdx(-1); ui.toast(err && err.message || '补写没能启动,稍后重试'); }
+    }catch(err){ setBusy(''); ui.toast(err && err.message || '补写没能启动,稍后重试'); }
   }
+
+  const toggle = i => setDrop(prev => { const n = new Set(prev); if(n.has(i)) n.delete(i); else n.add(i); return n; });
+
+  // 一条漏项一行。行本身的结构(.covitem + 「补写应答」按钮)是既有契约钉死的,不动。
+  const renderRow = ({ x, i }, groupable) => (
+    <List.Item className="covitem" key={i}
+      actions={[
+        x.score && x.score !== '未知' ? <Tag key="s" color="warning" bordered={false} className="score">{x.score} 分</Tag> : <span key="s" />,
+        x.node_id
+          ? <Button key="b" size="small" data-cov={i} loading={busy === ('i:' + i)}
+              disabled={!!lockedReason || busy !== ''} title={lockedReason}
+              onClick={() => dispatch('i:' + i, [{ x, i }], x.chapter || '本章')}>补写应答</Button>
+          : <span key="b" style={{ color: 'var(--faint)', fontSize: 11 }}>{covReasonHint(x)}</span>,
+      ]}>
+      <List.Item.Meta
+        avatar={groupable ? <Checkbox checked={!drop.has(i)} onChange={() => toggle(i)} /> : null}
+        title={<b>{x.requirement}</b>}
+        description={[x.gap && ('缺口:' + x.gap), x.location && ('落位:' + x.location)].filter(Boolean).join(' · ') || '待落实'} />
+    </List.Item>
+  );
+
   return (
     <Modal open={open} onCancel={ui.closeAll} footer={null} width={680} centered title="评分点覆盖">
       <div id="covSheet">
@@ -89,18 +165,40 @@ export function CoverageSheet(){
             showInfo={false} strokeColor="var(--blue)" trailColor="var(--line-soft)" id="covBarFill" />
           <div className="covList" id="covList">
             {un.length ? (
-              <List split={false} dataSource={un} renderItem={(x, i) => (
-                <List.Item className="covitem"
-                  actions={[
-                    x.score && x.score !== '未知' ? <Tag key="s" color="warning" bordered={false} className="score">{x.score} 分</Tag> : <span key="s" />,
-                    x.node_id
-                      ? <Button key="b" size="small" data-cov={i} loading={busyIdx === i} onClick={() => dispatch(i)}>补写应答</Button>
-                      : <span key="b" style={{ color: 'var(--faint)', fontSize: 11 }}>{covReasonHint(x)}</span>,
-                  ]}>
-                  <List.Item.Meta title={<b>{x.requirement}</b>}
-                    description={[x.gap && ('缺口:' + x.gap), x.location && ('落位:' + x.location)].filter(Boolean).join(' · ') || '待落实'} />
-                </List.Item>
-              )} />
+              <>
+                {groups.map(g => {
+                  const many = g.rows.length > 1;
+                  const picked = g.rows.filter(r => !drop.has(r.i)).length;
+                  const done = sent === g.node_id;
+                  return (
+                    <div className="covgroup" key={g.node_id} data-covgroup={g.node_id}>
+                      <div className="covgroup-head">
+                        <span className="cg-name">{g.chapter}</span>
+                        <span className="cg-n num">漏 {g.rows.length} 条</span>
+                        <span style={{ flex: 1 }} />
+                        {done ? <Tag color="processing" bordered={false}>已下发,正在补写</Tag>
+                          : many ? (
+                            <Button type="primary" size="small" data-covbatch={g.node_id}
+                              loading={busy === g.node_id} disabled={!!lockedReason || busy !== '' || !picked}
+                              title={lockedReason}
+                              onClick={() => dispatch(g.node_id, g.rows, g.chapter)}>
+                              一起补写这 {picked} 条
+                            </Button>
+                          ) : null}
+                      </div>
+                      <List split={false} dataSource={g.rows} rowKey={r => r.i} renderItem={r => renderRow(r, many)} />
+                    </div>
+                  );
+                })}
+                {orphans.length > 0 && (
+                  <div className="covgroup" data-covgroup="">
+                    {groups.length > 0 && <div className="covgroup-head"><span className="cg-name">还没落到章节</span>
+                      <span className="cg-n num">{orphans.length} 条</span></div>}
+                    <List split={false} dataSource={orphans} rowKey={r => r.i} renderItem={r => renderRow(r, false)} />
+                  </div>
+                )}
+                {lockedReason && <div className="outline-note" style={{ marginTop: 6 }}>{lockedReason}</div>}
+              </>
             ) : <div className="outline-note">全部评分点都已覆盖。</div>}
             {ok.length > 0 && <>
               <div className="outline-note" style={{ marginTop: 4 }}>已覆盖 {ok.length} 项</div>

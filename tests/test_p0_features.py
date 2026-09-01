@@ -121,6 +121,56 @@ def test_rewrite_note_changes_chapter_prompt(engine, job):
     assert "工期按 18 个月" in prompt and "单章重写" in prompt
 
 
+def test_rewrite_note_holds_a_whole_batch_of_missing_scoring_points(engine, job):
+    """一章漏了好几个评分点时，界面把它们拼成一条补充要求下发——引擎一次只接受一章
+    重写（整单会被 _reserve_running_reason 锁住），逐条派发的后几条必然被挡回来，而且
+    后一次重写还会盖掉前一次的稿子。所以上限必须装得下整批。
+
+    一条能有多长不是猜的：_coverage_view 把「原要求」和「缺口」两列各截到 140 字，
+    所以最坏情况下一条评分点连着缺口说明接近 300 字——招标文件里整句照抄的评分条款
+    就是这个长度。两条就顶到旧的 500 上限，而截断的补充要求比没有更危险。"""
+    _init_pipeline(job, [{"id": "c1", "title": "施工组织设计", "output": "章节_01_施工组织设计.md"}])
+    req_max, gap_max = 140, 140     # 与 engine._coverage_view 对这两列的截断长度一致
+
+    def fill(text, n):
+        return (text * (n // len(text) + 1))[:n]
+
+    points = [
+        "%s（分值 %s）；需补齐：%s" % (fill(req, req_max), score, fill(gap, gap_max))
+        for req, score, gap in (
+            ("投标人须提供近三年承担的同类市政管网工程业绩，单项合同金额不低于伍仟万元，"
+             "须附中标通知书、施工合同关键页、业主履约证明，缺一不计分。", "5",
+             "〔需补充〕第三个案例的合同扫描件与业主联系人，现有两例只有中标通知书。"),
+            ("拟派项目负责人须具备市政公用工程一级建造师注册证书及安全生产考核合格证，"
+             "近三年未担任其他在建项目负责人，须提供社保缴纳证明与在职承诺函。", "4",
+             "〔需补充〕建造师注册证书与安全考核合格证扫描件，社保证明只到 2025 年 6 月。"),
+            ("投标人近三年获得省部级及以上工程质量奖项的每项加一分，最高两分，"
+             "须提供获奖证书原件影印件并加盖发证单位或公证机关印章。", "2",
+             "〔需补充〕省部级及以上获奖证明原件影印，素材库里只有企业自评材料。"),
+        )
+    ]
+    note = "补写以下评分点应答，逐条落位到本章合适位置：\n" + "\n".join(
+        "%d. %s" % (n + 1, text) for n, text in enumerate(points))
+    assert len(note) > 500, "样本要真的超过旧上限，否则这条测试证明不了什么"
+    assert len(note) <= generation_pipeline.REWRITE_NOTE_MAX
+
+    stored = generation_pipeline.rewrite_node(str(job), "chapter_write:c1", note)
+    assert stored["user_note"] == note                  # 一个字都没被截掉
+    state = generation_pipeline.load(str(job))
+    node = next(n for n in state["nodes"] if n["id"] == "chapter_write:c1")
+    prompt = engine._pipeline_direct_task(str(job), node)
+    for text in points:
+        assert text in prompt                           # 每一条都真的进了这一章的写作要求
+
+
+def test_rewrite_note_is_still_bounded(engine, job):
+    """放宽不等于不设限：超过上限仍然截断，用户补充要求进不了无边界的 prompt。"""
+    _init_pipeline(job, [{"id": "c1", "title": "施工组织设计", "output": "章节_01_施工组织设计.md"}])
+    node = generation_pipeline.rewrite_node(
+        str(job), "chapter_write:c1", "补" * (generation_pipeline.REWRITE_NOTE_MAX + 500))
+    assert len(node["user_note"]) == generation_pipeline.REWRITE_NOTE_MAX
+
+
 def test_rewrite_resets_failed_chapter(engine, job):
     _init_pipeline(job, [{"id": "c1", "title": "施工组织设计", "output": "章节_01_施工组织设计.md"}])
     _set_node(job, "chapter_write:c1", state="failed", attempt=5, error_code="model_error")
