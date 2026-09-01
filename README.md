@@ -4,7 +4,7 @@
 **给谁用** — 拿到 Key 的同事和客户：装上、粘 Key、拖文件，不用注册 AI 账号。写代码的看文末架构小节。
 **怎么开始** — 到 [Releases](https://github.com/shandianT/bid-dog/releases/latest) 下载 dmg / exe → 打开后粘 Key并测试连接 → 上传招标文件。模型和运行方式会自动选择推荐配置。
 
-[![release](https://img.shields.io/badge/release-v0.21.0-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
+[![release](https://img.shields.io/badge/release-v0.21.1-0a63c9)](https://github.com/shandianT/bid-dog/releases/latest)
 [![build](https://github.com/shandianT/bid-dog/actions/workflows/build.yml/badge.svg)](https://github.com/shandianT/bid-dog/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/macOS%20Apple%20Silicon%20%7C%20Windows%20x64-111111)
 
@@ -53,8 +53,8 @@
 
 | 系统 | 安装包 | 说明 |
 |---|---|---|
-| macOS | [`bid-dog_0.21.0_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.21.0/bid-dog_0.21.0_aarch64.dmg) | Apple Silicon（M 系列） |
-| Windows | [`bid-dog_0.21.0_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.21.0/bid-dog_0.21.0_x64-setup.exe) | Windows 10 / 11 x64 |
+| macOS | [`bid-dog_0.21.1_aarch64.dmg`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.21.1/bid-dog_0.21.1_aarch64.dmg) | Apple Silicon（M 系列） |
+| Windows | [`bid-dog_0.21.1_x64-setup.exe`](https://github.com/shandianT/bid-dog/releases/download/desktop-v0.21.1/bid-dog_0.21.1_x64-setup.exe) | Windows 10 / 11 x64 |
 
 当前没有 Intel Mac 和 Windows ARM 安装包，请勿下载不匹配架构的安装包。官网会始终显示安装包的真实支持范围和签名状态。
 
@@ -67,7 +67,7 @@
   也可以在「系统设置 → 隐私与安全性」里点「仍要打开」。
 - **Windows** 若弹出 SmartScreen 蓝色提示：点「更多信息」→「仍要运行」。
 
-v0.21.0 的桌面 App 使用独立 WebView 会话和带版本号的入口地址，只连接 `127.0.0.1:18901` 上经身份校验的引擎。覆盖升级时若旧版仍在，应用会让它先安全收尾，然后自动启动新版；无需手动查找或强杀进程。未知端口占用者不会被关闭。
+v0.21.1 的桌面 App 使用独立 WebView 会话和带版本号的入口地址，只连接 `127.0.0.1:18901` 上经身份校验的引擎。覆盖升级时若旧版仍在，应用会让它先安全收尾，然后自动启动新版；无需手动查找或强杀进程。未知端口占用者不会被关闭。
 
 ---
 
@@ -140,7 +140,7 @@ Tauri 壳(Rust + Web)  ──拉起/守护──▶  本地引擎(FastAPI, PyIns
 - **桌面壳**：Tauri v2。负责窗口、拖拽、拉起并守护引擎、调系统默认应用直接打开产物。
 - **本地引擎 sidecar**：FastAPI 用 PyInstaller 打成单文件二进制随安装包分发，客户机上没有 Python 也能跑；协议翻译、任务编排、质检调度都在这一层。
 - **事件流**：任务状态由引擎按 SSE 推，前端只渲染。事件流是 async 生成器，不占死线程；页面重新可见时补一次同步再重挂流，后台标签被挂起也不假死。
-- **执行外壳**：v0.21.0 默认内置 OpenCode 1.18.18；Codex CLI 保留为显式可选回退。
+- **执行外壳**：v0.21.1 默认内置 OpenCode 1.18.18；Codex CLI 保留为显式可选回退。
 - **技能包**：招投标流程 + 出件脚本（建 Word、格式核验、成品质检）。质检是确定性脚本、零 token，不依赖模型自觉——模型没跑，引擎也会在完成后补审计并按需重出 Word。
 
 目录：`app/` 桌面壳 · `server/` 本地引擎 · `site/` 官网 · `docs/` 文档。构建见 [BUILD.md](BUILD.md)。
