@@ -4,16 +4,6 @@
   "outputDirectory": "site",
   "cleanUrls": false,
   "trailingSlash": false,
-  "rewrites": [
-    {
-      "source": "/updater/darwin-aarch64.json",
-      "destination": "https://github.com/shandianT/bid-dog/releases/latest/download/latest.json"
-    },
-    {
-      "source": "/updater/windows-x86_64.json",
-      "destination": "https://github.com/shandianT/bid-dog/releases/latest/download/latest.json"
-    }
-  ],
   "headers": [
     {
       "source": "/(.*)",

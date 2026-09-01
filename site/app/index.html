@@ -992,7 +992,7 @@ const IS_WEB = /^https?:$/.test(location.protocol) && !/tauri\.localhost$/.test(
 const IS_SOURCE_PREVIEW = location.protocol === 'file:';
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 const FORCE_DEMO = /[?&]demo=1/.test(location.search);
-const BUNDLED_ENGINE_VERSION = '0.20.6';
+const BUNDLED_ENGINE_VERSION = '0.21.0';
 /* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后，旧 PyInstaller 进程可能仍驻留；
    若继续探测历史端口，就会把旧引擎误认成新版，甚至在可执行文件被替换后返回 500。 */
 const DESKTOP_ENGINE = 'http://127.0.0.1:18901';
@@ -1161,6 +1161,12 @@ function engineConnectionGate(online, stale){
 const PUBLIC_TASK_LABELS = {
   preparing:'准备中', generating:'生成中', needs_input:'需要你确认', completed:'已完成', failed:'未完成'
 };
+// 任务本身是否已经产出可交付的整册 Word。只看任务对象上的权威字段,不依赖
+// 产物列表是否已经拉回来——侧栏在产物加载完之前也要说对话。
+function jobHasDeliverable(job){
+  const j = job || {}, d = j.delivery || (j.presentation||{}).delivery || {};
+  return j.has_word === true || d.has_word === true;
+}
 function taskGroupOpen(key, stored, bulk){
   if(bulk)return true;
   const state=stored||{};
@@ -1259,6 +1265,10 @@ function taskPresentation(job, nowMs){
   };
   let action = _friendlyText(p.current_action || p.currentAction || j.current_action || j.stage || defaults[state]);
   if(state==='failed' && (!action || /启动中/.test(action))) action = defaults.failed;
+  // 「出了整册 Word 但没过质检」和「什么都没出来」是两回事:前者手里有一份可编辑的
+  // 交付稿,差的是几项提交前处理;后者是真的白跑。以前两种都写「未完成/已停止」,
+  // 一线反馈「会被误解成失败了」——这话是对的,界面把「还差几步」说成了「全砸了」。
+  if(jobHasDeliverable(j) && state==='failed') action = '已出件 · 提交前有待处理项';
   const activityAt = p.last_activity_at || p.lastActivityAt || j.last_activity_at || j.updated_at || j.last_event_at || j.created_at;
   const etaSec = p.eta_seconds != null ? p.eta_seconds : (p.eta_s != null ? p.eta_s
     : (j.eta_seconds != null ? j.eta_seconds : (j.eta != null ? j.eta : j.eta_s)));
@@ -2012,6 +2022,17 @@ function renderCovPill(){
   pill.style.display='inline-block';
   pill.textContent='评分点覆盖 '+cov.covered+'/'+cov.total;
   pill.classList.toggle('on',cov.covered>=cov.total);
+  // 光给「0/19」等于只说「你不及格」,不说为什么。引擎其实逐条算了 reason,
+  // 这里汇总成一句挂在 title 上:鼠标一停就知道该往哪使劲,不用先点开面板。
+  const un=(cov.items||[]).filter(x=>!x.covered);
+  if(!un.length){ pill.title='全部评分点都已覆盖'; return; }
+  const names={unlocated:'还没落到具体章节',gap:'规划里还留着缺口',chapter_pending:'所在章节还没写完'};
+  const tally={};
+  un.forEach(x=>{ const r=String(x.reason||'')||'unlocated'; tally[r]=(tally[r]||0)+1; });
+  pill.title='未覆盖 '+un.length+' 项:'
+    + Object.keys(tally).sort((a,b)=>tally[b]-tally[a])
+        .map(r=>(names[r]||r)+' '+tally[r]+' 项').join('、')
+    + '。点开逐条查看,可直接补写应答。';
 }
 // 没算覆盖的原因由后端给(reason),前端只负责翻成人话。以前一律写「未定位到章节」,
 // 结果同一行左边明明写着「落位:技术方案」,右边说没定位,自己打自己的脸。
@@ -2797,6 +2818,10 @@ function renderHead(){
   if(missingWord){
     badge.style.display = 'inline-flex'; badge.className = 'badge bad';
     badge.innerHTML = '<span class="bdot"></span>没出 Word，未完成';
+  }else if(state==='failed' && word==='ready'){
+    // 整册 Word 就在「最终交付」里躺着,只是没过质检。红色「未完成」在这里是谎话。
+    badge.style.display='inline-flex'; badge.className='badge warn';
+    badge.innerHTML='<span class="bdot"></span>待处理';
   }else{
     const cls={preparing:'none',generating:'none',needs_input:'warn',completed:'ok',failed:'bad'}[state]||'none';
     badge.style.display='inline-flex';badge.className='badge '+cls;
@@ -2821,7 +2846,13 @@ function renderHead(){
       ? '<svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px"><polygon points="6 3 20 12 6 21 6 3"/></svg>'
       : '<svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:13px;height:13px"><rect x="5" y="4" width="4.5" height="16" rx="1"/><rect x="14.5" y="4" width="4.5" height="16" rx="1"/></svg>';
   }else{pb.style.display='none';pb.style.opacity='';}
-  const parts=[present.currentAction,'最后活动 '+present.lastActivity];
+  // 出了件就先说出了件,再说还差什么。件数从质检结果里取,取不到就不编。
+  let lead = present.currentAction;
+  if(state==='failed' && word==='ready'){
+    const open = ((S.health[S.active]||{}).gaps||[]).filter(g=>g.level!=='green').length;
+    lead = open ? ('Word 已生成 · 提交前需处理 '+open+' 项') : 'Word 已生成 · 质检未通过,请看出件前检查';
+  }
+  const parts=[lead,'最后活动 '+present.lastActivity];
   if(present.eta&&present.eta!=='—')parts.push(present.eta);
   if(t.elapsed&&j&&j.elapsed_seconds==null&&j.elapsed==null)parts.push('已用 '+fmtDur(t.elapsed));
   el('hSub').textContent=parts.join(' · ');
@@ -3194,8 +3225,16 @@ function renderRail(){
   }
   const hth = S.health[id];
   el('warnDot').style.background = hth ? verdict(id).color : 'var(--amber)';
-  el('warnT').textContent = hth ? '提交前需处理 '+(hth.gaps||[]).filter(g=>g.level!=='green').length+' 项' : '提交前检查';
-  el('warnD').textContent = hth ? (hth.gaps||[]).filter(g=>g.level!=='green').map(g=>(g.title||'').split(' ')[0]).slice(0,3).join(' · ') : '出 Word 后在这里看结论与补料清单';
+  // 以前这里把 title 按空格切开只取第一段,再拿三条拼成一行——中文标题没有空格,
+  // 拼出来是「有 · 也可以对整册不达标章节一起重做」这种读不懂的碎片,而后端每条
+  // gap 明明都带着 detail(怎么补)和 actions(重做这一章)。一条说清楚,好过三条说不清。
+  const openGaps = hth ? (hth.gaps||[]).filter(g=>g.level!=='green') : [];
+  el('warnT').textContent = hth ? '提交前需处理 '+openGaps.length+' 项' : '出件前检查';
+  const first = openGaps[0];
+  el('warnD').textContent = !hth ? '出 Word 后在这里看结论与补料清单'
+    : first ? (_friendlyText(first.title||'') + (first.detail ? ' —— '+_friendlyText(first.detail) : '')
+               + (openGaps.length>1 ? '(点开看全部 '+openGaps.length+' 项)' : '(点开逐条处理)'))
+    : '关键检查已通过,可以准备提交';
   renderAtts();
 }
 el('files').addEventListener('click', e=>{

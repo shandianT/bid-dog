@@ -35,7 +35,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.20.6'
+ENGINE_VERSION = '0.21.0'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -112,7 +112,10 @@ def ensure_preset():
 app = FastAPI(title='bid-dog-engine')
 _DESKTOP_ORIGINS = {'tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'}
 _DESKTOP_ORIGINS.update(x.strip() for x in os.environ.get('BID_ALLOWED_ORIGINS', '').split(',') if x.strip())
-_LOOPBACK_ORIGIN = re.compile(r'^https?://(?:127\.0\.0\.1|localhost)(?::\d+)?$', re.I)
+# *.localhost 整族按 RFC 6761/浏览器实现恒解析回环,放行它不增加 DNS 重绑定面。
+# 为什么需要:新前端(app-next)是 ES module,规范规定 module 脚本一律按 CORS 模式抓取,
+# 同源也带 Origin 头——tauri.localhost:端口 下的静态资源请求因此会进这道闸。
+_LOOPBACK_ORIGIN = re.compile(r'^https?://(?:127\.0\.0\.1|(?:[a-z0-9-]+\.)*localhost)(?::\d+)?$', re.I)
 
 def origin_allowed(origin):
     """只让本机页面/Tauri 壳跨域访问桌面引擎，阻断恶意网页读取 Key 或发起本机命令。"""
@@ -122,7 +125,7 @@ def origin_allowed(origin):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(_DESKTOP_ORIGINS),
-    allow_origin_regex=r'^https?://(?:127\.0\.0\.1|localhost)(?::\d+)?$',
+    allow_origin_regex=r'^https?://(?:127\.0\.0\.1|(?:[a-z0-9-]+\.)*localhost)(?::\d+)?$',
     allow_methods=['*'],
     allow_headers=['*'],
     expose_headers=['X-Request-ID'],
@@ -7335,7 +7338,7 @@ async def rewrite_chapter(jid: str, node_id: str, request: Request):
         body = await request.json()
     except Exception:
         body = {}
-    note = str((body or {}).get('note') or '').strip()[:500]
+    note = str((body or {}).get('note') or '').strip()[:generation_pipeline.REWRITE_NOTE_MAX]
     try:
         state = generation_pipeline.load(job)
     except Exception:
@@ -9839,7 +9842,10 @@ backup_docx_template()  # _MEI 被系统清理后 Word 导出的最后一道保�
 reconcile_orphan_jobs() # 上次异常退出留下的「运行中」任务归位到检查点,可续跑
 start_update_check()
 
-web = os.environ.get('BID_WEB_DIR') or os.path.join(HERE, '..', 'app', 'src')
+# 网页/演示模式的前端:优先新界面构建产物,没构建过则回落经典单文件页。
+# 桌面版前端由 Tauri 壳自带(frontendDist),不走这里。
+_web_next = os.path.join(HERE, '..', 'app-next', 'dist')
+web = os.environ.get('BID_WEB_DIR') or (_web_next if os.path.isdir(_web_next) else os.path.join(HERE, '..', 'app', 'src'))
 if os.path.isdir(web): app.mount('/', StaticFiles(directory=web, html=True), name='web')
 
 if __name__ == '__main__':

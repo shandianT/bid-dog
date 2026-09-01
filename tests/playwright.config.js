@@ -3,6 +3,7 @@ const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: '.',
   testMatch: /check_.*\.spec\.js/,
+  testIgnore: /next\//,   // next/ 是新界面移植版契约,由 playwright.next.config.js 单独驱动
   timeout: 30_000,
   retries: process.env.CI ? 1 : 0,
   workers: 1,

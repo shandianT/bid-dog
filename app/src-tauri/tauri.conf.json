@@ -2,17 +2,17 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "中标狗",
   "mainBinaryName": "bid-assistant",
-  "version": "0.20.6",
+  "version": "0.21.0",
   "identifier": "com.shandiant.bidassistant",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../../app-next/dist"
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [
       {
         "title": "中标狗",
-        "url": "index.html?desktop=0.20.6-18901",
+        "url": "index.html?desktop=0.21.0-18901",
         "incognito": true,
         "width": 1440,
         "height": 940,

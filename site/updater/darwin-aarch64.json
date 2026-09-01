@@ -1,0 +1,15 @@
+{
+  "version": "0.20.6",
+  "notes": "详见 https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.20.6",
+  "pub_date": "2026-08-31T09:13:31Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdlVmKzdRYXpjVTdoNmJiaWgxVld2UCtaK2tjQldWbVFqTS9WVDE5SDk3ejNRS2Y5Q0NxL1ZKRC9ZU3dsR1RrRUwwUlJwY0dhdERPZDF5Snp1RHMwSGFMb2JjdnFGY2djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTY3NDA5CWZpbGU65Lit5qCH54uXLmFwcC50YXIuZ3oKVWRTUGZlSHdjMXZOZVh0aE9hY1NndW1ZNzNCZmZXNnkyUGNrQ3lRY1VuZS81b0dUVmtCR1FsVG5UOStJM1M4NXVvVG5QNE9nQ0RiNTVaV1lIVjVmQVE9PQo=",
+      "url": "https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.6/bid-dog_0.20.6_aarch64.app.tar.gz"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdlVmKzdRYXpjVTczZy9BbGIyUVV1Z1B0MkdDMzJLTDZvNWlFeG1TZjNwbWxJV1ZQL2lkVmtqNmNDOW13VDNwdlAveUFyWWRSaERYb3JhRUk0dkZWZ2xtSXNLUjd3ZEF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTY3NTY2CWZpbGU65Lit5qCH54uXXzAuMjAuNl94NjQtc2V0dXAuZXhlClM0RE1Dalk2MUx2YmZxOGlGSC9adU82eGN4aEt0bzA3aGhudU80blFsc3VPam9KbWZEMUNRelVaMEtjQjFWbkhNVEVQUU5Hbnk0N09kUkMwT3BPS0J3PT0K",
+      "url": "https://github.com/shandianT/bid-dog/releases/download/desktop-v0.20.6/bid-dog_0.20.6_x64-setup.exe"
+    }
+  }
+}

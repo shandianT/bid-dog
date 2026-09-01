@@ -23,6 +23,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 PIPELINE_VERSION = 2
+REWRITE_NOTE_MAX = 2000        # 单章重写补充要求的字数上限(前后端同一个数)
 PIPELINE_FILE = "pipeline.json"
 # 节点重试预算。旧值 3 次 + 最长 30 秒退避:一次持续一两分钟的网关抖动就能把整单
 # 打停,用户被迫手动重试(「生成频繁中断」反馈的直接来源之一)。连接类错误的退避
@@ -1090,7 +1091,9 @@ def rewrite_node(job: os.PathLike[str] | str, node_id: str, note: str = "") -> D
     it (and digest-driven downstream nodes follow) without any explicit cascade.
     Failed/blocked chapters are reset the same way a human retry would.
     """
-    note = str(note or "").strip()[:500]
+    # 上限 2000:界面支持「把这一章漏掉的评分点一次性补写」,一条漏项连着要求和缺口
+    # 说明能有两三百字,500 会从句子中间截断——截断的补充要求比没有更危险。
+    note = str(note or "").strip()[:REWRITE_NOTE_MAX]
 
     def apply(state):
         node = _find_node(state, node_id)
