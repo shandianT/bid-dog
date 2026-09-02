@@ -95,6 +95,9 @@ export function CoverageSheet(){
   useEffect(() => { if(open){ setBusy(''); setSent(''); setDrop(new Set()); } }, [open]);
   const cov = S.active ? S.coverage[S.active] : null;
   if(open && (!cov || !cov.available)){ /* openCoverage 入口已拦,防御兜底 */ }
+  // 本地关键词索引只是候选:没有一条落到章节,派不出补写,也不该显示成「已覆盖 0/N」
+  const covLocal = !!(cov && cov.available && cov.plan_source === 'local');
+  const planNotes = (cov && cov.plan_notes) || [];
   const un = cov ? (cov.items || []).filter(x => !x.covered) : [];
   const ok = cov ? (cov.items || []).filter(x => x.covered) : [];
 
@@ -146,7 +149,7 @@ export function CoverageSheet(){
           ? <Button key="b" size="small" data-cov={i} loading={busy === ('i:' + i)}
               disabled={!!lockedReason || busy !== ''} title={lockedReason}
               onClick={() => dispatch('i:' + i, [{ x, i }], x.chapter || '本章')}>补写应答</Button>
-          : <span key="b" style={{ color: 'var(--faint)', fontSize: 11 }}>{covReasonHint(x)}</span>,
+          : <span key="b" style={{ color: 'var(--faint)', fontSize: 11 }}>{covLocal ? '候选项,待模型核对落位' : covReasonHint(x)}</span>,
       ]}>
       <List.Item.Meta
         avatar={groupable ? <Checkbox checked={!drop.has(i)} onChange={() => toggle(i)} /> : null}
@@ -160,9 +163,19 @@ export function CoverageSheet(){
       <div id="covSheet">
       {cov && cov.available ? (
         <>
-          <div className="covHead" id="covHead">评分点是评标专家打分的依据。已覆盖 <b>{cov.covered}/{cov.total}</b> 项——「已覆盖」= 规划无缺口 + 落到具体章节 + 该章节已写完。</div>
-          <Progress className="covBar" percent={cov.total ? Math.round(cov.covered / cov.total * 100) : 0}
-            showInfo={false} strokeColor="var(--blue)" trailColor="var(--line-soft)" id="covBarFill" />
+          {covLocal && (
+            <Alert type="warning" showIcon className="covlocal" style={{ marginBottom: 10 }}
+              message="这份评分点清单来自本地关键词索引,尚未经模型核对"
+              description="候选项还没落到章节,暂不能派发补写;模型核对成功后会自动更新。核对为什么没成功,看「运行日志」里「响应规划」那一行。" />
+          )}
+          {!covLocal && planNotes.length > 0 && (
+            <Alert type="info" showIcon className="covnote" style={{ marginBottom: 10 }} message={planNotes.join(';')} />
+          )}
+          <div className="covHead" id="covHead">{covLocal
+            ? <>识别到 <b>{cov.total}</b> 处评分相关条款(候选)。这是按关键词从招标文件里挑出来的原文行,先对一眼评分办法有没有被读到。</>
+            : <>评分点是评标专家打分的依据。已覆盖 <b>{cov.covered}/{cov.total}</b> 项——「已覆盖」= 规划无缺口 + 落到具体章节 + 该章节已写完。</>}</div>
+          {!covLocal && <Progress className="covBar" percent={cov.total ? Math.round(cov.covered / cov.total * 100) : 0}
+            showInfo={false} strokeColor="var(--blue)" trailColor="var(--line-soft)" id="covBarFill" />}
           <div className="covList" id="covList">
             {un.length ? (
               <>
@@ -192,7 +205,7 @@ export function CoverageSheet(){
                 })}
                 {orphans.length > 0 && (
                   <div className="covgroup" data-covgroup="">
-                    {groups.length > 0 && <div className="covgroup-head"><span className="cg-name">还没落到章节</span>
+                    {groups.length > 0 && !covLocal && <div className="covgroup-head"><span className="cg-name">还没落到章节</span>
                       <span className="cg-n num">{orphans.length} 条</span></div>}
                     <List split={false} dataSource={orphans} rowKey={r => r.i} renderItem={r => renderRow(r, false)} />
                   </div>

@@ -35,7 +35,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.21.1'
+ENGINE_VERSION = '0.22.0'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -3614,8 +3614,12 @@ def _pipeline_cell(value):
     return str(value if value not in (None, '') else '〔需补充〕').replace('|', '｜').replace('\n', ' ')
 
 
-def _pipeline_write_response_plan(job, attempt_root, compact):
-    """Expand a small model analysis into the four deterministic planning artifacts."""
+def _pipeline_write_response_plan(job, attempt_root, compact, source='local', model='', notes=()):
+    """Expand a small model analysis into the four deterministic planning artifacts.
+
+    ``source`` 记录这份规划是谁给的:'local' = 本地关键词索引(候选,永远先落盘兜底),
+    'model' = 模型逐项核对过的结构化结果。覆盖仪表和确认卡据此决定显示「真实覆盖率」
+    还是「候选,待核对」——本地索引算出来的 0/N 不是事实,只会把人吓一跳。"""
     if not isinstance(compact, dict):
         raise generation_pipeline.NodeExecutionError('model_plan_invalid', retryable=True)
     state = generation_pipeline.load(job)
@@ -3645,8 +3649,10 @@ def _pipeline_write_response_plan(job, attempt_root, compact):
         raise generation_pipeline.NodeExecutionError('model_plan_has_no_chapters', retryable=False)
 
     composition = [str(value) for value in (compact.get('composition') or []) if str(value).strip()][:40]
+    source_line = (('> 规划来源:模型逐项核对(%s)' % model) if source == 'model'
+                   else '> 规划来源:本地关键词索引(候选项,尚未经模型核对)')
     composition_lines = [
-        '# 投标文件组成', '',
+        '# 投标文件组成', '', source_line, '',
         '> 本目录根据场景模板与招标文件解析结果生成；客户专属事实和最终装订顺序须在提交前人工核对。', '',
         '## 文件组成建议', '',
     ]
@@ -3659,10 +3665,13 @@ def _pipeline_write_response_plan(job, attempt_root, compact):
                               '- 核对投标人名称、报价、资质、案例、人员、签章和日期。',
                               '- 所有〔需补充〕项完成后，方可作为正式投标文件提交。'])
 
-    score_lines = ['# 评分点响应矩阵', '',
-                   '> 分值或证据未在原文中明确时保留〔需补充〕，不得推测。', '',
-                   '| 序号 | 原要求/评分点 | 分值 | 响应位置 | 证据 | 缺口 |',
-                   '|---|---|---:|---|---|---|']
+    score_lines = ['# 评分点响应矩阵', '', source_line, '',
+                   '> 分值或证据未在原文中明确时保留〔需补充〕，不得推测。', '']
+    note_lines = ['> ' + str(item).strip() for item in (notes or []) if str(item).strip()]
+    if note_lines:
+        score_lines.extend(note_lines); score_lines.append('')
+    score_lines.extend(['| 序号 | 原要求/评分点 | 分值 | 响应位置 | 证据 | 缺口 |',
+                        '|---|---|---:|---|---|---|'])
     scores = [item for item in (compact.get('scoring_points') or []) if isinstance(item, dict)][:120]
     if not scores:
         scores = [{'requirement': '未识别到独立评分点', 'score': '未知',
@@ -3677,7 +3686,7 @@ def _pipeline_write_response_plan(job, attempt_root, compact):
                         '- 正文撰写按本矩阵逐项落位，质检阶段再次核对响应位置与证据。',
                         '- 评分分值、证明材料或客户事实缺失时必须保留〔需补充〕。'])
 
-    risk_lines = ['# 废标风险清单', '',
+    risk_lines = ['# 废标风险清单', '', source_line, '',
                   '> 本清单用于提交前逐项人工核验，不替代招标文件原文和法律审查。', '',
                   '| 序号 | 类别 | 招标要求 | 风险 | 提交前动作 |', '|---|---|---|---|---|']
     risks = [item for item in (compact.get('risks') or []) if isinstance(item, dict)][:160]
@@ -3696,7 +3705,10 @@ def _pipeline_write_response_plan(job, attempt_root, compact):
         '投标文件组成.md': '\n'.join(composition_lines) + '\n',
         '评分点响应矩阵.md': '\n'.join(score_lines) + '\n',
         '废标风险清单.md': '\n'.join(risk_lines) + '\n',
-        'response_plan.json': json.dumps({'chapters': chapters}, ensure_ascii=False, indent=2) + '\n',
+        'response_plan.json': json.dumps({
+            'chapters': chapters, 'source': source, 'model': str(model or ''),
+            'notes': [str(item) for item in (notes or []) if str(item).strip()],
+        }, ensure_ascii=False, indent=2) + '\n',
     }
     for name, text in artifacts.items():
         target = os.path.join(attempt_root, name)
@@ -3783,12 +3795,326 @@ def _pipeline_local_response_plan(job, attempt_root):
                                if any(word in line for word in keywords)][:8],
             'material_slots': ['与本章要求对应的资质、案例、人员或承诺证据〔需补充〕'],
         })
-    _pipeline_write_response_plan(job, attempt_root, {
-        'composition': composition,
-        'scoring_points': scores,
-        'risks': risks,
-        'chapter_guidance': guidance,
-    })
+    compact = {'composition': composition, 'scoring_points': scores,
+               'risks': risks, 'chapter_guidance': guidance}
+    _pipeline_write_response_plan(job, attempt_root, compact, source='local')
+    return compact
+
+
+# ---------- 响应规划:模型逐项核对(本地索引永远兜底) ----------
+# 0.20.4 把规划改成纯本地,是为了「规划一步不能拖垮整单」(模型返回被截断,整单卡死在
+# 章节撰写之前)。但纯本地的代价一直没人算:评分点矩阵只是含「分」字的行、「响应位置」
+# 是一句常量、「缺口」全是〔需补充〕——于是覆盖仪表永远 0/N,按章补写一条都派不出去,
+# 章节提示词里的「评分点」是含'分'字的句子而不是本章要拿的分。
+# 现在分两步:本地索引先落盘(保底,零 token、秒级);模型只做「核对」——逐项提取评分点、
+# 把每一项落到真实章节标题上、给出分值与缺口。核对失败/超时/格式不对,一律沿用本地索引
+# 并记诊断,节点照样完成;界面按「候选,待核对」显示,而不是显示一个假的 0/N。
+PLAN_OUTPUT_CONTRACT = (
+    '只返回严格 JSON：{"composition":["文件组成"],'
+    '"scoring_points":[{"requirement":"原要求","score":"分值或未知",'
+    '"location":"响应章节标题","evidence":"所需证据","gap":"缺口或无"}],'
+    '"risks":[{"category":"类别","requirement":"要求","risk":"风险",'
+    '"action":"提交前动作"}],"chapter_guidance":[{"title":"章节标题原文",'
+    '"basis":["招标依据"],"scoring_points":["评分点"],'
+    '"material_slots":["所需素材"]}]}。评分点最多 120 项、风险最多 160 项、其余最多 40 项，'
+    '不要返回章节正文。')
+PLAN_MODEL_TRIES = 2
+PLAN_SECTION_RX = re.compile(r'(评分|评标|评审|打分|资格|否决|废标|无效|实质性|投标文件的组成|投标文件组成|格式|装订|密封)')
+_CN_DIGITS = {'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5,
+              '六': 6, '七': 7, '八': 8, '九': 9}
+
+
+def _plan_model_enabled():
+    return str(os.environ.get('BIDDOG_PLAN_MODEL', '1')).strip().lower() not in ('0', 'false', 'no', 'off')
+
+
+def _cn_int(text):
+    """'3' / '３' / '三' / '十二' → int;认不出返回 0。"""
+    s = str(text or '').strip().translate(str.maketrans('０１２３４５６７８９', '0123456789'))
+    if s.isdigit(): return int(s)
+    if not s or any(ch not in _CN_DIGITS and ch != '十' for ch in s): return 0
+    if '十' not in s: return _CN_DIGITS.get(s, 0) if len(s) == 1 else 0
+    head, _, tail = s.partition('十')
+    tens = _CN_DIGITS.get(head, 1) if head else 1
+    ones = _CN_DIGITS.get(tail, 0) if tail else 0
+    return tens * 10 + ones
+
+
+def _plan_norm(text):
+    return re.sub(r'[\s\u3000·•・,，。;；:：、()（）\[\]【】《》「」\-—_/\\|｜]+', '', str(text or '')).casefold()
+
+
+def _plan_match_title(value, titles):
+    """把「响应位置」落到真实章节标题上;落不到返回 ''。
+
+    先精确,再「第 N 章」序号,最后才是包含关系——覆盖仪表、章节提示词都靠这一步
+    才知道某个评分点归哪一章,匹配不上就只能算「还没落到章节」。"""
+    raw = str(value or '').strip()
+    if not raw or '需补充' in raw: return ''
+    titles = [str(t) for t in (titles or []) if str(t).strip()]
+    key = _plan_norm(raw)
+    if not key or not titles: return ''
+    normed = [(_plan_norm(t), t) for t in titles]
+    for nk, title in normed:
+        if nk and nk == key: return title
+    m = (re.search(r'第\s*([0-9０-９零〇一二两三四五六七八九十]+)\s*(?:章|部分|节|篇)', raw)
+         or re.fullmatch(r'\s*([0-9０-９]{1,2})\s*[.、．]?\s*', raw))
+    if m:
+        idx = _cn_int(m.group(1))
+        if 1 <= idx <= len(titles): return titles[idx - 1]
+    for nk, title in normed:
+        if nk and len(nk) >= 2 and len(key) >= 2 and (nk in key or key in nk): return title
+    return ''
+
+
+def _plan_score(value):
+    s = str(value if value is not None else '').strip()
+    m = re.search(r'(\d+(?:\.\d+)?)', s.translate(str.maketrans('０１２３４５６７８９', '0123456789')))
+    if not m: return '未知'
+    n = float(m.group(1))
+    if n <= 0 or n > 1000: return '未知'
+    return ('%d 分' % n) if n.is_integer() else ('%s 分' % ('%.1f' % n).rstrip('0').rstrip('.'))
+
+
+def _plan_score_value(text):
+    m = re.search(r'\d+(?:\.\d+)?', str(text or ''))
+    return float(m.group(0)) if m else 0.0
+
+
+def _plan_score_sum(values):
+    return sum(_plan_score_value(v) for v in values)
+
+
+def _fmt_num(n):
+    n = float(n or 0)
+    return ('%d' % n) if n.is_integer() else ('%.1f' % n)
+
+
+def _plan_expected_total(parsed):
+    """从解析版里找评分办法的总分(「总分 100 分」「满分为100分」),找不到返回 None。"""
+    for m in re.finditer(r'(?:总分|满分|合计|共计|总计)[^\d\n]{0,12}(\d{2,4})\s*分', str(parsed or '')):
+        value = int(m.group(1))
+        if 10 <= value <= 1000: return value
+    return None
+
+
+def _pipeline_plan_context(parsed, budget):
+    """解析版超预算时,优先把评分/评标/资格/否决这些决定规划的章节整段喂给模型,再用文档开头补齐。"""
+    text = str(parsed or '')
+    if len(text) <= budget: return text
+    blocks, current = [], []
+    for line in text.splitlines():
+        if line.startswith('#') and current:
+            blocks.append('\n'.join(current)); current = []
+        current.append(line)
+    if current: blocks.append('\n'.join(current))
+    picked, used, rest = [], 0, []
+    for block in blocks:
+        head = block.splitlines()[0] if block else ''
+        if PLAN_SECTION_RX.search(head) and used + len(block) <= int(budget * 0.7):
+            picked.append(block); used += len(block)
+        else:
+            rest.append(block)
+    for block in rest:
+        if used >= budget: break
+        take = block[:budget - used]
+        picked.append(take); used += len(take)
+    return '\n\n'.join(picked)
+
+
+def _plan_cell(value, limit):
+    text = re.sub(r'\s+', ' ', str(value if value is not None else '')).strip()
+    text = ''.join(ch for ch in text if not 0xD800 <= ord(ch) <= 0xDFFF)
+    return text[:limit]
+
+
+def _pipeline_normalize_plan(envelope, titles, candidate=None):
+    """把模型回的规划 JSON 收成可信的结构:落位只认真实章节,分值统一成「N 分」,
+    「无缺口」统一成「无」(空串会被写成〔需补充〕,那一项就永远算不上覆盖)。
+    什么都没提取到返回 None,由调用方沿用本地索引。"""
+    if not isinstance(envelope, dict): return None
+    titles = [str(t) for t in (titles or []) if str(t).strip()]
+    scores = []
+    for item in (envelope.get('scoring_points') or [])[:200]:
+        if not isinstance(item, dict): continue
+        requirement = _plan_cell(item.get('requirement') or item.get('item') or item.get('name'), 240)
+        if not requirement: continue
+        gap = _plan_cell(item.get('gap'), 140)
+        scores.append({'requirement': requirement, 'score': _plan_score(item.get('score')),
+                       'location': _plan_match_title(item.get('location') or item.get('chapter'), titles),
+                       'evidence': _plan_cell(item.get('evidence'), 140) or '招标文件_解析版.md',
+                       'gap': '无' if (not gap or gap in COVERAGE_CLEAR_GAPS) else gap})
+    risks = []
+    for item in (envelope.get('risks') or [])[:200]:
+        if not isinstance(item, dict): continue
+        requirement = _plan_cell(item.get('requirement') or item.get('clause'), 240)
+        if not requirement: continue
+        risks.append({'category': _plan_cell(item.get('category'), 20) or '实质性要求',
+                      'requirement': requirement,
+                      'risk': _plan_cell(item.get('risk'), 140) or '未逐项响应可能导致无效投标',
+                      'action': _plan_cell(item.get('action'), 140) or '提交前由投标负责人对照原文核对'})
+    if not scores and not risks: return None
+    composition = [_plan_cell(v, 120) for v in (envelope.get('composition') or []) if _plan_cell(v, 120)][:40]
+    candidate = candidate if isinstance(candidate, dict) else {}
+    cand_guidance = {str(g.get('title') or ''): g for g in (candidate.get('chapter_guidance') or [])
+                     if isinstance(g, dict)}
+    guidance, seen = {}, []
+    for item in (envelope.get('chapter_guidance') or []):
+        if not isinstance(item, dict): continue
+        title = _plan_match_title(item.get('title'), titles)
+        if not title or title in guidance: continue
+        def _list(key, limit):
+            raw = item.get(key)
+            return ([_plan_cell(v, 240) for v in raw if _plan_cell(v, 240)][:limit]
+                    if isinstance(raw, list) else [])
+        guidance[title] = {'title': title, 'basis': _list('basis', 20),
+                           'scoring_points': _list('scoring_points', 40),
+                           'material_slots': _list('material_slots', 20)}
+        seen.append(title)
+    for title in titles:
+        entry = guidance.get(title)
+        if not entry:
+            fallback = cand_guidance.get(title) or {}
+            entry = guidance[title] = {'title': title,
+                                       'basis': list(fallback.get('basis') or []),
+                                       'scoring_points': list(fallback.get('scoring_points') or []),
+                                       'material_slots': list(fallback.get('material_slots') or [])}
+            seen.append(title)
+        # 落到本章的评分点直接进本章提示词:这才是「本章要拿的分」
+        for score in scores:
+            if score['location'] != title: continue
+            line = score['requirement'] + (('(%s)' % score['score']) if score['score'] != '未知' else '')
+            if line not in entry['scoring_points']: entry['scoring_points'].append(line)
+        entry['scoring_points'] = entry['scoring_points'][:40]
+        if not entry['basis']: entry['basis'] = ['招标文件_解析版.md']
+    if not composition: composition = list(candidate.get('composition') or [])
+    return {'composition': composition, 'scoring_points': scores[:120], 'risks': risks[:160],
+            'chapter_guidance': [guidance[t] for t in seen]}
+
+
+def _start_node_heartbeat(job, node, label='模型生成中'):
+    """生成期间的心跳:一次模型调用可长达数分钟且零事件,以前「静默 180 秒」就被
+    误判成停滞(「模型响应偏慢」),用户读作中断。每 30 秒摸一次节点活动时间
+    并发一行台词,界面上能看到它真的在干活。"""
+    hb_stop = threading.Event()
+    def _heartbeat():
+        waited = 0
+        while not hb_stop.wait(30):
+            waited += 30
+            try: generation_pipeline.touch_node(job, node.get('id'))
+            except Exception: pass
+            emit(job, {'type': 'worklog',
+                       'lines': ['「%s」%s,已进行 %d 秒(连接正常)' % (node.get('title') or node.get('id'), label, waited)]})
+    threading.Thread(target=_heartbeat, daemon=True).start()
+    return hb_stop
+
+
+def _pipeline_model_plan(job, node, model, up, attempt_root, candidate):
+    """请模型逐项核对响应规划。成功返回 {'compact','notes'};任何失败返回 None(沿用本地索引)。
+
+    这一步永远不抛(取消除外):它的存在前提就是「不能再拖垮整单」。"""
+    base = os.path.basename(job)
+    state = generation_pipeline.load(job)
+    titles = [str(item.get('title') or '') for item in (state.get('nodes') or [])
+              if str(item.get('id') or '').startswith('chapter_write:')
+              and not str(item.get('id') or '').endswith((':technical_deviation', ':business_deviation'))
+              and str(item.get('title') or '').strip()]
+    parsed = _pipeline_model_file_text(os.path.join(attempt_root, '招标文件_解析版.md'), 3_000_000)
+    budget = max(20000, int(os.environ.get('BIDDOG_PLAN_CONTEXT_CHARS', 120000)))
+    context = _pipeline_plan_context(parsed, budget)
+    request = _pipeline_model_file_text(os.path.join(attempt_root, '你的要求.md'), 6000)
+    candidate = candidate if isinstance(candidate, dict) else {}
+    cand_scores = [str(s.get('requirement') or '') for s in (candidate.get('scoring_points') or [])
+                   if isinstance(s, dict) and s.get('requirement')][:120]
+    cand_risks = [str(r.get('requirement') or '') for r in (candidate.get('risks') or [])
+                  if isinstance(r, dict) and r.get('requirement')][:160]
+    expected_total = _plan_expected_total(parsed)
+    system = (
+        '你是中标狗的响应规划核对员。任务:从招标文件里逐项提取评分点、废标/否决风险、投标文件组成,'
+        '并把每个评分点落到给定的章节标题上。' + PLAN_OUTPUT_CONTRACT +
+        '规则:1) location 只能从「章节目录」里原样照抄一个标题,确实落不到写空字符串;'
+        '2) score 写「N 分」,原文没有分值写「未知」;各项分值合计应等于评分办法总分%s;'
+        '3) gap 写「无」表示招标要求能被章节正文直接响应,有缺口时写清缺什么证据或素材;'
+        '4) 评分点逐项来自评分办法/评标办法/详细评审表,一项不漏,也不编造;'
+        '5) risks 按初步评审/资格审查/形式评审/响应性评审/否决条款逐行提取,每行一条;'
+        '6) 本地索引候选只供参考,可增删改。不要输出章节正文,不要解释。'
+        % ((',本文件识别到总分 %d 分' % expected_total) if expected_total else ''))
+    user = ('# 章节目录(location 只能用这些标题)\n'
+            + '\n'.join('%d. %s' % (index, title) for index, title in enumerate(titles, 1))
+            + '\n\n# 本地索引候选(仅供核对,可增删改)\n## 评分相关条款\n'
+            + '\n'.join('- ' + line for line in cand_scores)
+            + '\n## 风险相关条款\n' + '\n'.join('- ' + line for line in cand_risks)
+            + (('\n\n# 用户补充要求\n' + request) if request.strip() else '')
+            + '\n\n# 招标文件解析版(节选)\n' + context)
+    payload = {'model': model, 'stream': False,
+               'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
+               'max_tokens': max(1200, min(8000, int(os.environ.get('BIDDOG_PLAN_MAX_TOKENS', 3200)))),
+               'temperature': 0}
+    emit(job, {'type': 'worklog',
+               'lines': ['响应规划:本地索引 %d 条评分候选、%d 条风险候选,正在请模型逐项核对与落位'
+                         % (len(cand_scores), len(cand_risks))]})
+    reason = ''
+    hb_stop = _start_node_heartbeat(job, node, '模型核对评分点与落位中')
+    try:
+        for attempt in range(1, PLAN_MODEL_TRIES + 1):
+            if _cancel_requested(base):
+                raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+            compact = None
+            try:
+                try:
+                    response = _openai_stream_req(
+                        up['base_url'], up['api_key'], payload,
+                        idle_timeout=float(os.environ.get('BIDDOG_STREAM_IDLE_SECONDS', 90)),
+                        total_cap=float(os.environ.get('BIDDOG_MODEL_NODE_TOTAL_SECONDS', 1800)),
+                        verify=up.get('verify_ssl', True),
+                        cancel_check=lambda: _cancel_requested(base))
+                except _StreamCancelled:
+                    raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+                except urllib.error.HTTPError as exc:
+                    if exc.code not in (400, 404, 405, 422): raise
+                    response = _openai_req(up['base_url'], up['api_key'], '/chat/completions', payload,
+                                           timeout=float(os.environ.get('BIDDOG_MODEL_NODE_TIMEOUT_SECONDS', 240)),
+                                           verify=up.get('verify_ssl', True))
+                choice = ((response.get('choices') or [{}])[0] if isinstance(response, dict) else {}) or {}
+                content = ((choice.get('message') or {}).get('content') if isinstance(choice, dict) else '') or ''
+                compact = _pipeline_normalize_plan(_pipeline_json_object(content), titles, candidate)
+                if not compact:
+                    reason = '模型返回 %d 字,未形成可用的规划 JSON' % len(str(content))
+            except generation_pipeline.NodeExecutionError:
+                raise
+            except urllib.error.HTTPError as exc:
+                reason = 'HTTP %s %s' % (exc.code, _http_error_detail(exc, (up.get('api_key'),), 160))
+            except Exception as exc:
+                reason = net_hint(exc, (up.get('api_key'),))[:160]
+            if compact:
+                notes = []
+                total = _plan_score_sum(item['score'] for item in compact['scoring_points'])
+                if expected_total and total and abs(total - expected_total) > max(5, expected_total * 0.1):
+                    notes.append('分值合计 %s 分,与评分办法总分 %d 分不一致,提交前请人工核对评分表'
+                                 % (_fmt_num(total), expected_total))
+                    append_diagnostic(job, 'plan_score_total_mismatch', notes[-1], level='warning',
+                                      node_id=node.get('id'), model=model)
+                located = sum(1 for item in compact['scoring_points'] if item['location'])
+                summary = '评分点 %d 项(已落位 %d)、废标风险 %d 条' % (
+                    len(compact['scoring_points']), located, len(compact['risks']))
+                append_diagnostic(job, 'plan_model_checked', summary, level='info',
+                                  node_id=node.get('id'), model=model)
+                emit(job, {'type': 'worklog', 'lines': ['响应规划:模型核对完成,' + summary
+                                                          + (';' + notes[0] if notes else '')]})
+                return {'compact': compact, 'notes': notes}
+            if attempt < PLAN_MODEL_TRIES:
+                for _ in range(5):
+                    if _cancel_requested(base): break
+                    time.sleep(1)
+    finally:
+        hb_stop.set()
+    append_diagnostic(job, 'plan_model_fallback',
+                      '模型核对未成功(%s),沿用本地索引;评分点覆盖按候选显示' % (reason or '未知原因'),
+                      level='warning', node_id=node.get('id'), model=model)
+    emit(job, {'type': 'worklog',
+               'lines': ['响应规划:模型核对未成功(%s),沿用本地索引,评分点覆盖将按候选显示'
+                         % (reason or '未知原因')[:80]]})
+    return None
 
 
 def _pipeline_complete_truncated_markdown(content, min_chars=0):
@@ -4016,7 +4342,13 @@ def _pipeline_model_runner(job, node, prompt, model):
     outputs = [os.path.basename(str(name)) for name in (node.get('outputs') or [])]
     is_plan = node.get('id') == 'response_plan'
     if is_plan:
-        _pipeline_local_response_plan(job, str(attempt_root))
+        # 先写本地索引(保底,永远先落盘);模型只做核对,核对不成也不拖垮整单。
+        candidate = _pipeline_local_response_plan(job, str(attempt_root))
+        if _plan_model_enabled():
+            checked = _pipeline_model_plan(job, node, model, up, str(attempt_root), candidate)
+            if checked:
+                _pipeline_write_response_plan(job, str(attempt_root), checked['compact'],
+                                              source='model', model=model, notes=checked['notes'])
         try:
             with RUNNING_LOCK:
                 owner = RUNNING.get(base)
@@ -4031,13 +4363,7 @@ def _pipeline_model_runner(job, node, prompt, model):
     single_markdown = bool(not is_plan and len(outputs) == 1
                            and os.path.splitext(outputs[0])[1].lower() in ('.md', '.txt'))
     output_contract = (
-        '只返回严格 JSON：{"composition":["文件组成"],'
-        '"scoring_points":[{"requirement":"原要求","score":"分值或未知",'
-        '"location":"建议响应章节","evidence":"所需证据","gap":"缺口"}],'
-        '"risks":[{"category":"类别","requirement":"要求","risk":"风险",'
-        '"action":"提交前动作"}],"chapter_guidance":[{"title":"模板章节原名",'
-        '"basis":["招标依据"],"scoring_points":["评分点"],'
-        '"material_slots":["所需素材"]}]}。每类最多 20 项，不要返回章节正文。'
+        PLAN_OUTPUT_CONTRACT
         if is_plan else (
         '只返回文件“%s”的完整 Markdown 正文，不要 JSON，不要代码围栏，不要解释。' % outputs[0]
         if single_markdown else
@@ -4058,19 +4384,7 @@ def _pipeline_model_runner(job, node, prompt, model):
             2500 if node.get('id') == 'quality_review' else chapter_tokens),
         'temperature': 0.2,
     }
-    # 生成期间的心跳:一次模型调用可长达数分钟且零事件,以前「静默 180 秒」就被
-    # 误判成停滞(「模型响应偏慢」),用户读作中断。每 30 秒摸一次节点活动时间
-    # 并发一行台词,界面上能看到它真的在干活。
-    hb_stop = threading.Event()
-    def _heartbeat():
-        waited = 0
-        while not hb_stop.wait(30):
-            waited += 30
-            try: generation_pipeline.touch_node(job, node.get('id'))
-            except Exception: pass
-            emit(job, {'type': 'worklog',
-                       'lines': ['「%s」模型生成中,已进行 %d 秒(连接正常)' % (node.get('title') or node.get('id'), waited)]})
-    threading.Thread(target=_heartbeat, daemon=True).start()
+    hb_stop = _start_node_heartbeat(job, node)
     try:
         try:
             # 流式优先:非流式要等整段生成完才有首字节,60-100 秒空闲就被网关掐线。
@@ -4197,15 +4511,7 @@ def _pipeline_model_runner(job, node, prompt, model):
         else:
             raise generation_pipeline.NodeExecutionError('model_output_truncated', retryable=True,
                                                            detail='finish_reason=%s' % finish)
-    if is_plan:
-        envelope = _pipeline_json_object(content)
-        if not isinstance(envelope, dict):
-            append_diagnostic(job, 'model_output_invalid_json',
-                              '返回 %d 字，未形成节点 JSON' % len(str(content or '')),
-                              level='warning', node_id=node.get('id'), model=model)
-            raise generation_pipeline.NodeExecutionError('model_output_invalid_json', retryable=True)
-        _pipeline_write_response_plan(job, str(attempt_root), envelope)
-    elif single_markdown:
+    if single_markdown:
         text = str(content or '').strip()
         if text.startswith('```'):
             text = re.sub(r'^```(?:markdown|md)?\s*', '', text, flags=re.I)
@@ -4389,7 +4695,15 @@ def _parse_confirm_summary(job):
     qual = find_line(r'资质.{0,30}(等级|要求|承包|资格)') or find_line(r'(施工总承包|安全生产许可证)') or unknown
     scoring_rows = _md_table_rows(os.path.join(job, '评分点响应矩阵.md'), 6)
     method_line = find_line(r'(综合评估法|综合评分法|评分办法|经评审的最低投标价)')
-    scoring = ('共 %d 个评分点' % len(scoring_rows)) + ((' · ' + method_line) if method_line else '')
+    plan = read_json(os.path.join(job, 'response_plan.json'), {})
+    if isinstance(plan, dict) and plan.get('source') == 'local':
+        # 本地索引只是按关键词挑出来的候选行,数出来的不是「评分点数」,别把它说成评分点。
+        # 没有 response_plan.json 的是旧版/智能体路径的任务,矩阵本来就是模型写的,照旧。
+        scoring = '识别到 %d 处评分相关条款(候选,待模型核对)' % len(scoring_rows)
+    else:
+        total = _plan_score_sum(row[2] for row in scoring_rows)
+        scoring = ('共 %d 个评分点' % len(scoring_rows)) + ((' · 合计 %s 分' % _fmt_num(total)) if total else '')
+    scoring += (' · ' + method_line) if method_line else ''
     veto_rows = _md_table_rows(os.path.join(job, '废标风险清单.md'), 5)
     cats = []
     for row in veto_rows:
@@ -7396,6 +7710,9 @@ def _coverage_view(job):
     任务退化为「整册已生成」)。这是给售前汇报用的数字,口径必须经得起追问。"""
     rows = _md_table_rows(os.path.join(job, '评分点响应矩阵.md'), 6)
     if not rows: return None
+    plan = read_json(os.path.join(job, 'response_plan.json'), {})
+    if not isinstance(plan, dict): plan = {}
+    plan_source = str(plan.get('source') or '')
     chapter_state = {}
     try:
         state = generation_pipeline.load(job)
@@ -7414,8 +7731,8 @@ def _coverage_view(job):
         located = bool(location.strip()) and '需补充' not in location
         node_id, node_title, chapter_done = '', '', whole_done
         if chapter_state:
-            hit = next(((title, info) for title, info in chapter_state.items()
-                        if title and (title in location or location in title)), None)
+            matched = _plan_match_title(location, [title for title in chapter_state if title])
+            hit = (matched, chapter_state[matched]) if matched else None
             if hit:
                 node_title, node_id = hit[0], str(hit[1].get('id') or '')
                 chapter_done = hit[1].get('state') == 'done'
@@ -7432,7 +7749,11 @@ def _coverage_view(job):
         items.append({'requirement': requirement, 'score': score, 'location': location,
                       'gap': gap, 'covered': ok, 'node_id': node_id, 'chapter': node_title,
                       'reason': reason})
-    return {'total': len(items), 'covered': covered, 'items': items}
+    # plan_source 让界面分得清「真实覆盖率」和「本地候选」:本地索引里没有一条落到章节,
+    # 显示 0/N 是把一个没有意义的数字当结论。
+    return {'total': len(items), 'covered': covered, 'items': items,
+            'plan_source': plan_source, 'plan_model': str(plan.get('model') or ''),
+            'plan_notes': [str(n) for n in (plan.get('notes') or []) if str(n).strip()]}
 
 @app.get('/v1/jobs/{jid}/coverage')
 def job_coverage(jid: str):

@@ -4,7 +4,7 @@ export const IS_WEB = typeof location !== 'undefined'
 export const IS_SOURCE_PREVIEW = typeof location !== 'undefined' && location.protocol === 'file:';
 /* 公网展示用:?demo=1 强制演示模式——不探测访客本机端口、不连任何引擎,纯前端跑完整流程 */
 export const FORCE_DEMO = typeof location !== 'undefined' && /[?&]demo=1/.test(location.search);
-export const BUNDLED_ENGINE_VERSION = '0.21.1';
+export const BUNDLED_ENGINE_VERSION = '0.22.0';
 /* 每个安装版只认自己的专属端口和版本。旧 App 覆盖安装后,旧 PyInstaller 进程可能仍驻留;
    若继续探测历史端口,就会把旧引擎误认成新版,甚至在可执行文件被替换后返回 500。 */
 export const DESKTOP_ENGINE = 'http://127.0.0.1:18901';

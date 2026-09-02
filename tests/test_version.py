@@ -6,7 +6,7 @@ from conftest import ROOT
 
 def test_release_version_is_consistent(engine):
     version = engine.ENGINE_VERSION
-    assert version == "0.21.1"
+    assert version == "0.22.0"
     assert json.loads((ROOT / "app" / "package.json").read_text())["version"] == version
     assert json.loads((ROOT / "app" / "package-lock.json").read_text())["version"] == version
     assert json.loads((ROOT / "app" / "src-tauri" / "tauri.conf.json").read_text())["version"] == version

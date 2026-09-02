@@ -71,6 +71,7 @@ export default function Rail(){
   const vm = deliveryViewModel(job || {}, S.arts[id] || []);
   const primary = vm.primary;
   const cov = S.coverage[id];
+  const covLocal = !!(cov && cov.available && cov.plan_source === 'local');
   return (
     <div className="rail" id="rail">
       {/* 交付物永远是右栏第一张卡(原型定的规矩):还没出件时也先告诉用户「将要交付什么」 */}
@@ -123,17 +124,23 @@ export default function Rail(){
       {/* 评分点覆盖:比例本身就是结论(覆盖率=得分依据),用环形一眼看出还差多少。
           数据来自 /v1/jobs/{id}/coverage,每写完一章引擎重算一次。 */}
       {cov && cov.available && (
-        <Card variant="borderless" className="rcard" size="small" title="评分点覆盖 · 实时"
+        <Card variant="borderless" className="rcard" size="small"
+          title={covLocal ? '评分点 · 待核对' : '评分点覆盖 · 实时'}
           extra={<Button type="link" size="small" onClick={() => ui.openCoverage()}>查看明细 <RightOutlined /></Button>}>
           <div className="covrow">
+            {/* 本地索引没有一条落到章节:环形图不能画 0%,那是把没意义的数字当结论 */}
             <Progress type="circle" size={68}
-              percent={cov.total ? Math.round(cov.covered / cov.total * 100) : 0}
-              strokeColor={cov.covered >= cov.total ? 'var(--green)' : 'var(--blue)'}
+              percent={covLocal ? 0 : (cov.total ? Math.round(cov.covered / cov.total * 100) : 0)}
+              strokeColor={covLocal ? 'var(--faint)' : (cov.covered >= cov.total ? 'var(--green)' : 'var(--blue)')}
               trailColor="var(--line-soft)"
-              format={() => <span className="num" style={{ fontSize: 14, fontWeight: 650 }}>{cov.covered}/{cov.total}</span>} />
+              format={() => <span className="num" style={{ fontSize: 14, fontWeight: 650 }}>
+                {covLocal ? (cov.total + ' 项') : (cov.covered + '/' + cov.total)}</span>} />
             <div className="covwhy">
-              <span>写完一章,自动核对一章</span>
-              <i>每个评分点都能点开看「原文依据 ↔ 落位章节」</i>
+              {covLocal
+                ? <><span>规划来自本地关键词索引(候选)</span>
+                    <i>模型核对成功后这里才是真实覆盖率;没核对成功的原因在「运行日志」里</i></>
+                : <><span>写完一章,自动核对一章</span>
+                    <i>每个评分点都能点开看「原文依据 ↔ 落位章节」</i></>}
             </div>
           </div>
         </Card>

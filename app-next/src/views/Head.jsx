@@ -65,7 +65,12 @@ export default function Head(){
 
   // 覆盖仪表(PR #10:title 汇总未覆盖原因)
   let covPill = null;
-  if(cov && cov.available){
+  if(cov && cov.available && cov.plan_source === 'local'){
+    // 本地关键词索引只是候选:一条都没落到章节,0/N 不是事实。说清「待核对」,点开能看候选清单。
+    covPill = <Button id="covPill" className="pill covpill"
+      title="评分点来自本地关键词索引(候选),尚未经模型核对;模型核对成功后这里才是真实覆盖率。点开可看候选清单"
+      onClick={() => ui.openCoverage()}>评分点 <span className="num">{cov.total}</span> 项 · 待核对</Button>;
+  } else if(cov && cov.available){
     const un = (cov.items || []).filter(x => !x.covered);
     const names = { unlocated: '还没落到具体章节', gap: '规划里还留着缺口', chapter_pending: '所在章节还没写完' };
     const tally = {};
