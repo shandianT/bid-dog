@@ -16,9 +16,12 @@ export default function Composer(){
   const senderRef = useRef(null);
   useEffect(() => { if(answering && senderRef.current && senderRef.current.focus) senderRef.current.focus(); }, [!!answering]);
   const { delivery, caps } = S.active ? headModel() : { delivery: {}, caps: {} };
+  // 在「展示」里打字,发出去就切到「对话」——在哪打字就在哪看到回复
+  const toChat = () => { if(S.active && S.midTab[S.active] !== 'chat') S.midTab[S.active] = 'chat'; };
   function send(v0){
     const v = String(v0 != null ? v0 : draft).trim(); if(!v) return;
     setDraft('');
+    toChat();
     if(S.active && S.answering[S.active]) answer(v); else say(v);
   }
   const menu = {
@@ -43,7 +46,7 @@ export default function Composer(){
   })();
   function onQuick(key){
     const [k, label] = String(key).split('|');
-    if(k === 'q') say(label);
+    if(k === 'q'){ toChat(); say(label); }
     else if(k === 'cmd:pause') togglePause();
     else if(k === 'cmd:rerun') rerunJob();
   }

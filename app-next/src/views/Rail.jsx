@@ -12,7 +12,7 @@ import { addRef } from './newjob-core.js';
 import { ART_GROUPS, artGroup, artKind, artPurpose, openArtifact, openJobFolder } from './artifacts.js';
 import { railPhase, railDefaults, railIsOpen, railToggle } from './rail-fold.js';
 
-function FoldCard({ id, k, phase, defaults, title, extra, summary, className, children, ...rest }){
+function FoldCard({ id, k, phase, defaults, title, extra, always, summary, className, children, ...rest }){
   const open = railIsOpen(S, id, k, phase, defaults);
   const toggle = e => { if(e) e.stopPropagation(); railToggle(S, id, k, phase, defaults, bump); };
   return (
@@ -20,7 +20,7 @@ function FoldCard({ id, k, phase, defaults, title, extra, summary, className, ch
       className={'rcard' + (open ? '' : ' folded') + (className ? ' ' + className : '')}
       title={<span className="rc-title" role="button" aria-expanded={open} onClick={toggle}>
         <RightOutlined className={'rc-caret' + (open ? ' open' : '')} />{title}</span>}
-      extra={open ? extra : null} {...rest}>
+      extra={(always || (open && extra)) ? <>{always}{open ? extra : null}</> : null} {...rest}>
       {open ? children : <div className="rc-summary" onClick={toggle}>{summary}</div>}
     </Card>
   );
@@ -88,6 +88,17 @@ export default function Rail(){
   const primary = vm.primary;
   const cov = S.coverage[id];
   const covLocal = !!(cov && cov.available && cov.plan_source === 'local');
+  // 仪表的 title 汇总未覆盖原因(PR #10)
+  let covTip = '';
+  if(covLocal) covTip = '评分点来自本地关键词索引(候选),尚未经模型核对;模型核对成功后这里才是真实覆盖率。点开可看候选清单';
+  else if(cov && cov.available){
+    const un = (cov.items || []).filter(x => !x.covered);
+    const names = { unlocated: '还没落到具体章节', gap: '规划里还留着缺口', chapter_pending: '所在章节还没写完' };
+    const tally = {};
+    un.forEach(x => { const r = String(x.reason || '') || 'unlocated'; tally[r] = (tally[r] || 0) + 1; });
+    covTip = !un.length ? '全部评分点都已覆盖'
+      : '未覆盖 ' + un.length + ' 项:' + Object.keys(tally).sort((a, b) => tally[b] - tally[a]).map(r => (names[r] || r) + ' ' + tally[r] + ' 项').join('、') + '。点开逐条查看,可直接补写应答。';
+  }
 
   // 折叠规则:阶段决定默认开合,手动开合只在同一阶段内记忆
   const phase = railPhase({ missingWord, done100, waiting, halted, hasPrimary: !!primary, running: state === 'running',
@@ -157,11 +168,14 @@ export default function Rail(){
         )}
       </FoldCard>
       {/* 评分点覆盖:比例本身就是结论(覆盖率=得分依据),用环形一眼看出还差多少。
-          数据来自 /v1/jobs/{id}/coverage,每写完一章引擎重算一次。 */}
+          数据来自 /v1/jobs/{id}/coverage,每写完一章引擎重算一次。
+          仪表(#covPill)常驻标题行,折叠也看得见、点得开——以前它挂在顶栏,和这张卡说同一件事。 */}
       {cov && cov.available && (
         <FoldCard {...fc} k="coverage"
-          title={covLocal ? '评分点 · 待核对' : '评分点覆盖 · 实时'}
-          extra={<Button type="link" size="small" onClick={() => ui.openCoverage()}>查看明细 <RightOutlined /></Button>}
+          title={covLocal ? '评分点 · 待核对' : '评分点覆盖'}
+          always={<Button type="link" size="small" id="covPill" className={'covpill' + (!covLocal && cov.covered >= cov.total ? ' on' : '')}
+            title={covTip} onClick={e => { e.stopPropagation(); ui.openCoverage(); }}>
+            {covLocal ? (cov.total + ' 项 · 待核对') : <span className="num">{cov.covered}/{cov.total}</span>} <RightOutlined /></Button>}
           summary={covLocal ? <><b>{cov.total} 项</b>候选 · 待模型核对</> : <>已覆盖 <b className="num">{cov.covered}/{cov.total}</b></>}>
           <div className="covrow">
             {/* 本地索引没有一条落到章节:环形图不能画 0%,那是把没意义的数字当结论 */}

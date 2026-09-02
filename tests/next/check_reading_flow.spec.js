@@ -35,7 +35,7 @@ async function openTalkativeJob(page) {
   await expect(page.locator('#conn')).toContainText('已连接', { timeout: 15_000 });
   await page.getByText('话很多的任务', { exact: false }).first().click();
   await expect(page.locator('#hTitle')).toHaveText('话很多的任务');
-  await page.locator('#midTabs [data-midtab="chat"]').click();
+  await page.locator('#midTabs [data-midtab="chat"]').click();   // 0.22.1:两个页签,聊天在「对话」里
   // 把对话灌到明显超出一屏——短对话根本不滚,验不出跟随(空对话区高度为 0,先有内容再断言可见)
   await page.evaluate(() => {
     const id = window.S.active, l = (window.S.msgs[id] = window.S.msgs[id] || []);
@@ -75,6 +75,8 @@ test('scrolling up to read history is never interrupted by incoming messages', a
 
 test('a few hundred worklog lines stay in a scrollable box pinned to the newest line', async ({ page }) => {
   await openTalkativeJob(page);
+  await page.locator('#midTabs [data-midtab="show"]').click();          // 工作日志归「展示」里的「执行过程」,展开它
+  await page.evaluate(() => { S.flowOpen[S.active] = true; bump(); });
   await page.evaluate(() => {
     const id = window.S.active, w = (window.S.worklog[id] = window.S.worklog[id] || []);
     w.push('── 第 1 步 · 检查资料 ──');

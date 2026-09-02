@@ -71,22 +71,32 @@ async function openFixture(page) {
   await page.goto('/');
   await expect(page.locator('#conn')).toContainText('已连接', { timeout: 15_000 });
   await page.getByText('P0大纲任务', { exact: false }).first().click();
-  await expect(page.locator('#midTabs')).toBeVisible();
+  await expect(page.locator('#outlineHost')).toBeVisible();   // 0.22.1:两个页签,有章节的任务默认打开「展示」(大纲 + 执行过程)
 }
 
-test('pipeline job opens on the outline tab with per-chapter states and word counts', async ({ page }) => {
+test('pipeline job opens on the document tab: chapter list left, chapter text right', async ({ page }) => {
   await openFixture(page);
-  await expect(page.locator('#midTabs button.on')).toHaveText('标书大纲');
+  await expect(page.locator('#outlineHost .sec-title')).toHaveText('标书大纲');
   const rows = page.locator('#outlineHost .outline-row');
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText('施工组织设计');
   await expect(rows.nth(0)).toContainText('约');           // 已完成章节展示字数
-  await expect(rows.nth(0).locator('[data-rw]')).toHaveText('重写本章');
-  await expect(rows.nth(1)).toContainText('正在撰写');
-  await expect(rows.nth(1).locator('[data-rw]')).toHaveCount(0);   // 在写章节没有重写入口
+  // 默认打开第一章写完的:右边正文区带「重写本章」
+  await expect(rows.nth(0)).toHaveClass(/\bsel\b/);
+  await expect(page.locator('#docPane [data-rw]')).toHaveText('重写本章');
+  // 任务在等确认,章节「正在撰写」只是停下那一刻的快照:大纲不能跟顶栏徽章打架
+  await expect(rows.nth(1)).toContainText('等你确认后接着写');
+  await rows.nth(1).click();
+  await expect(page.locator('#docPane')).toContainText('资格与业绩');   // 右边跟着切
+  await expect(page.locator('#docPane [data-rw]')).toHaveCount(0);   // 没写完的章节没有重写入口
+  await rows.nth(0).click();
+  // 两个页签:「标书」放目录、正文与执行过程,「对话」放聊天;切过去再切回来,标书还在
+  await expect(page.locator('#midTabs button.on')).toContainText('标书');
   await page.locator('#midTabs [data-midtab="chat"]').click();
-  await expect(page.locator('#outlineHost')).toBeHidden();
   await expect(page.locator('#chatWrap')).toBeVisible();
+  await expect(page.locator('#outlineHost')).toHaveCount(0);
+  await page.locator('#midTabs [data-midtab="show"]').click();
+  await expect(page.locator('#outlineHost')).toBeVisible();
 });
 
 test('waiting-for-confirmation pauses the clock and never shows the missing-word red badge', async ({ page }) => {
@@ -103,7 +113,7 @@ test('waiting-for-confirmation pauses the clock and never shows the missing-word
 
 test('coverage pill counts plan rows against chapter completion and offers targeted fixes', async ({ page }) => {
   await openFixture(page);
-  await expect(page.locator('#covPill')).toHaveText('评分点覆盖 1/3');
+  await expect(page.locator('#covPill')).toContainText('1/3');   // 仪表在右栏评分点卡的标题行,折叠也看得见
   await page.locator('#covPill').click();
   await expect(page.locator('#covSheet')).toBeVisible();
   const items = page.locator('#covList .covitem:not(.ok)');

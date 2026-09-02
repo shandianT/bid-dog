@@ -1,26 +1,30 @@
-// 中栏:页签(标书大纲/执行过程/对话与要求)+ 流程台 + 对话 + 工作日志。
-// 页签默认逻辑、流程台视图模型、消息渲染逐字对应经典 currentMidTab/renderFlowConsole/renderChat/renderWorklog。
+// 中栏:两个页签——「对话」= 聊天(问进度、提要求、回答 AI 的提问,输入框发出去自动切过来);
+// 「标书」= 一行可收起的执行过程 + 标书视图(左目录、右正文)。流程台视图模型、消息渲染逐字对应经典。
 import React, { useLayoutEffect, useRef, useState } from 'react';
-import { Card, Steps, List, Tag, Alert, Empty, Badge, Progress } from 'antd';
+import { Card, Steps, List, Tag, Button } from 'antd';
 import { ThoughtChain } from '@ant-design/x';
-import { CheckCircleFilled, LoadingOutlined, CloseCircleFilled, ClockCircleOutlined } from '@ant-design/icons';
-import { S, ui, bump, flowConsoleView, taskPresentation, phaseTimingLabel, timing, fmtDur,
-         jobState, _friendlyText, _friendlyActionLabel, errAction, answer, ASK_SELF } from '../core/index.js';
+import { CheckCircleFilled, LoadingOutlined, CloseCircleFilled, ClockCircleOutlined, RightOutlined } from '@ant-design/icons';
+import { S, ui, bump, flowConsoleView, taskPresentation, phaseTimingLabel, timing, fmtDur, knownStep,
+         jobState, publicTaskState, _friendlyText, _friendlyActionLabel, errAction, answer, ASK_SELF } from '../core/index.js';
 import { mdHtml } from '../lib.js';
-import Outline, { _chapterNodes, _fmtWords } from './Outline.jsx';
+import Outline, { _chapterNodes } from './Outline.jsx';
 import ConfirmCard from './ConfirmCard.jsx';
 
-const MID_TABS = [['outline', '标书大纲'], ['flow', '执行过程'], ['chat', '对话与要求']];
+const STATE_LABELS = { done: '已完成', active: '进行中', attention: '需关注', failed: '未完成', pending: '等待中' };
 
+const MID_TABS = [['chat', '对话'], ['show', '标书']];
+const TAB_HINT = { chat: '问进度、提要求;AI 的提问也在这里回答', show: '目录在左,正文在右;执行过程收在最上面一行' };
+
+// 默认页签:AI 在等你回答 → 对话;有章节或有流程可看 → 展示;什么都还没有 → 对话。用户点过就记住。
 export function currentMidTab(id){
   if(S.midTab[id]) return S.midTab[id];
-  if(_chapterNodes(id).length) return 'outline';
-  if(((S.arts[id]) || []).some(a => /^章节_/.test(a.name || ''))) return 'outline';
+  const chip = S.chips[id];
+  if(chip && chip.kind !== 'confirm_parse') return 'chat';
+  if(_chapterNodes(id).length) return 'show';
+  if(((S.arts[id]) || []).some(a => /^章节_/.test(a.name || ''))) return 'show';
   const job = (S.jobs || []).find(x => x.job_id === id);
-  return (job && job.flow) ? 'flow' : 'chat';
+  return (job && job.flow) ? 'show' : 'chat';
 }
-
-const STATE_LABELS = { done: '已完成', active: '进行中', attention: '需关注', failed: '未完成', pending: '等待中' };
 
 function FlowConsole(){
   const id = S.active, job = (S.jobs || []).find(x => x.job_id === id);
@@ -30,7 +34,11 @@ function FlowConsole(){
   const selectedId = (S.flowPhaseSelection[id] && vm.phases.some(x => x.id === S.flowPhaseSelection[id])) ? S.flowPhaseSelection[id] : vm.currentPhase;
   const selected = vm.phases.find(x => x.id === selectedId) || vm.phases[0];
   const checks = Array.isArray(selected.checks) ? selected.checks : [];
-  const selectedTiming = phaseTimingLabel(selected), selectedIsCurrent = selected.id === vm.currentPhase;
+  // 任务没在跑,未完成阶段的「已用 / 已超出」只是从开始时刻数到现在的钟,不是真干活的时间:停了就只报常规耗时
+  const frozen = publicTaskState(job) !== 'generating';
+  const timingOf = x => phaseTimingLabel(frozen && String(x.state) !== 'done'
+    ? Object.assign({}, x, { elapsed_seconds: null, overdue_seconds: 0, remaining_seconds: null }) : x);
+  const selectedTiming = timingOf(selected), selectedIsCurrent = selected.id === vm.currentPhase;
   const currentIndex = Math.max(0, vm.phases.findIndex(x => x.id === vm.currentPhase));
   const trackRef = useRef(null);
   // antd Steps 不透传任意 DOM 属性,契约要的 data-phase 在渲染后按顺序打上(幂等)
@@ -65,7 +73,7 @@ function FlowConsole(){
             description: (
               <span className="fp-d">
                 <span title={x.evidence || x.detail}>{x.detail || x.evidence || '等待执行'}</span>
-                {phaseTimingLabel(x) ? <small className="flow-phase-time num">{phaseTimingLabel(x)}</small> : null}
+                {timingOf(x) ? <small className="flow-phase-time num">{timingOf(x)}</small> : null}
               </span>
             ),
           }))} />
@@ -128,6 +136,9 @@ function ChatMessages(){
   if(q && options.length) options.push(ASK_SELF);
   return (
     <div className="chatwrap" id="chatWrap" ref={boxRef}>
+      {!list.length && !q && !S.typing[S.active] && (
+        <div className="chat-empty">还没有对话。问进度、提要求,或回答 AI 的提问,都在这里。</div>
+      )}
       {list.map((m, mi) => {
         if(m.role === 'sys') return <div className="sysline" key={mi}><span className="sdot2" />{m.text}</div>;
         const u = m.role === 'user';
@@ -172,7 +183,7 @@ function Worklog(){
   const p0 = S.prog[id] || {};
   const j0 = (S.jobs || []).find(x => x.job_id === id);
   const running = j0 ? jobState(j0) === 'running' : (p0.pct || 0) < 100 && p0.step;
-  const live = (p0.pct || 0) < 100;
+  const live = !!running && (p0.pct || 0) < 100;   // 停下的任务不是「进行中」,是回放
   // 台词按「── 第 N 步 · 名称 ──」分段,正好落成 ThoughtChain 的一节:
   // 标题=这一步在干什么,内容=它逐行报的事实。
   // 量过:492 行分一次 0.047ms,而一次事件驱动的整树提交中位 8.4ms——记忆化省下的是
@@ -217,42 +228,27 @@ function Worklog(){
   );
 }
 
-// 章节撰写:原型的双列网格,数据来自真实 pipeline(写完的显示字数,正在写的有呼吸点)
-function Chapters(){
-  const id = S.active; if(!id) return null;
-  const nodes = _chapterNodes(id);
-  if(!nodes.length) return null;
-  const arts = S.arts[id] || [];
-  const done = nodes.filter(n => n.state === 'done').length;
+// 执行过程一行摘要 + 展开/收起:没有章节可看、或任务停了/没完成 → 默认展开;在写/已完成 → 收成一行。
+// 这一行只说流程台自己的事(当前阶段 / 第几步 / 断点),状态由顶栏徽章说,不再复读顶栏副题。
+function FlowSection({ id, job, open }){
+  const prog = S.prog[id] || {};
+  const vm = flowConsoleView(job.flow, S.streamState[id], prog);
+  const cur = vm.phases.find(x => x.id === vm.currentPhase) || vm.phases[0];
+  const k = knownStep(job, prog, 12);
   return (
-    <Card variant="borderless" className="lcard-a"
-      title={<span>章节撰写 <span className="num" style={{ color: 'var(--dim)', fontWeight: 450 }}>{done}/{nodes.length}</span></span>}
-      extra={<span className="lx">每写完一节即存检查点 · 中途停下不丢内容</span>}>
-      <Progress percent={Math.round(done / nodes.length * 100)} showInfo={false} size={['100%', 4]}
-        strokeColor="var(--green)" trailColor="var(--line-soft)" style={{ marginBottom: 10 }} />
-      <div className="chgrid">
-        {nodes.map(n => {
-          const out = (n.outputs && n.outputs[0]) || '';
-          const art = arts.find(a => a.name === out);
-          const st = n.state === 'done' ? 'done'
-            : (n.state === 'running' || n.state === 'retry_wait') ? 'writing'
-            : (n.state === 'failed' || n.state === 'blocked') ? 'failed' : 'queued';
-          const meta = st === 'done' ? (_fmtWords(art && art.size_kb) || '已完成')
-            : st === 'writing' ? '撰写中 ↑'
-            : st === 'failed' ? '未完成' : '排队中';
-          return (
-            <div className={'chrow ' + st} key={n.id}
-              onClick={() => { if(st === 'done' && out) ui.openPreview(out); }}>
-              {st === 'done' ? <span className="chok">✓</span>
-                : st === 'writing' ? <i className="pulse" />
-                : st === 'failed' ? <i className="chfail" /> : <i className="qdot" />}
-              <span className="chname" title={n.title || n.id}>{n.title || n.id}</span>
-              <span className="chmeta num">{meta}</span>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
+    <div className={'sec flow-sec' + (open ? ' open' : '')}>
+      <button type="button" className="sec-head sec-toggle" id="flowToggle" aria-expanded={open}
+        onClick={() => { S.flowOpen[id] = !open; bump(); }}>
+        <RightOutlined className={'sec-caret' + (open ? ' open' : '')} />
+        <span className="sec-title">执行过程</span>
+        <span className="sec-meta">{[cur ? cur.label : '', k ? '第 ' + k + '/12 步' : '', vm.checkpoint].filter(Boolean).join(' · ')}</span>
+        <span className="sec-x">{open ? '收起' : '展开'}</span>
+      </button>
+      {open && <>
+        <Card variant="borderless" className="lcard-a"><FlowConsole /></Card>
+        <Worklog />
+      </>}
+    </div>
   );
 }
 
@@ -261,21 +257,42 @@ export default function Mid(){
   const job = id ? (S.jobs || []).find(x => x.job_id === id) : null;
   const on = !!(id && job);
   const tab = on ? currentMidTab(id) : 'chat';
+  // 「对话」页签上的角标:待在「展示」里时新到的回复数(只数 AI 的话,进度系统行和自己发的不算);
+  // AI 在等回答则直接写「待回答」
+  const replies = ((id && S.msgs[id]) || []).filter(m => m.role !== 'user' && m.role !== 'sys').length;
+  if(id && (tab === 'chat' || S.midSeen[id] == null)) S.midSeen[id] = replies;
+  const unread = (on && tab !== 'chat') ? Math.max(0, replies - (S.midSeen[id] || 0)) : 0;
+  const chip = on ? S.chips[id] : null;
+  const asking = !!(chip && chip.kind !== 'confirm_parse' && tab !== 'chat');
+  // 「展示」页签上常驻章节进度:在对话里也知道写到哪了
+  const nodes = on ? _chapterNodes(id) : [];
+  const chDone = nodes.filter(n => n.state === 'done').length;
+  const hasOutline = on && (nodes.length > 0 || (S.arts[id] || []).some(a => /^章节_/.test(a.name || '')));
+  const st = job ? publicTaskState(job) : '';
+  const flowDefault = !hasOutline || st === 'failed';
+  const flowOpen = on && (S.flowOpen[id] != null ? !!S.flowOpen[id] : flowDefault);
   return (
     <div id="chat" className="mid">
       {on && (
-        <div className="cwrap"><div className="midtabs" id="midTabs">
-          {MID_TABS.map(([k, label]) => <button key={k} type="button" data-midtab={k} className={k === tab ? 'on' : ''}
-            onClick={() => { S.midTab[id] = k; bump(); }}>{label}</button>)}
+        <div className="cwrap midbar-wrap"><div className="midbar">
+          <div className="midtabs" id="midTabs" role="tablist">
+            {MID_TABS.map(([k, label]) => (
+              <button key={k} type="button" role="tab" data-midtab={k} aria-selected={k === tab} className={k === tab ? 'on' : ''}
+                onClick={() => { S.midTab[id] = k; bump(); }}>
+                {label}
+                {k === 'chat' && asking ? <i className="tab-badge ask">待回答</i>
+                  : k === 'chat' && unread ? <i className="tab-badge num">{unread}</i>
+                  : k === 'show' && nodes.length ? <i className="tab-sub num">{chDone}/{nodes.length} 章</i> : null}
+              </button>
+            ))}
+          </div>
+          <span className="midbar-hint">{TAB_HINT[tab]}</span>
         </div></div>
       )}
       <div className="cwrap"><ConfirmCard /></div>
-      {on && tab === 'outline' && <div className="cwrap" id="outlineHost"><Outline /></div>}
-      {(!on || tab === 'flow') && <div className="cwrap" id="flowHost">
-        <Card variant="borderless" className="lcard-a"><FlowConsole /></Card></div>}
-      {on && tab === 'flow' && <div className="cwrap"><Chapters /></div>}
-      {(!on || tab === 'chat') && <div className="cwrap"><ChatMessages /></div>}
-      {(!on || tab === 'chat') && <div className="cwrap"><Worklog /></div>}
+      {on && tab === 'show' && <div className="cwrap" id="flowHost"><FlowSection id={id} job={job} open={flowOpen} /></div>}
+      {on && tab === 'show' && <div className="cwrap" id="outlineHost"><Outline /></div>}
+      {(!on || tab === 'chat') && <div className="cwrap chat-sec"><ChatMessages /></div>}
     </div>
   );
 }

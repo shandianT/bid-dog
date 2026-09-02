@@ -58,6 +58,7 @@ async function openFixture(page) {
 
 test('the compare reader puts tender text and the chapter side by side and a scoring point locates both', async ({ page }) => {
   await openFixture(page);
+  await page.locator('#moreBtn').click();                       // 对照阅读收进顶栏「···」
   await expect(page.locator('#compareBtn')).toBeVisible();
   await page.locator('#compareBtn').click();
   await expect(page.locator('#compareSheet')).toBeVisible();
@@ -77,6 +78,8 @@ test('the usage dashboard lists the job with its estimated token count', async (
   await page.locator('#usageLink').click();
   await expect(page.locator('#usageSheet')).toBeVisible();
   await expect(page.locator('#usageTotals')).toContainText('模型调用');
+  // fixture 的建单时间是固定的,默认「近 30 天」窗口总有一天会把它滑出去——看板切到「全部」再断言
+  await page.locator('#usageSheet .ant-segmented-item', { hasText: '全部' }).click();
   const row = page.locator('#usageJobs tr', { hasText: 'P4对照任务' });
   await expect(row).toBeVisible({ timeout: 10_000 });
   await expect(row).toContainText('test-model');

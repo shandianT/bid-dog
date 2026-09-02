@@ -30,7 +30,7 @@ function buildTheme(dark, scale){
     token: {
       colorPrimary: dark ? '#4d8df0' : '#0f62d6', colorInfo: dark ? '#4d8df0' : '#0f62d6', colorLink: dark ? '#4d8df0' : '#0f62d6',
       borderRadius: 10,
-      fontSize: Math.round(14 * scale * 10) / 10,
+      fontSize: Math.round(13 * scale * 10) / 10,      // 基准 14 → 13:一屏多看四成内容
       fontFamily: "-apple-system,BlinkMacSystemFont,'PingFang SC','HarmonyOS Sans SC','MiSans','Microsoft YaHei UI','Segoe UI',Roboto,sans-serif",
       ...(dark ? night : light),
     },

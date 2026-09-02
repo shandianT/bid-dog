@@ -46,7 +46,8 @@ function TaskRow({ j, compact }){
       </div>
       <div className="st">
         {j.project_id ? <span className="project-tag" title={j.project_id}>{j.project_id}</span> : null}
-        {present.currentAction} · {present.lastActivity}{present.eta && present.eta !== '—' ? ' · ' + present.eta : ''}
+        {/* 列表一行只放得下「状态 · 多久前」;它具体在干什么,选中后顶栏说——以前整句塞进来,每行都截成半句 */}
+        {(present.state === 'failed' && j.has_word) ? '待处理' : present.label} · {present.lastActivity}{present.state === 'generating' && /^约/.test(present.eta || '') ? ' · ' + present.eta : ''}
       </div>
       {!compact && <div className="bar"><b style={{ width: Math.max(0, Math.min(100, p)) + '%' }} /></div>}
       {menuOpen && <div className="task-menu" onClick={e => e.stopPropagation()}>
@@ -63,8 +64,8 @@ function TaskRow({ j, compact }){
 function BulkPanel({ visibleJobs }){
   if(!visibleJobs.length) return null;
   if(!S.taskBulkMode) return (
-    <div className="taskbulk"><div className="tbrow"><span className="tbsp" />
-      <button type="button" onClick={() => setTaskBulkMode(true)}>批量管理</button></div></div>
+    <div className="taskbulk idle"><div className="tbrow"><span className="tbsp" />
+      <button type="button" className="tblink" onClick={() => setTaskBulkMode(true)}>批量管理</button></div></div>
   );
   const selected = visibleJobs.filter(j => S.taskSelected.has(j.job_id)).length;
   const all = selected === visibleJobs.length;
