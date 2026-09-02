@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = ['multipart', 'multipart.multipart', 'pypdf', 'template_engine', 'generation_pipeline']
+hiddenimports = ['multipart', 'multipart.multipart', 'pypdf', 'template_engine', 'generation_pipeline', 'prompts']
 # 本地 spec 构建必须与 GitHub CI 的 --add-data 保持一致。缺少该 ZIP 时
 # 全新客户环境虽然引擎健康，但 Word 导出/质检脚本无法自动解压。
 datas += [('bidmultiagenttao_v5.3.zip', '.')]

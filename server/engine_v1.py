@@ -10,7 +10,7 @@
 import os, re, sys, ssl, json, glob, time, signal, hashlib, hmac, secrets, base64, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error, urllib.parse, io, platform
 import xml.etree.ElementTree as ET
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from threading import Lock as _ThreadLock, RLock as _ThreadRLock
 from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, Request
@@ -22,6 +22,7 @@ from template_engine import (builtin_templates, compare_instruction_coverage,
                              extract_document_structure, normalize_package,
                              recommend_template, validate_package)
 import generation_pipeline
+import prompts
 
 def _configure_stdio_utf8():
     """Windows GUI/重定向日志常落到 cp1252；启动横幅含中文时不能因此让整个 sidecar 崩溃。"""
@@ -1819,13 +1820,13 @@ def quality_audit(job, known):
     for fn in mds:
         mp = os.path.join(job, fn)
         try:
-            res = qg.audit(mp, materials=mat, min_chapter=3500, score=score, deviations=devs)
+            res = qg.audit(mp, materials=mat, min_chapter=prompts.CHAPTER_TARGET_CHARS, score=score, deviations=devs)
             fixed, pre_images = None, None
             if res['plan'] or any(l == 'red' and ('打散' in t or '重复' in t) for l, t in res['items']):
                 pre_images = res['images']
                 fixed = qg.apply_fix(mp, res)
                 fixed_total += fixed or 0
-                res = qg.audit(mp, materials=mat, min_chapter=3500, score=score, deviations=devs)
+                res = qg.audit(mp, materials=mat, min_chapter=prompts.CHAPTER_TARGET_CHARS, score=score, deviations=devs)
             try: qg.write_report(os.path.join(job, '成品质检报告.md'), fn, res, fixed, images_pre=pre_images)
             except TypeError: qg.write_report(os.path.join(job, '成品质检报告.md'), fn, res, fixed)
             if order[res['level']] > order[worst]: worst = res['level']
@@ -3336,6 +3337,73 @@ def oc_run(job, prompt, allow_cli_fallback=True):
     return result
 
 
+# ---------- 生成参数(可配,给 A/B 用) ----------
+# 复读循环最爱的组合是「低温 + 无 penalty + 长输出」。默认值不动(没有证据不改默认),
+# 但必须能配:tools/model_ab.py 跑同一份招标文件对比 temperature / frequency_penalty,
+# 换参数才有数字可依。penalty 为 0 时不放进请求体,免得少数网关拒收未知字段。
+GEN_PARAM_BOUNDS = {'temperature': (0.0, 2.0, 0.2),
+                    'frequency_penalty': (-2.0, 2.0, 0.0),
+                    'presence_penalty': (-2.0, 2.0, 0.0)}
+
+
+def _normalize_generation_params(raw):
+    out = {}
+    if not isinstance(raw, dict): return out
+    for key, (low, high, _default) in GEN_PARAM_BOUNDS.items():
+        if raw.get(key) in (None, ''): continue
+        try: value = float(raw.get(key))
+        except (TypeError, ValueError): continue
+        out[key] = round(max(low, min(high, value)), 3)
+    return out
+
+
+def _generation_params(conf=None):
+    conf = conf if isinstance(conf, dict) else read_json(conf_path(), {})
+    eng = conf.get('engine') if isinstance(conf.get('engine'), dict) else {}
+    chosen = _normalize_generation_params(eng.get('generation_params'))
+    return {key: chosen.get(key, default) for key, (_low, _high, default) in GEN_PARAM_BOUNDS.items()}
+
+
+def _apply_generation_params(payload, params):
+    payload['temperature'] = float(params.get('temperature', 0.2))
+    for key in ('frequency_penalty', 'presence_penalty'):
+        if params.get(key): payload[key] = float(params[key])
+    return payload
+
+
+# ---------- 章节并行度 ----------
+# 以前 batch = ready[:2]:两章一批、等两章都写完才发下一批。10 章 × 2–4 分钟就是 20 分钟串行。
+# 现在是持续 N 路在飞:一章写完立刻补位;某一章撞到 429 限流,这一单余下的章节自动降到 2 路。
+PIPELINE_THROTTLED = set()          # 本轮撞过限流的任务 id
+
+
+def _chapter_parallelism():
+    try: value = int(os.environ.get('BIDDOG_CHAPTER_PARALLEL', 4))
+    except (TypeError, ValueError): value = 4
+    return max(1, min(8, value))
+
+
+def _chapter_slots(base):
+    limit = _chapter_parallelism()
+    return min(limit, 2) if base in PIPELINE_THROTTLED else limit
+
+
+def _used_chapter_headings(job, node, state=None):
+    """其他已写完章节的小标题清单:传给撰写员,本章不得重复(SKILL 第 4 步的纪律,流水线以前没做)。"""
+    state = state or generation_pipeline.load(job)
+    out = []
+    for item in state.get('nodes') or []:
+        if item.get('id') == node.get('id') or item.get('state') != 'done': continue
+        if not str(item.get('id') or '').startswith('chapter_write:'): continue
+        for name in item.get('outputs') or []:
+            path = os.path.join(job, os.path.basename(str(name)))
+            try: text = open(path, encoding='utf-8', errors='ignore').read(200000)
+            except OSError: continue
+            for heading in prompts.used_headings_from_text(text):
+                if heading not in out: out.append(heading)
+    return out[:prompts.CHAPTER_MAX_USED_HEADINGS]
+
+
 def _pipeline_mode(conf=None):
     conf = conf if isinstance(conf, dict) else read_json(conf_path(), {})
     eng = conf.get('engine') or {}
@@ -3580,14 +3648,7 @@ def _pipeline_direct_task(job, node):
         return ('生成商务偏离表，使用 Markdown 表格，覆盖报价、付款、工期、质保、交付、签章等；'
                 '列为“序号｜招标条款/商务要求｜投标响应｜偏离情况｜依据/证据｜备注”。')
     if node_id.startswith('chapter_write:'):
-        user_note = str(node.get('user_note') or '').strip()
-        return ('撰写章节“%s”。逐项响应招标要求并标注依据；素材缺失写〔需补充〕。'
-                '本章依据：%s；评分点：%s；素材槽位：%s。正文至少 2500 个中文字符。'
-                '表格必须按具体用途命名列，同一章内禁止反复使用“信息项｜内容”等泛化表头。%s' % (
-                    node.get('title') or '本章', '、'.join(node.get('basis') or []) or '招标解析版',
-                    '、'.join(node.get('scoring_points') or []) or '按响应矩阵核对',
-                    '、'.join(node.get('material_slots') or []) or '无指定素材槽位',
-                    ('本次为人工发起的单章重写，用户补充要求（必须落实）：%s。' % user_note) if user_note else ''))
+        return prompts.chapter_task(node)
     if node_id == 'quality_review':
         return ('复核整册对评分点、废标风险、偏离表和事实边界的覆盖情况，输出明确的质检结论、'
                 '缺口和提交前人工确认项；不改写正文。')
@@ -4370,10 +4431,19 @@ def _pipeline_model_runner(job, node, prompt, model):
         '只返回一个严格 JSON 对象，格式为 {"files":{"文件名":"完整文件正文"}}。'
         'files 必须且只能包含：%s。Markdown 文件值必须是完整 Markdown 字符串；'
         'JSON 文件值可以是对象。' % '、'.join(outputs)))
-    system = (
-        '你是中标狗的有界投标文件节点。以下 SKILL 是本轮必须遵守的写作契约。\n'
-        '<SKILL>\n%s\n</SKILL>\n不要调用工具，不要解释过程。%s'
-        '未知客户事实必须标记〔需补充〕，不得编造。' % (skill_contract, output_contract))
+    node_id_text = str(node.get('id') or '')
+    is_prose_chapter = (node_id_text.startswith('chapter_write:')
+                        and not node_id_text.endswith((':technical_deviation', ':business_deviation')))
+    if is_prose_chapter:
+        # 论述章:用结构化契约(prompts.py)替代被关键词正则打碎的 SKILL 摘要,
+        # 并把其他章已用过的小标题传进去;SKILL 只留事实边界那一小段。
+        system = (prompts.chapter_contract(node.get('title'), _used_chapter_headings(job, node))
+                  + '\n\n<SKILL 事实边界摘要>\n%s\n</SKILL 事实边界摘要>\n%s' % (skill_contract[:2500], output_contract))
+    else:
+        system = (
+            '你是中标狗的有界投标文件节点。以下 SKILL 是本轮必须遵守的写作契约。\n'
+            '<SKILL>\n%s\n</SKILL>\n不要调用工具，不要解释过程。%s'
+            '未知客户事实必须标记〔需补充〕，不得编造。' % (skill_contract, output_contract))
     user = _pipeline_direct_task(job, node) + '\n\n# 已由引擎确定性读取的输入\n' + '\n\n'.join(sections)
     chapter_tokens = max(1200, min(8000, int(
         os.environ.get('BIDDOG_CHAPTER_MAX_TOKENS', 4800))))
@@ -4382,8 +4452,8 @@ def _pipeline_model_runner(job, node, prompt, model):
         'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
         'max_tokens': 3200 if is_plan else (
             2500 if node.get('id') == 'quality_review' else chapter_tokens),
-        'temperature': 0.2,
     }
+    _apply_generation_params(payload, _generation_params(conf))
     hb_stop = _start_node_heartbeat(job, node)
     try:
         try:
@@ -4598,9 +4668,9 @@ def _pipeline_prompt(job, node):
             '`废标风险清单.md` 和素材目录。\n'
             '本章规划依据：%s。对应评分点：%s。素材槽位：%s。'
             '前置章节产物：%s，必须读取并保持一致。\n'
-            '唯一输出：`%s`。正文应逐项响应并标注证据来源；素材缺失写〔需补充〕，至少 800 字。' %
+            '唯一输出：`%s`。正文应逐项响应并标注证据来源；素材缺失写〔需补充〕，论述章不少于 %d 个中文字符。' %
             (node.get('title') or '本章', basis, scores, slots, dependency_files,
-             outputs[0] if outputs else '章节.md'))
+             outputs[0] if outputs else '章节.md', prompts.CHAPTER_TARGET_CHARS))
     if node_id == 'quality_review':
         output = outputs[0] if outputs else '模型复核报告.md'
         return common + (
@@ -4620,6 +4690,8 @@ def _pipeline_event(job, event, node):
             emit(job, {'type': 'artifact', 'name': name})
     elif event == 'retry':
         error_code = str(node.get('error_code') or '')
+        if error_code == 'model_rate_limited':
+            PIPELINE_THROTTLED.add(os.path.basename(job))
         if error_code == 'model_output_truncated':
             reason = '模型输出过长，已缩小本节范围并重试'
         elif error_code in ('model_output_invalid_json', 'model_output_contract_mismatch',
@@ -4802,21 +4874,30 @@ def generation_pipeline_worker(job):
                 on_event=lambda event, current: _pipeline_event(job, event, current))
         # 每次恢复都从 DAG 根节点按序校验摘要；摘要未变的 done 节点会立即复用，
         # 依赖产物变化时下游才会被精确重做。
+        # 持续 N 路在飞(默认 4):一章写完立刻补位,而不是两章一批互相等;撞到限流降到 2 路。
+        PIPELINE_THROTTLED.discard(base)
         completed_ids = set()
         remaining = {node['id']: node for node in chapter_nodes}
-        while remaining:
-            ready = [node for node in remaining.values()
-                     if set(node.get('dependencies') or []) <= completed_ids]
-            if not ready:
-                raise generation_pipeline.PipelineError('章节依赖无法继续执行')
-            batch = ready[:2]
-            with ThreadPoolExecutor(max_workers=len(batch)) as pool:
-                futures = {pool.submit(write_chapter, node): node for node in batch}
-                for future in as_completed(futures):
-                    future.result()
-                    node = futures[future]
-                    completed_ids.add(node['id'])
+        running = {}
+        with ThreadPoolExecutor(max_workers=_chapter_parallelism()) as pool:
+            while remaining or running:
+                in_flight = {item['id'] for item in running.values()}
+                ready = [node for node in remaining.values()
+                         if set(node.get('dependencies') or []) <= completed_ids
+                         and node['id'] not in in_flight]
+                if not ready and not running:
+                    raise generation_pipeline.PipelineError('章节依赖无法继续执行')
+                for node in ready:
+                    if len(running) >= _chapter_slots(base): break
                     remaining.pop(node['id'], None)
+                    running[pool.submit(write_chapter, node)] = node
+                if not running:
+                    continue
+                done, _pending = wait(list(running), return_when=FIRST_COMPLETED)
+                for future in done:
+                    node = running.pop(future)
+                    future.result()
+                    completed_ids.add(node['id'])
 
         emit(job, {'type': 'progress', 'stage': '各章已完成，正在汇总整册',
                    'pct': 78, 'step': 9, 'total': 12})
@@ -5599,7 +5680,8 @@ def agent_status():
             's2_defaults': {'base_url': S2_DEFAULT_BASE, 'model': S2_DEFAULT_MODEL},
             's2_borrowed': (not (eng.get('s2_key') or '').strip()) and bool(s2_conf(conf)['api_key']),
             'codex_bundled': bool(bundled_codex()), 'opencode_bundled': bool(bundled_cli('opencode-cli')),
-            's2_model_effective': s2_conf(conf)['model']}
+            's2_model_effective': s2_conf(conf)['model'],
+            'generation_params': _generation_params(conf)}
 
 def config_locked_jobs():
     """只让正在执行或暂停的会话锁住全局模型。
@@ -5645,19 +5727,25 @@ async def set_agent(req: Request):
                       's2_base_url': body.get('s2_base_url', ''), 's2_model': body.get('s2_model', ''),
                       # Key 留空 = 沿用已存的(页面不回显 Key,不能因为"没传"就把它清掉)
                       's2_key': (body.get('s2_key') or '').strip() or old.get('s2_key', ''),
-                      's2_wire': body.get('s2_wire', 'auto'), 's2_verify_ssl': body.get('s2_verify_ssl', True)}
+                      's2_wire': body.get('s2_wire', 'auto'), 's2_verify_ssl': body.get('s2_verify_ssl', True),
+                      # 生成参数:传了就按传的(越界钳到范围内),没传沿用已存的
+                      'generation_params': (_normalize_generation_params(body.get('generation_params'))
+                                            if body.get('generation_params') is not None
+                                            else (old.get('generation_params') or {}))}
     if body.get('cmd_clear'): new_engine['cmd'] = ''
     if body.get('env_clear'): new_engine['env'] = ''
     if body.get('s2_key_clear'): new_engine['s2_key'] = ''
     candidate = dict(conf); candidate['engine'] = new_engine
     new_fingerprint = oc_config_fingerprint(candidate)
-    if config_locked_jobs() and new_fingerprint != old_fingerprint:
+    params_changed = _generation_params(candidate) != _generation_params(conf)
+    if config_locked_jobs() and (new_fingerprint != old_fingerprint or params_changed):
         return JSONResponse({'ok': False,
-                             'error': '还有任务正在生成。为避免同一任务中途换模型，请等任务结束或先停止任务再切换模式。'}, 409)
+                             'error': '还有任务正在生成。为避免同一任务中途换模型或参数，请等任务结束或先停止任务再切换。'}, 409)
     conf['engine'] = new_engine
     write_json(conf_path(), conf)
     if new_fingerprint != old_fingerprint: invalidate_oc_runtime()
-    return {'ok': True, 's2_model_effective': s2_conf(conf)['model']}
+    return {'ok': True, 's2_model_effective': s2_conf(conf)['model'],
+            'generation_params': _generation_params(conf)}
 
 @app.post('/v1/agent/test')
 def agent_test():
@@ -7262,6 +7350,63 @@ def list_job_revisions(jid: str):
     if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
     root_id = product_meta(job).get('root_job_id') or os.path.basename(jid)
     return _revision_family(root_id)
+
+# ---------- 修改指令路由:指到某一章就只重写那一章,别整单重跑 ----------
+# 「继续修改」以前一律建子任务从头跑全部节点:用户写「第三章售后响应时间改成 2 小时」,
+# 要等 5–12 章全部重写完。现在先判范围:指令指到具体章节(第 N 章 / 章节标题 / 偏离表)
+# 且不涉及整册与版式 → 走单章重写(旧稿进历史版本,汇总与 Word 自动跟着更新);
+# 否则才出整册新版本。判定是确定性的,并把结果先给用户看,由用户最终选。
+REVISION_WHOLE_RX = re.compile(
+    r'(整册|整本|整份|全书|全部章节|所有章节|每一章|各章|全文|从头|重新生成|封面|目录|页眉|页脚|页码'
+    r'|排版|版式|格式|字体|页边距|统一(?:改|换|替换|成|为)|投标人名称|公司名|公司名称)')
+
+
+def _route_revision_instruction(job, instruction):
+    text = str(instruction or '').strip()
+    try:
+        state = generation_pipeline.load(job)
+    except Exception:
+        state = {}
+    if state.get('version') != generation_pipeline.PIPELINE_VERSION:
+        return {'scope': 'whole', 'reason': '这一单用的是旧版生成流程,不支持单章重写', 'chapters': []}
+    nodes = [item for item in (state.get('nodes') or [])
+             if str(item.get('id') or '').startswith('chapter_write:')]
+    chapters = [{'node_id': str(item.get('id') or ''), 'title': str(item.get('title') or '')} for item in nodes]
+    prose = [item for item in chapters if not item['node_id'].endswith((':technical_deviation', ':business_deviation'))]
+    hits = []
+    def add(item):
+        if item and item['node_id'] not in [h['node_id'] for h in hits]: hits.append(item)
+    if re.search(r'技术.{0,4}偏离|技术应答', text):
+        add(next((c for c in chapters if c['node_id'].endswith(':technical_deviation')), None))
+    if re.search(r'商务.{0,4}偏离', text):
+        add(next((c for c in chapters if c['node_id'].endswith(':business_deviation')), None))
+    for m in re.finditer(r'第\s*([0-9０-９零〇一二两三四五六七八九十]+)\s*(?:章|部分|节|篇)', text):
+        idx = _cn_int(m.group(1))
+        if 1 <= idx <= len(prose): add(prose[idx - 1])
+    key = _plan_norm(text)
+    for item in sorted(prose, key=lambda c: -len(c['title'])):
+        nk = _plan_norm(item['title'])
+        if len(nk) >= 2 and (item['title'] in text or nk in key): add(item)
+    whole = bool(REVISION_WHOLE_RX.search(text))
+    if len(hits) == 1 and not whole:
+        return {'scope': 'chapter', 'node_id': hits[0]['node_id'], 'title': hits[0]['title'],
+                'reason': '指令指到了「%s」这一章' % hits[0]['title'], 'chapters': chapters}
+    if len(hits) > 1:
+        return {'scope': 'whole', 'reason': '指令涉及 %d 章(%s),引擎一次只能重写一章;整册新版本会一起改' % (
+            len(hits), '、'.join(h['title'] for h in hits[:4])), 'chapters': chapters, 'hits': hits}
+    if whole:
+        return {'scope': 'whole', 'reason': '指令涉及整册或版式', 'chapters': chapters}
+    return {'scope': 'whole', 'reason': '指令没有指到具体章节;要只改一章,请在下面选章', 'chapters': chapters}
+
+
+@app.post('/v1/jobs/{jid}/revisions/plan')
+async def plan_job_revision(jid: str, req: Request):
+    job = jpath(jid)
+    if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
+    try: body = await req.json()
+    except Exception: body = {}
+    return {'ok': True, **_route_revision_instruction(job, (body or {}).get('instruction') or '')}
+
 
 @app.post('/v1/jobs/{jid}/revisions')
 async def create_job_revision(jid: str, req: Request):

@@ -1,7 +1,7 @@
 // 视图 B 的弹层组:出件前检查 / 评分点覆盖 / 单章重写(预演 diff)/ 修改结果 / 产物预览。
 // 数据路径逐字对应经典 renderCheck/repairJob/openCoverage/submitRewrite/doRedo/openPreview。
-import React, { useEffect, useState } from 'react';
-import { Modal, Input, Checkbox, Button, List, Progress, Tag, Alert, Empty, Segmented } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { Modal, Input, Checkbox, Button, List, Progress, Tag, Alert, Empty, Segmented, Select } from 'antd';
 import { S, ui, bump, api, select, errAction, presentProblem, refreshArts, loadPipeline, loadCoverage, jobState,
          covReasonHint, _friendlyText, _friendlyActionLabel } from '../core/index.js';
 import { IS_WEB } from '../core/env.js';
@@ -306,14 +306,57 @@ export function RewriteSheet(){
   );
 }
 
-/* ---------- 修改结果(整册修改,经典 openRevision/doRedo) ---------- */
+/* ---------- 修改结果:先判范围,指到一章就只重写那一章 ----------
+   以前「继续修改」一律建子任务从头跑全部节点:写「第三章售后响应时间改成 2 小时」
+   要等 5–12 章全部重写完。现在停顿 400ms 就问引擎 /revisions/plan 这条要求会改到哪,
+   把范围先亮出来(只改一章 / 整册新版本),用户可改;只改一章走既有的单章重写通道。 */
 export function RedoSheet(){
   const open = !!(S.sheet && S.sheet.name === 'redo');
   const [txt, setTxt] = useState('');
-  useEffect(() => { if(open) setTxt(''); }, [open]);
+  const [route, setRoute] = useState(null);     // 引擎的范围判定
+  const [scope, setScope] = useState('');       // 用户手动改过的范围('' = 跟引擎判定)
+  const [node, setNode] = useState('');         // 只改一章时选的章
+  const seq = useRef(0);
+  useEffect(() => { if(open){ setTxt(''); setRoute(null); setScope(''); setNode(''); seq.current++; } }, [open]);
+  useEffect(() => {
+    if(!open || !S.online || !S.active) return undefined;
+    const t = txt.trim();
+    if(!t){ setRoute(null); return undefined; }
+    const mine = ++seq.current;
+    const timer = setTimeout(async () => {
+      try{
+        const r = await api('/v1/jobs/' + encodeURIComponent(S.active) + '/revisions/plan',
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction: t }) });
+        if(mine !== seq.current) return;
+        setRoute(r && r.ok !== false ? r : null);
+        // 引擎指到了某一章:替用户选上;用户已经自己选过的不动
+        if(r && r.scope === 'chapter' && r.node_id) setNode(prev => prev || r.node_id);
+      }catch(_){ if(mine === seq.current) setRoute(null); }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [txt, open]);
+  const chapters = (route && route.chapters) || [];
+  const effScope = scope || (route && route.scope) || 'whole';
+  const effNode = effScope === 'chapter' ? (node || (route && route.node_id) || '') : '';
+  const effTitle = (chapters.find(c => c.node_id === effNode) || {}).title || '';
   async function doRedo(){
     const t = txt.trim();
     if(!t){ ui.toast('先写清楚要修改哪一部分'); return; }
+    if(effScope === 'chapter'){
+      if(!effNode){ ui.toast('先选要改的那一章'); return; }
+      ui.closeAll();
+      try{
+        const r = await api('/v1/jobs/' + encodeURIComponent(S.active) + '/chapters/' + encodeURIComponent(effNode) + '/rewrite',
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: t }) });
+        if(r && r.ok === false) throw new Error(r.error || '重写没能启动');
+        ui.toast('已开始重写「' + (effTitle || '所选章节') + '」,其余章节不动');
+        setTimeout(() => { loadPipeline(S.active); loadCoverage(S.active); }, 800);
+      }catch(err){
+        ui.toast(err && err.message || '重写没能启动,稍后重试');
+        presentProblem({ level: 'error', title: '单章重写没有启动', text: _friendlyText(err && err.message || '请检查任务状态后重试。'), detail: err && err.message || '', actions: [{ act: 'retry_revision', label: '重新填写' }] });
+      }
+      return;
+    }
     ui.closeAll();
     try{
       let r;
@@ -329,14 +372,31 @@ export function RedoSheet(){
     }
   }
   return (
-    <Modal open={open} onCancel={ui.closeAll} width={540} centered title="修改结果:出一个新版本"
-      okText="开始修改" onOk={doRedo} cancelText="取消">
+    <Modal open={open} onCancel={ui.closeAll} width={560} centered title="修改结果"
+      okText={effScope === 'chapter' ? '只改这一章' : '开始修改'} onOk={doRedo} cancelText="取消">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div className="rw-diff">
-          <div className="drow"><span className="dk">会发生什么</span><span>按你的要求出一个新版本任务,原任务与文件全部保留</span></div>
-        </div>
-        <Input.TextArea rows={5} autoFocus value={txt} onChange={e => setTxt(e.target.value)}
+        <Input.TextArea rows={5} autoFocus value={txt} onChange={e => setTxt(e.target.value)} id="rwInstruction"
           placeholder="写清楚要修改哪一部分、改成什么样。例:第三章售后响应时间改为 2 小时;整册把公司名统一为 XX 科技" />
+        {S.online && chapters.length > 0 && (
+          <div className="rw-scope" id="rwScope">
+            <Segmented size="small" value={effScope} onChange={v => setScope(v)}
+              options={[{ label: '只改一章', value: 'chapter' }, { label: '整册出新版本', value: 'whole' }]} />
+            {effScope === 'chapter' && (
+              <Select id="rwChapter" size="small" style={{ minWidth: 220 }} placeholder="选要改的那一章"
+                value={effNode || undefined} onChange={v => setNode(v)}
+                options={chapters.map(c => ({ value: c.node_id, label: c.title }))} />
+            )}
+            {route && route.reason ? <span className="outline-note" id="rwRouteReason">{route.reason}</span> : null}
+          </div>
+        )}
+        <div className="rw-diff" id="rwPlan">
+          {effScope === 'chapter'
+            ? <>
+                <div className="drow"><span className="dk">会发生什么</span><span>只重写「{effTitle || '所选章节'}」,其余章节原样保留;旧稿存入「历史版本」文件夹</span></div>
+                <div className="drow keep"><span className="dk">完成后</span><span>自动重新汇总成册并跑质检,Word 一起更新</span></div>
+              </>
+            : <div className="drow"><span className="dk">会发生什么</span><span>按你的要求出一个新版本任务,原任务与文件全部保留;所有章节都会重写</span></div>}
+        </div>
       </div>
     </Modal>
   );

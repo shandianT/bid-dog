@@ -9,6 +9,12 @@
     python3 tools/model_ab.py --tender 招标文件.docx \\
         --models deepseek-v4-flash glm-5.3-flash
 
+同一个模型比参数(复读循环最爱「低温 + 无 penalty + 长输出」,换参数也要有数字):
+    python3 tools/model_ab.py --tender 招标文件.docx \\
+        --models "deepseek-v4-flash" "deepseek-v4-flash?temperature=0.5&frequency_penalty=0.4"
+  变体写法 模型?键=值&键=值,键只认 temperature / frequency_penalty / presence_penalty;
+  --temperature / --frequency-penalty / --presence-penalty 给所有没单独写参数的变体兜底。
+
 说明:
 - **脚本全程不碰你的 API Key**。切模型走 PUT /v1/agent,`s2_key` 留空即沿用已保存的,
   Key 既不读也不写、更不会落进结果文件。
@@ -23,6 +29,25 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import doc_quality as dq                                    # noqa: E402
 
 TERMINAL = ('completed', 'failed', 'stopped', 'needs_input')
+PARAM_KEYS = ('temperature', 'frequency_penalty', 'presence_penalty')
+
+
+def parse_variant(spec, defaults=None):
+    """'模型?temperature=0.5&frequency_penalty=0.4' → (模型, {参数}, 标签)。
+
+    标签就是原样的 spec:同一模型两组参数在结果表里必须分得开。未知键忽略、非数字忽略;
+    defaults 给没单独写的键兜底(命令行全局参数)。"""
+    text = str(spec or '').strip()
+    model, _, query = text.partition('?')
+    params = {}
+    for key, values in urllib.parse.parse_qs(query, keep_blank_values=False).items():
+        if key not in PARAM_KEYS or not values: continue
+        try: params[key] = float(values[-1])
+        except (TypeError, ValueError): continue
+    for key, value in (defaults or {}).items():
+        if key in PARAM_KEYS and value is not None and key not in params:
+            params[key] = float(value)
+    return model.strip(), params, text
 CJK = lambda s: sum(1 for ch in s if '一' <= ch <= '鿿')
 THIN_CHAPTER_CJK = 2000        # 与成品质检同一条线:低于它算「内容明显偏薄」
 
@@ -125,8 +150,9 @@ def compare_table(rows):
 
 
 # ---------------------------------------------------------------------- 主流程
-def run_one(base, model, tender, poll, budget):
+def run_one(base, model, tender, poll, budget, label=None, params=None):
     started = time.time()
+    label = label or model
     job = _upload_job(base, tender, 'AB-%s-%s' % (model, time.strftime('%H%M%S')))
     jid = job.get('job_id') or job.get('id') or ''
     if not jid:
@@ -166,7 +192,8 @@ def run_one(base, model, tender, poll, budget):
     except Exception:
         pipeline = {}
     result = score_run(chapters, whole, coverage, pipeline, row, time.time() - started)
-    result.update({'模型': model, 'job_id': jid, '终态': str(row.get('state') or '')})
+    result.update({'模型': label, '模型id': model, '参数': dict(params or {}),
+                   'job_id': jid, '终态': str(row.get('state') or '')})
     return result
 
 
@@ -174,7 +201,11 @@ def main():
     ap = argparse.ArgumentParser(description='中标狗模型 A/B 跑批')
     ap.add_argument('--base', default='http://127.0.0.1:18901', help='引擎地址')
     ap.add_argument('--tender', required=True, help='招标文件(所有模型用同一份)')
-    ap.add_argument('--models', nargs='+', required=True, help='要对比的模型 id')
+    ap.add_argument('--models', nargs='+', required=True,
+                    help='要对比的模型 id;可带参数变体,如 "m?temperature=0.5&frequency_penalty=0.4"')
+    ap.add_argument('--temperature', type=float, default=None, help='所有变体的默认 temperature')
+    ap.add_argument('--frequency-penalty', type=float, default=None, help='所有变体的默认 frequency_penalty')
+    ap.add_argument('--presence-penalty', type=float, default=None, help='所有变体的默认 presence_penalty')
     ap.add_argument('--poll', type=int, default=20, help='轮询间隔秒')
     ap.add_argument('--budget', type=int, default=3600, help='每个模型最长等待秒')
     ap.add_argument('--out', default='model_ab_result.json')
@@ -186,19 +217,26 @@ def main():
     print('开跑前的模型:%s' % (original.get('s2_model_effective') or original.get('s2_model') or '(默认)'))
 
     rows = []
+    defaults = {'temperature': args.temperature, 'frequency_penalty': args.frequency_penalty,
+                'presence_penalty': args.presence_penalty}
     try:
-        for model in args.models:
-            print('\n=== %s ===' % model, flush=True)
+        for spec in args.models:
+            model, params, label = parse_variant(spec, defaults)
+            print('\n=== %s ===' % label, flush=True)
             # s2_key 不传 = 沿用已保存的:脚本不读也不写你的 Key
             body = dict(original)
             body.pop('s2_model_effective', None)
             body['s2_model'] = model
+            # 变体没写参数就沿用开跑前的参数,免得「没写」被当成「清零」
+            body['generation_params'] = params or (original.get('generation_params') or {})
             r = _req(args.base, '/v1/agent', 'PUT', body)
             if not r.get('ok'):
                 print('  ✗ 切模型失败:%r(跳过)' % (r,), flush=True)
                 continue
-            print('  已切到 %s' % (r.get('s2_model_effective') or model), flush=True)
-            rows.append(run_one(args.base, model, args.tender, args.poll, args.budget))
+            print('  已切到 %s · 参数 %s' % (r.get('s2_model_effective') or model,
+                                            r.get('generation_params') or params or '(默认)'), flush=True)
+            rows.append(run_one(args.base, model, args.tender, args.poll, args.budget,
+                                label=label, params=r.get('generation_params') or params))
     finally:
         restore = dict(original); restore.pop('s2_model_effective', None)
         try:

@@ -61,6 +61,28 @@
 新增 `tests/test_response_plan_model.py`(7 条)与 `tests/next/check_plan_source.spec.js`(2 条);
 原「规划不调模型」那条测试改为钉住「本地索引先写好、模型失败也完成」。
 
+### 修改指令路由到单章 · 章节持续 4 路在飞 · 生成参数可配 · 章节撰写契约
+
+- **「继续修改」先判范围。** 以前一律建子任务从头跑全部节点——写「第三章售后响应时间
+  改成 2 小时」要等所有章节重写完。现在停顿 400ms 就问引擎 `POST /v1/jobs/{id}/revisions/plan`:
+  指令指到具体章节(第 N 章 / 章节标题 / 技术或商务偏离表)且不涉及整册与版式 → 走单章重写
+  通道(旧稿进历史版本,汇总与 Word 自动跟着更新);涉及多章、整册、版式或没指到章节 → 整册
+  新版本。范围先亮出来,用户可改、可换章。
+- **章节持续 4 路在飞。** 以前 `batch = ready[:2]` 两章一批互相等,10 章 20 分钟串行;现在
+  一章写完立刻补位(`BIDDOG_CHAPTER_PARALLEL`,默认 4,上限 8),某一章撞到 429 限流后这一单
+  余下章节自动降到 2 路。
+- **生成参数可配。** `PUT /v1/agent` 接受 `generation_params`(temperature / frequency_penalty /
+  presence_penalty,越界钳到范围内),`GET /v1/agent` 回显;任务跑着时不许改(A/B 的可比性靠这个)。
+  默认值不动——没有证据不改默认。`tools/model_ab.py` 支持参数变体
+  `"deepseek-v4-flash?temperature=0.5&frequency_penalty=0.4"`,同一模型两组参数在结果表里分得开。
+- **章节撰写契约独立成文(`server/prompts.py`)。** 论述章的 system 不再是把多 agent 版 SKILL.md
+  用关键词正则压出来的零散句子,而是一份不到 1500 字的结构化契约:事实边界、小标题按本章现拟
+  并**传入其他章已用过的小标题清单**(SKILL 第 4 步的纪律,流水线以前没做)、表格装真内容、
+  配图只证明响应、资质整块留位。篇幅线统一成一个常量 `CHAPTER_TARGET_CHARS = 3500`
+  (以前提示词 2500、OpenCode 路径 800、质检黄线 3500,三处三个数)。
+
+新增 `tests/test_p1_pipeline.py`(19 条)与 `tests/next/check_revision_route.spec.js`(2 条)。
+
 ## [0.21.1] - 2026-09-01
 
 ### 官网的在线体验换成新界面

@@ -635,3 +635,6 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .covwhy i{font-style:normal;color:var(--dim);font-size:11.5px}
 .gapmix{display:flex;gap:6px;margin-top:2px}
 .gapmix .ant-tag{border-radius:999px;font-size:11px;padding:2px 9px;margin:0}
+/* 修改结果:范围控件一行(分段 + 章节选择 + 引擎的判定理由) */
+.rw-scope{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.rw-scope .outline-note{flex-basis:100%;margin-top:-2px}

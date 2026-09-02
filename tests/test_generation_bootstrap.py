@@ -366,7 +366,8 @@ def test_model_node_uses_non_stream_completion_and_injects_skill_contract(
     assert captured["payload"]["model"] == engine.S2_DEFAULT_MODEL
     assert captured["payload"]["max_tokens"] == 4800
     assert "不得编造资质" in captured["payload"]["messages"][0]["content"]
-    assert "至少 2500 个中文字符" in captured["payload"]["messages"][1]["content"]
+    assert "不少于 3500 个中文字符" in captured["payload"]["messages"][1]["content"]
+    assert "【小标题】" in captured["payload"]["messages"][0]["content"]
     assert "禁止反复使用“信息项｜内容”" in captured["payload"]["messages"][1]["content"]
     assert "write/edit" not in captured["payload"]["messages"][1]["content"]
     assert (job / "章节_01.md").is_file()

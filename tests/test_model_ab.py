@@ -82,3 +82,19 @@ def test_table_puts_usability_before_polish():
     header = table.splitlines()[0]
     assert header.index("出件") < header.index("复读章节数") < header.index("整册汉字数")
     assert "✅" in table and "❌" in table
+
+
+def test_variant_spec_carries_generation_params_and_keeps_the_label():
+    """同一模型两组参数在结果表里必须分得开:标签原样,参数只认三个键,非数字忽略。"""
+    model, params, label = model_ab.parse_variant(
+        "deepseek-v4-flash?temperature=0.5&frequency_penalty=0.4&bogus=1&presence_penalty=x")
+    assert model == "deepseek-v4-flash"
+    assert params == {"temperature": 0.5, "frequency_penalty": 0.4}
+    assert label == "deepseek-v4-flash?temperature=0.5&frequency_penalty=0.4&bogus=1&presence_penalty=x"
+
+    model, params, label = model_ab.parse_variant("glm-5.3-flash")
+    assert (model, params, label) == ("glm-5.3-flash", {}, "glm-5.3-flash")
+
+    # 全局参数只给没单独写的键兜底
+    _m, params, _l = model_ab.parse_variant("m?temperature=0.2", {"temperature": 0.9, "frequency_penalty": 0.3})
+    assert params == {"temperature": 0.2, "frequency_penalty": 0.3}
