@@ -169,14 +169,22 @@ test('the Word preview renders the real docx content, not a markdown stand-in', 
   await expect(page.locator('.pv-stats')).toContainText('真实 Word 内容');
 });
 
-test('⌘⏎ sends the composer draft', async ({ page }) => {
+test('⌘⏎ sends the composer draft and brings you back to the chat tab', async ({ page }) => {
   await openApp(page);
   await page.getByText('P3真预览任务', { exact: false }).first().click();
   await expect(page.locator('#composer')).toBeVisible();
+  // 待在「展示」里时到达的回复,在「对话」页签上计数——不用来回切也知道有新消息
+  await page.locator('#midTabs [data-midtab="show"]').click();
+  await expect(page.locator('#chatWrap')).toHaveCount(0);
+  await page.evaluate(() => { const id = S.active; (S.msgs[id] = S.msgs[id] || []).push({ role: 'assistant', text: '第 2 章写完了' }); bump(); });
+  await expect(page.locator('#midTabs [data-midtab="chat"] .tab-badge')).toHaveText('1');
   await page.route('**/v1/jobs/*/messages', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }));
   const box = page.locator('#composer textarea').first();
   await box.fill('各章分别写了多少字?');
   await box.press('Control+Enter');
+  // 在哪打字就在哪看到回复:发出去自动切到「对话」,角标清零
+  await expect(page.locator('#midTabs button.on')).toContainText('对话');
   await expect(page.locator('#chatWrap .msg.u').last()).toContainText('各章分别写了多少字?');
+  await expect(page.locator('#midTabs .tab-badge')).toHaveCount(0);
   await expect(box).toHaveValue('');
 });

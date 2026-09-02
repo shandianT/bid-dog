@@ -104,7 +104,7 @@ test('a run that stopped before assembly is not flagged as missing its Word', as
 
 test('the flow console header and node rows follow the real state', async ({ page }) => {
   await openStoppedJob(page);
-  await page.evaluate(() => { S.flowOpen[S.active] = true; bump(); });   // 0.22.1:执行过程是可收起的一段,不是页签
+  await page.evaluate(() => { S.flowOpen[S.active] = true; bump(); });   // 0.22.1:执行过程是「展示」里可收起的一段
   await expect(page.locator('#flowHost .flow-kicker')).toHaveText('已停止');   // 不再写死「生成进行中」
   const pending = page.locator('#flowHost .flow-node-row.pending').first();
   await expect(pending).toBeVisible();

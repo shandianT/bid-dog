@@ -1,5 +1,5 @@
-// 中栏:一屏到底,不分页签——上面是标书大纲(内容),中间是可收起的执行过程(过程),
-// 下面是对话(就在输入框上方,在哪打字就在哪看到回复)。流程台视图模型、消息渲染逐字对应经典。
+// 中栏:两个页签——「对话」= 聊天(问进度、提要求、回答 AI 的提问,输入框发出去自动切过来);
+// 「展示」= 标书大纲(内容)+ 可收起的执行过程(过程)。流程台视图模型、消息渲染逐字对应经典。
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Card, Steps, List, Tag, Button } from 'antd';
 import { ThoughtChain } from '@ant-design/x';
@@ -11,6 +11,20 @@ import Outline, { _chapterNodes } from './Outline.jsx';
 import ConfirmCard from './ConfirmCard.jsx';
 
 const STATE_LABELS = { done: '已完成', active: '进行中', attention: '需关注', failed: '未完成', pending: '等待中' };
+
+const MID_TABS = [['chat', '对话'], ['show', '展示']];
+const TAB_HINT = { chat: '问进度、提要求;AI 的提问也在这里回答', show: '标书大纲 · 执行过程' };
+
+// 默认页签:AI 在等你回答 → 对话;有章节或有流程可看 → 展示;什么都还没有 → 对话。用户点过就记住。
+export function currentMidTab(id){
+  if(S.midTab[id]) return S.midTab[id];
+  const chip = S.chips[id];
+  if(chip && chip.kind !== 'confirm_parse') return 'chat';
+  if(_chapterNodes(id).length) return 'show';
+  if(((S.arts[id]) || []).some(a => /^章节_/.test(a.name || ''))) return 'show';
+  const job = (S.jobs || []).find(x => x.job_id === id);
+  return (job && job.flow) ? 'show' : 'chat';
+}
 
 function FlowConsole(){
   const id = S.active, job = (S.jobs || []).find(x => x.job_id === id);
@@ -118,6 +132,9 @@ function ChatMessages(){
   if(q && options.length) options.push(ASK_SELF);
   return (
     <div className="chatwrap" id="chatWrap" ref={boxRef}>
+      {!list.length && !q && !S.typing[S.active] && (
+        <div className="chat-empty">还没有对话。问进度、提要求,或回答 AI 的提问,都在这里。</div>
+      )}
       {list.map((m, mi) => {
         if(m.role === 'sys') return <div className="sysline" key={mi}><span className="sdot2" />{m.text}</div>;
         const u = m.role === 'user';
@@ -233,23 +250,43 @@ export default function Mid(){
   const id = S.active;
   const job = id ? (S.jobs || []).find(x => x.job_id === id) : null;
   const on = !!(id && job);
-  const hasOutline = on && (_chapterNodes(id).length > 0 || (S.arts[id] || []).some(a => /^章节_/.test(a.name || '')));
+  const tab = on ? currentMidTab(id) : 'chat';
+  // 「对话」页签上的角标:待在「展示」里时新到的回复数(只数 AI 的话,进度系统行和自己发的不算);
+  // AI 在等回答则直接写「待回答」
+  const replies = ((id && S.msgs[id]) || []).filter(m => m.role !== 'user' && m.role !== 'sys').length;
+  if(id && (tab === 'chat' || S.midSeen[id] == null)) S.midSeen[id] = replies;
+  const unread = (on && tab !== 'chat') ? Math.max(0, replies - (S.midSeen[id] || 0)) : 0;
+  const chip = on ? S.chips[id] : null;
+  const asking = !!(chip && chip.kind !== 'confirm_parse' && tab !== 'chat');
+  // 「展示」页签上常驻章节进度:在对话里也知道写到哪了
+  const nodes = on ? _chapterNodes(id) : [];
+  const chDone = nodes.filter(n => n.state === 'done').length;
+  const hasOutline = on && (nodes.length > 0 || (S.arts[id] || []).some(a => /^章节_/.test(a.name || '')));
   const st = job ? publicTaskState(job) : '';
   const flowDefault = !hasOutline || st === 'failed';
   const flowOpen = on && (S.flowOpen[id] != null ? !!S.flowOpen[id] : flowDefault);
-  const msgs = (on && S.msgs[id]) || [];
   return (
     <div id="chat" className="mid">
-      <div className="cwrap"><ConfirmCard /></div>
-      {on && <div className="cwrap" id="outlineHost"><Outline /></div>}
-      {on && <div className="cwrap" id="flowHost"><FlowSection id={id} job={job} open={flowOpen} /></div>}
       {on && (
-        <div className="cwrap chat-sec">
-          <div className="sec-head"><span className="sec-title">对话</span>
-            <span className="sec-meta">{msgs.length ? msgs.length + ' 条' : '问进度、提要求;AI 的提问也在这里回答'}</span></div>
-          <ChatMessages />
-        </div>
+        <div className="cwrap midbar-wrap"><div className="midbar">
+          <div className="midtabs" id="midTabs" role="tablist">
+            {MID_TABS.map(([k, label]) => (
+              <button key={k} type="button" role="tab" data-midtab={k} aria-selected={k === tab} className={k === tab ? 'on' : ''}
+                onClick={() => { S.midTab[id] = k; bump(); }}>
+                {label}
+                {k === 'chat' && asking ? <i className="tab-badge ask">待回答</i>
+                  : k === 'chat' && unread ? <i className="tab-badge num">{unread}</i>
+                  : k === 'show' && nodes.length ? <i className="tab-sub num">{chDone}/{nodes.length} 章</i> : null}
+              </button>
+            ))}
+          </div>
+          <span className="midbar-hint">{TAB_HINT[tab]}</span>
+        </div></div>
       )}
+      <div className="cwrap"><ConfirmCard /></div>
+      {on && tab === 'show' && <div className="cwrap" id="outlineHost"><Outline /></div>}
+      {on && tab === 'show' && <div className="cwrap" id="flowHost"><FlowSection id={id} job={job} open={flowOpen} /></div>}
+      {(!on || tab === 'chat') && <div className="cwrap chat-sec"><ChatMessages /></div>}
     </div>
   );
 }

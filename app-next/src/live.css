@@ -779,7 +779,17 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .flow-console{gap:12px}
 .flow-detail{padding-top:11px;gap:8px}
 
-/* ============ 0.22.1:中栏一屏到底(大纲 / 执行过程 / 对话),不分页签 ============ */
+/* ============ 0.22.1:中栏两页签(对话 / 展示) ============ */
+.midbar-wrap{position:sticky;top:0;z-index:3;background:var(--bg);padding-top:8px;padding-bottom:6px}
+.midbar{display:flex;align-items:center;gap:12px;min-width:0}
+.midbar-hint{font:400 var(--fs-xs)/1.5 inherit;color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.midtabs button{display:inline-flex;align-items:center;gap:6px}
+.tab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:15px;height:15px;margin:-2px 0;padding:0 5px;
+  border-radius:999px;background:var(--blue);color:#fff;font:600 10px/1 inherit;font-style:normal}
+.tab-badge.ask{background:var(--amber)}
+.tab-sub{font:500 var(--fs-xs)/1 inherit;color:var(--dim);font-style:normal}
+.midtabs button.on .tab-sub{color:var(--sub)}
+.chat-empty{font:400 var(--fs-sm)/1.6 inherit;color:var(--dim);padding:14px 4px}
 .sec-head{display:flex;align-items:center;gap:10px;padding:2px 2px 6px;min-width:0}
 .sec-title{font:650 var(--fs-md)/1.4 inherit;color:var(--ink);flex:none}
 .sec-meta{font:400 var(--fs-xs)/1.5 inherit;color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -794,5 +804,4 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .sec-caret{font-size:10px;color:var(--faint);transition:transform .18s}
 .sec-caret.open{transform:rotate(90deg)}
 .sec-x{font:450 var(--fs-xs)/1 inherit;color:var(--blue);flex:none}
-.chat-sec{padding-top:6px}
-.chat-sec .sec-head{border-top:1px solid var(--line-soft);padding-top:10px;margin-top:2px}
+.chat-sec{padding-top:4px}
