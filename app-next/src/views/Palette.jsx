@@ -33,7 +33,11 @@ export default function Palette(){
     hasResult: !!(job && vm.primary && (state === 'completed' || state === 'needs_input')),
     showingResult: !!(job && S.processView[S.active] !== true),
     toggleResult: wrap(() => { S.processView[S.active] = S.processView[S.active] !== true; bump(); }),
+    canCompare: !!(job && (S.arts[S.active] || []).some(a => a.name === '招标文件_解析版.md')),
+    openCompare: wrap(() => ui.openSheet('compare')),
     openAssets: wrap(() => ui.openSheet('assets')), openSettings: wrap(() => ui.openSheet('providers')),
+    openUsage: wrap(() => ui.openSheet('usage')),
+    importZip: wrap(() => { const el = document.getElementById('zipin'); if(el) el.click(); }),
     checkUpdate: wrap(() => checkForUpdate()),
     prefs: getPrefs(), setPrefs: p => { close(); setPrefs(p); bump(); },
   };

@@ -4,13 +4,14 @@
 import React, { useRef } from 'react';
 import { Checkbox, Tooltip, Segmented, Button, Select, Empty, Badge } from 'antd';
 import { PlusOutlined, FolderOutlined, SettingOutlined, MoreOutlined,
-         InboxOutlined, ArrowUpOutlined } from '@ant-design/icons';
+         InboxOutlined, ArrowUpOutlined, BarChartOutlined, ImportOutlined } from '@ant-design/icons';
 import { S, ui, bump, taskPresentation, publicTaskState, taskGroupOpen, checkForUpdate,
          visibleTaskJobs, setTaskScope, setTaskProjectFilter, setTaskBulkMode,
          toggleTaskSelection, toggleAllTaskSelection, runBulkTaskAction, deleteSelectedJobs,
          archiveJob, restoreJob, runTaskRowAction, select, BUNDLED_ENGINE_VERSION } from '../core/index.js';
 import { njAddFiles } from './newjob-core.js';
 import Logo from '../Logo.jsx';
+import { importJobZip } from './import-core.js';
 
 const STATE_COLOR = { preparing:'var(--dim)', generating:'var(--blue)', needs_input:'var(--amber)', completed:'var(--green)', failed:'var(--red)' };
 
@@ -94,7 +95,7 @@ function BulkPanel({ visibleJobs }){
 }
 
 export default function Sidebar(){
-  const fileRef = useRef(null);
+  const fileRef = useRef(null), zipRef = useRef(null);
   const g = { preparing: [], generating: [], needs_input: [], completed: [], failed: [] };
   const visibleJobs = visibleTaskJobs();
   visibleJobs.forEach(j => { g[publicTaskState(j)].push(j); });
@@ -166,6 +167,11 @@ export default function Sidebar(){
 
       <div className="side-links">
         <span className="sl" onClick={() => ui.openSheet('assets')}><InboxOutlined /> 素材库</span>
+        <span className="sl" id="usageLink" onClick={() => ui.openSheet('usage')}><BarChartOutlined /> 用量看板</span>
+        <span className="sl" id="importLink" title="导入同事导出的任务包(zip),接着改、接着交付"
+          onClick={() => zipRef.current && zipRef.current.click()}><ImportOutlined /> 导入任务包</span>
+        <input ref={zipRef} type="file" id="zipin" accept=".zip" style={{ display: 'none' }}
+          onChange={e => { importJobZip(e.target.files[0]); e.target.value = ''; }} />
         <span className="sl" onClick={() => ui.openSheet('providers')}><SettingOutlined /> 设置 · 模型接入</span>
         {info && <span className="sl" id="updateLink" style={{ color: 'var(--blue)' }} onClick={() => ui.openUpdatePanel()}>
           {IS_WEB_LINK ? '有修复版 v' + info.version + ' → 去下载' : '有新版 v' + info.version + ' → 查看并更新'}</span>}

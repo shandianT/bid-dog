@@ -3,7 +3,7 @@
 import React from 'react';
 import { Tag, Button, Progress, Tooltip } from 'antd';
 import { PauseOutlined, CaretRightOutlined, ReloadOutlined, FileTextOutlined,
-         SafetyCertificateOutlined, StopOutlined } from '@ant-design/icons';
+         SafetyCertificateOutlined, StopOutlined, ColumnWidthOutlined } from '@ant-design/icons';
 import { S, ui, jobState, publicTaskState, taskPresentation, taskCapabilities, wordPresence,
          completionGate, deliveryDeadEnd, verdict, timing, fmtDur, knownStep, PUBLIC_TASK_LABELS,
          resumeJob, togglePause, stopJob, deliveryViewModel } from '../core/index.js';
@@ -112,6 +112,10 @@ export default function Head(){
         <Button type="primary" id="resultTabBtn" className="pill primary"
           onClick={() => { S.processView[S.active] = false; ui.render('main'); }}>交付结果</Button>}
       {covPill}
+      {/* 对照阅读:解析版出来就能左右对照;评分点有了就能点它两边定位 */}
+      {(S.arts[S.active] || []).some(a => a.name === '招标文件_解析版.md') &&
+        <Button id="compareBtn" className="pill" icon={<ColumnWidthOutlined />} title="左招标原文、右标书章节,点评分点两边同时定位"
+          onClick={() => ui.openSheet('compare')}>对照阅读</Button>}
       <Button id="hAct" icon={<SafetyCertificateOutlined />}
         type={(state === 'completed' || state === 'failed' || state === 'needs_input') ? 'primary' : 'default'}
         className={'pill' + ((state === 'completed' || state === 'failed' || state === 'needs_input') ? ' primary' : '')}

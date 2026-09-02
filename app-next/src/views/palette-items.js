@@ -15,10 +15,13 @@ export function paletteItems(query, ctx){
     add('动作', 'coverage', '评分点覆盖', '每个评分点落到哪一章', ctx.openCoverage, 'coverage score 覆盖 评分');
     if(ctx.canRedo) add('动作', 'redo', '修改结果', '指到某一章就只改那一章', ctx.openRedo, 'redo revise 修改');
     if(ctx.hasResult) add('动作', 'result', ctx.showingResult ? '过程与诊断' : '交付结果', '', ctx.toggleResult, 'result process 交付 过程');
+    if(ctx.canCompare) add('动作', 'compare', '对照阅读', '左招标原文 · 右标书章节', ctx.openCompare, 'compare read 对照 阅读 招标');
     add('动作', 'log', '运行日志', '', ctx.openLog, 'log 日志');
     add('动作', 'folder', '任务文件夹', '', ctx.openFolder, 'folder open 文件夹');
   }
   add('动作', 'assets', '素材库', '公司资料 / 图片 / 过往标书', ctx.openAssets, 'assets material 素材');
+  add('动作', 'usage', '用量看板', 'token / 费用 / 耗时 / 复读率', ctx.openUsage, 'usage tokens cost 用量 费用 看板');
+  add('动作', 'import', '导入任务包', '同事导出的 zip,接着改', ctx.importZip, 'import zip 导入');
   add('动作', 'settings', '设置 · 模型接入', '', ctx.openSettings, 'settings model 设置 模型');
   add('动作', 'update', '检查更新', '', ctx.checkUpdate, 'update version 更新 版本');
   const prefs = ctx.prefs || {};

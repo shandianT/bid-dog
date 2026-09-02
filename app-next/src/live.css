@@ -728,3 +728,22 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .wordview.docx hr.pb:after{content:'分页';position:absolute;right:12px;top:-9px;font-size:10px;color:#999;background:var(--page);padding:0 4px}
 .wordview.docx .img-skip{color:#777;font-size:12px}
 .pv-stats{color:var(--dim);font:400 var(--fs-xs)/1.6 inherit;padding:10px 2px 0}
+
+/* ============ P4:招标对照阅读器 / 用量看板 ============ */
+.cmp-modal .ant-modal-body{padding-top:4px}
+.cmp-wrap{display:flex;flex-direction:column;gap:10px}
+.cmp-points{display:flex;flex-wrap:wrap;gap:6px;max-height:88px;overflow-y:auto;padding:2px}
+.cmp-pt.ant-tag{cursor:pointer;border-radius:999px;margin:0;padding:3px 10px;font-size:var(--fs-xs)}
+.cmp-pt.on{outline:2px solid var(--blue-line)}
+.cmp-panes{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
+.cmp-pane{display:flex;flex-direction:column;border:1px solid var(--line-soft);border-radius:12px;overflow:hidden;min-width:0;background:var(--page);color:var(--page-ink)}
+.cmp-head{display:flex;align-items:center;gap:8px;padding:8px 12px;font:600 var(--fs-sm)/1.4 inherit;color:var(--sub);background:var(--panel);border-bottom:1px solid var(--line-soft)}
+.cmp-body{height:60vh;overflow-y:auto;padding:12px 14px;font:400 13px/1.85 'Songti SC','STSong',SimSun,serif}
+.cmp-line{white-space:pre-wrap;word-break:break-word;padding:0 6px;border-radius:5px;min-height:1.2em}
+.cmp-line.h1,.cmp-line.h2{font-weight:700;font-family:SimHei,'Heiti SC',serif;margin:10px 0 4px}
+.cmp-line.h3,.cmp-line.h4{font-weight:600;margin:6px 0 2px}
+.cmp-line.hit{background:#fff3c4}
+.cmp-line.first{background:#ffe08a;box-shadow:inset 3px 0 0 var(--amber)}
+.cmp-empty{color:var(--dim);font:400 var(--fs-sm)/1.7 inherit;padding:20px 6px;text-align:center}
+#usageTotals{grid-template-columns:repeat(6,1fr)}
+@media (max-width:900px){.cmp-panes{grid-template-columns:1fr}.cmp-body{height:38vh}#usageTotals{grid-template-columns:repeat(3,1fr)}}

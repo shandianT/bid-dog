@@ -458,6 +458,8 @@ def artifact_info(fn):
         group, kind, rank = 0, {'.docx': 'WORD', '.xlsx': 'EXCEL', '.pdf': 'PDF'}[ext], 10
         if ext == '.docx' and ('完整' in fn or '投标文件' in fn):
             purpose, rank = '主要交付文件：可编辑的完整投标文件，提交前请人工复核、签字和盖章。', 0
+            if '整册' in fn: rank = -1          # 有分册时整册仍排第一
+            elif any(v in fn for v in VOLUME_ORDER): purpose = '分册交付文件：按招标要求的装订方式单独提交的一册。'
         elif ext == '.xlsx':
             purpose = '可编辑的表格附件，用于核对清单、报价或响应数据。'
         elif ext == '.pdf':
@@ -610,7 +612,8 @@ def _job_usage(job, meta=None):
             'output_tokens': max(0, int(raw.get('output_tokens') or 0)),
             'total_tokens': max(0, int(raw.get('total_tokens') or 0)),
             'estimated_cost': raw.get('estimated_cost'),
-            'currency': raw.get('currency') or None}
+            'currency': raw.get('currency') or None,
+            'estimated': bool(raw.get('estimated'))}
 
 # 工作台词过滤:agent 的原始输出噪声很大,只留人能看懂的动作行
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
@@ -1624,6 +1627,7 @@ def ensure_docx(job, known, force=False):
     导出是确定性脚本、零 token,没有任何理由不兜。返回新出的文件名列表。"""
     if not force and _body_docxs(job, known): return []
     body = _body_mds(job, known)
+    body.sort(key=lambda f: (0 if '整册' in f else 1, f))    # 整册先出:它是主交付,分册跟在后面
     if not body: return []
     bt = _skill_module('build_tender_docx')
     if not bt:
@@ -4215,6 +4219,7 @@ def _pipeline_model_plan(job, node, model, up, attempt_root, candidate):
                     response = _openai_req(up['base_url'], up['api_key'], '/chat/completions', payload,
                                            timeout=float(os.environ.get('BIDDOG_MODEL_NODE_TIMEOUT_SECONDS', 240)),
                                            verify=up.get('verify_ssl', True))
+                _record_model_usage(job, model, payload, response)
                 choice = ((response.get('choices') or [{}])[0] if isinstance(response, dict) else {}) or {}
                 content = ((choice.get('message') or {}).get('content') if isinstance(choice, dict) else '') or ''
                 compact = _pipeline_normalize_plan(_pipeline_json_object(content), titles, candidate)
@@ -4399,6 +4404,7 @@ def _openai_stream_req(base, key, payload, idle_timeout=90, total_cap=1800,
         except Exception:
             continue
         parts, finish, started = [], '', time.time()
+        usage_seen = None
         try:
             with _retry(lambda: urllib.request.urlopen(req, timeout=idle_timeout, context=ctx)) as r:
                 for raw in r:
@@ -4417,9 +4423,11 @@ def _openai_stream_req(base, key, payload, idle_timeout=90, total_cap=1800,
                         parts.append(str(delta['content']))
                     if isinstance(ch, dict) and ch.get('finish_reason'):
                         finish = str(ch['finish_reason'])
+                    if isinstance(ev, dict) and isinstance(ev.get('usage'), dict):
+                        usage_seen = ev['usage']        # 支持 stream 末尾带 usage 的网关:记真值
             return {'choices': [{'message': {'content': ''.join(parts)},
                                  'finish_reason': finish or ('stop' if parts else '')}],
-                    'model': p2.get('model')}
+                    'model': p2.get('model'), 'usage': usage_seen}
         except _StreamCancelled:
             raise
         except urllib.error.HTTPError:
@@ -4438,6 +4446,69 @@ def _openai_stream_req(base, key, payload, idle_timeout=90, total_cap=1800,
                                      'finish_reason': 'length'}], 'model': p2.get('model')}
             raise
     raise last
+
+
+# ---------- 用量记账:流水线每次模型调用都记进 usage.json ----------
+# 以前只有 OpenCode 通道从会话消息里汇总 usage,检查点流水线一次都不记——「本次用量」四格永远是「—」。
+# 网关返回 usage 就记真值;没返回就按字数估(中文 ≈ 1 token / 1.5 字),并标 estimated,看板上带 ≈。
+USAGE_CHARS_PER_TOKEN = 1.5
+
+
+def _estimate_tokens(text_or_chars):
+    chars = text_or_chars if isinstance(text_or_chars, (int, float)) else len(str(text_or_chars or ''))
+    return int(chars / USAGE_CHARS_PER_TOKEN + 0.5)
+
+
+def _record_model_usage(job, model, payload, response):
+    try:
+        usage = response.get('usage') if isinstance(response, dict) else None
+        usage = usage if isinstance(usage, dict) else {}
+        prompt_chars = sum(len(str(m.get('content') or '')) for m in (payload or {}).get('messages') or [] if isinstance(m, dict))
+        choices = response.get('choices') if isinstance(response, dict) else None
+        content = ''
+        if choices and isinstance(choices[0], dict):
+            content = str(((choices[0].get('message') or {}).get('content')) or '')
+        real = bool(usage.get('prompt_tokens') or usage.get('completion_tokens') or usage.get('input_tokens') or usage.get('output_tokens'))
+        it = int(usage.get('prompt_tokens') or usage.get('input_tokens') or 0) if real else _estimate_tokens(prompt_chars)
+        ot = int(usage.get('completion_tokens') or usage.get('output_tokens') or 0) if real else _estimate_tokens(content)
+        path = os.path.join(job, 'usage.json')
+        with _json_lock(path):
+            raw = read_json(path, {})
+            raw = raw if isinstance(raw, dict) else {}
+            raw['calls'] = int(raw.get('calls') or 0) + 1
+            raw['input_tokens'] = int(raw.get('input_tokens') or 0) + it
+            raw['output_tokens'] = int(raw.get('output_tokens') or 0) + ot
+            raw['total_tokens'] = raw['input_tokens'] + raw['output_tokens']
+            raw['estimated_calls'] = int(raw.get('estimated_calls') or 0) + (0 if real else 1)
+            raw['estimated'] = raw['estimated_calls'] > 0
+            raw['model'] = str(model or raw.get('model') or '')
+            by_model = raw.get('by_model') if isinstance(raw.get('by_model'), dict) else {}
+            slot = by_model.get(str(model or '')) if isinstance(by_model.get(str(model or '')), dict) else {}
+            by_model[str(model or '')] = {'calls': int(slot.get('calls') or 0) + 1,
+                                          'input_tokens': int(slot.get('input_tokens') or 0) + it,
+                                          'output_tokens': int(slot.get('output_tokens') or 0) + ot}
+            raw['by_model'] = by_model
+            raw['updated_at'] = now()
+            write_json(path, raw)
+    except Exception:
+        pass        # 记账绝不能把生成拖垮
+
+
+def _job_repeat_hits(job):
+    """这一单撞过几次复读循环:章节门禁拦下的(诊断里带「复读」)+ 成品质检报告点名的。"""
+    hits = 0
+    try:
+        for line in open(os.path.join(job, 'diagnostics.jsonl'), encoding='utf-8', errors='ignore').read().splitlines():
+            if '复读' in line or 'degenerate' in line: hits += 1
+    except OSError:
+        pass
+    try:
+        report = open(os.path.join(job, '成品质检报告.md'), encoding='utf-8', errors='ignore').read()
+        hits += len(re.findall(r'复读 \d+ 遍|同一段落重复', report))
+    except OSError:
+        pass
+    return hits
+
 
 def _pipeline_model_runner(job, node, prompt, model):
     """Run a bounded node as one non-stream completion, then atomically promote files.
@@ -4579,6 +4650,7 @@ def _pipeline_model_runner(job, node, prompt, model):
     if _cancel_requested(base):
         raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
     mark_connection_check(job, True, '连接正常,模型按节点生成中')
+    _record_model_usage(job, model, payload, response)
     choices = response.get('choices') if isinstance(response, dict) else None
     if not choices:
         detail = ((response.get('error') or {}).get('message')
@@ -4788,6 +4860,48 @@ def _pipeline_event(job, event, node):
                    'text': '“%s”%s（已尝试 %d/%d）；前面成果已保留。' %
                            (title, reason, int(node.get('attempt') or 0),
                             int(node.get('max_attempts') or 3))})
+
+
+# ---------- 分册输出:技术标 / 商务标 / 报价标 ----------
+# SKILL 支持分册、流水线以前只出整册。开了 volumes 的任务,汇总时按章节标题归册另出三份正文
+# (空册不出),Word 导出对每份正文各出一个 docx;整册照常,仍是主交付。
+VOLUME_ORDER = ('技术标', '商务标', '报价标')
+_VOL_PRICE_RX = re.compile(r'报价|价格|费用|开标一览|投标函|分项报价|价格表')
+_VOL_BUSINESS_RX = re.compile(r'商务|资格|资质|业绩|证明|承诺|合同|付款|工期|质保|供货|保证金|信誉|财务|法定代表人|授权')
+
+
+def _volume_of(title, output=''):
+    text = str(title or '') + ' ' + str(output or '')
+    if 'technical_deviation' in text or ('技术' in text and '偏离' in text): return '技术标'
+    if 'business_deviation' in text or ('商务' in text and '偏离' in text): return '商务标'
+    if _VOL_PRICE_RX.search(text): return '报价标'
+    if _VOL_BUSINESS_RX.search(text): return '商务标'
+    return '技术标'
+
+
+def _build_volumes(job, chapter_outputs):
+    """返回 {册名: 正文 md};只在任务开了 volumes 时被调用。"""
+    try: state = generation_pipeline.load(job)
+    except Exception: state = {}
+    titles = {}
+    for node in state.get('nodes') or []:
+        outs = node.get('outputs') or []
+        if outs: titles[outs[0]] = (str(node.get('title') or ''), str(node.get('id') or ''))
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    name = str(meta.get('name') or '投标文件')
+    buckets = {vol: [] for vol in VOLUME_ORDER}
+    for output in chapter_outputs:
+        try: text = open(os.path.join(job, output), encoding='utf-8', errors='ignore').read().strip()
+        except OSError: continue
+        if not text: continue
+        title, node_id = titles.get(output, (output, ''))
+        buckets[_volume_of(title, node_id)].append(text)
+    volumes = {}
+    for vol in VOLUME_ORDER:
+        if not buckets[vol]: continue
+        head = '# %s · %s\n\n> 本册由整册按章节归属拆出;评标索引与补料清单见整册。' % (name, vol)
+        volumes[vol] = '\n\n---\n\n'.join([head] + buckets[vol]) + '\n'
+    return volumes
 
 
 def _write_text_atomic(path, text):
@@ -5112,6 +5226,11 @@ def generation_pipeline_worker(job):
             tmp = target + '.tmp'
             open(tmp, 'w', encoding='utf-8').write('\n\n---\n\n'.join(pieces) + '\n')
             os.replace(tmp, target)
+            # 分册:按章节归属另出技术标 / 商务标 / 报价标(空册不出);Word 导出对每份正文各出一个 docx
+            if read_json(os.path.join(job, '任务.json'), {}).get('volumes'):
+                for vol, text in _build_volumes(job, chapter_outputs).items():
+                    _write_text_atomic(os.path.join(job, '投标文件_%s.md' % vol), text)
+                    emit(job, {'type': 'artifact', 'name': '投标文件_%s.md' % vol})
         _pipeline_complete_local(job, 'assemble', assemble_digest, assemble)
 
         state = generation_pipeline.load(job)
@@ -6083,7 +6202,7 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
                      prompt: str = Form(''), name: str = Form(''), mock: str = Form('auto'),
                      start: str = Form('1'), template_id: str = Form(''),
                      project_id: str = Form(''), save_to_assets: str = Form('1'),
-                     confirm_parse: str = Form('0')):
+                     confirm_parse: str = Form('0'), volumes: str = Form('0')):
     """建任务(向导版约定):
     - tender = 招标文件(主件,永远落任务根目录——绝不进 素材/,素材库污染是内容变薄的根源之一)
     - files + relpaths = 参考素材(多文件/整文件夹,保留目录结构,落 素材/;相对路径做穿越防护)
@@ -6196,6 +6315,7 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
                'template_id': template_id, 'template_snapshot': template_snapshot,
                'template_recommendation': template_recommendation,
                'confirm_parse': (confirm_parse or '0') != '0',
+               'volumes': (volumes or '0') != '0',
                'uploaded_materials': uploaded_materials[:200]})
     write_json(os.path.join(job, 'product.json'),
                {'name': name or tname, 'project_id': str(project_id or '').strip()[:120],
@@ -7235,6 +7355,137 @@ async def export_jobs(req: Request):
                                       'Content-Length': str(len(data)),
                                       'X-Deliverable-Count': str(count)})
 
+@app.get('/v1/usage')
+def usage_dashboard(days: int = 30):
+    """用量看板:按任务 / 模型 / 天汇总 token、费用、耗时、复读命中。数据全部来自本机任务目录。"""
+    days = max(1, min(3650, int(days or 30)))
+    since = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+    jobs, by_model, by_day = [], {}, {}
+    totals = {'jobs': 0, 'calls': 0, 'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0,
+              'estimated_cost': 0.0, 'currency': None, 'elapsed_seconds': 0, 'repeat_hits': 0, 'chapters': 0, 'has_cost': False}
+    root = jobs_dir()
+    for jid in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        job = os.path.join(root, jid)
+        meta = read_json(os.path.join(job, '任务.json'), None)
+        if not isinstance(meta, dict): continue
+        created = str(meta.get('created_at') or '')
+        if created and created < since: continue
+        usage = _job_usage(job, meta)
+        outcome = read_json(os.path.join(job, 'outcome.json'), {})
+        state = job_state(job, meta)
+        elapsed = _job_elapsed(job, state, meta, outcome, _job_last_activity(job, meta, None, outcome)) or 0
+        try: pipeline_nodes = generation_pipeline.load(job).get('nodes') or []
+        except Exception: pipeline_nodes = []
+        chapters = sum(1 for n in pipeline_nodes if str(n.get('id') or '').startswith('chapter_write:')
+                       and not str(n.get('id') or '').endswith(('technical_deviation', 'business_deviation')))
+        repeats = _job_repeat_hits(job)
+        product = product_meta(job, meta)
+        row = {'job_id': jid, 'name': product.get('name') or meta.get('name') or jid, 'created_at': created,
+               'state': state, 'archived': bool(product.get('archived_at')), 'model': usage.get('model') or '',
+               'calls': usage['calls'], 'input_tokens': usage['input_tokens'], 'output_tokens': usage['output_tokens'],
+               'total_tokens': usage['total_tokens'], 'estimated_cost': usage.get('estimated_cost'),
+               'currency': usage.get('currency'), 'estimated': bool(usage.get('estimated')),
+               'elapsed_seconds': int(elapsed or 0), 'chapters': chapters, 'repeat_hits': repeats}
+        jobs.append(row)
+        totals['jobs'] += 1
+        for key in ('calls', 'input_tokens', 'output_tokens', 'total_tokens', 'repeat_hits', 'chapters'):
+            totals[key] += int(row[key] or 0)
+        totals['elapsed_seconds'] += int(elapsed or 0)
+        if row['estimated_cost'] is not None:
+            try:
+                totals['estimated_cost'] += float(row['estimated_cost']); totals['has_cost'] = True
+                totals['currency'] = totals['currency'] or row['currency']
+            except (TypeError, ValueError):
+                pass
+        raw_models = read_json(os.path.join(job, 'usage.json'), {}).get('by_model')
+        model_rows = raw_models if isinstance(raw_models, dict) and raw_models else {row['model']: {
+            'calls': row['calls'], 'input_tokens': row['input_tokens'], 'output_tokens': row['output_tokens']}}
+        for model, slot in model_rows.items():
+            agg = by_model.setdefault(str(model or ''), {'model': str(model or ''), 'jobs': 0, 'calls': 0, 'total_tokens': 0,
+                                                            'estimated_cost': None, 'currency': None, 'repeat_hits': 0, 'chapters': 0})
+            agg['jobs'] += 1; agg['calls'] += int(slot.get('calls') or 0)
+            agg['total_tokens'] += int(slot.get('input_tokens') or 0) + int(slot.get('output_tokens') or 0)
+            agg['repeat_hits'] += repeats; agg['chapters'] += chapters
+            if row['estimated_cost'] is not None and len(model_rows) == 1:
+                try:
+                    agg['estimated_cost'] = float(agg['estimated_cost'] or 0) + float(row['estimated_cost'])
+                    agg['currency'] = agg['currency'] or row['currency']
+                except (TypeError, ValueError):
+                    pass
+        day = created[:10] or '未知'
+        d = by_day.setdefault(day, {'day': day, 'jobs': 0, 'calls': 0, 'total_tokens': 0})
+        d['jobs'] += 1; d['calls'] += row['calls']; d['total_tokens'] += row['total_tokens']
+    for agg in by_model.values():
+        agg['repeat_rate'] = round(agg['repeat_hits'] / agg['chapters'] * 100, 1) if agg['chapters'] else None
+    if not totals['has_cost']: totals['estimated_cost'] = None
+    totals.pop('has_cost', None)
+    jobs.sort(key=lambda r: r['created_at'], reverse=True)
+    return {'ok': True, 'days': days, 'since': since, 'totals': totals,
+            'by_model': sorted(by_model.values(), key=lambda r: -r['total_tokens']),
+            'by_day': sorted(by_day.values(), key=lambda r: r['day']), 'jobs': jobs}
+
+
+IMPORT_MAX_BYTES = 200 * 1024 * 1024
+IMPORT_MAX_FILES = 2000
+
+
+@app.post('/v1/jobs/import')
+async def import_job(file: UploadFile = File(...)):
+    """导入同事导出的任务包(/v1/jobs/export 的 zip):交付物落成本机一个新任务,接着改、接着交付。
+    只收文件名安全的普通文件,不解压到任务目录之外;不带 Key、不带日志,导入的是内容不是账号。"""
+    blob = await file.read()
+    if len(blob) > IMPORT_MAX_BYTES:
+        return JSONResponse({'ok': False, 'error': '任务包超过 200MB'}, 413)
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(blob))
+    except zipfile.BadZipFile:
+        return JSONResponse({'ok': False, 'error': '不是有效的 zip 任务包'}, 400)
+    members = [m for m in archive.infolist() if not m.is_dir()]
+    if not members or len(members) > IMPORT_MAX_FILES:
+        return JSONResponse({'ok': False, 'error': '任务包是空的或文件太多'}, 400)
+    # 导出包的布局是 <job_id>/<file>;多个任务一起导出的包只取第一个任务
+    first_dir = ''
+    for m in members:
+        parts = [p for p in m.filename.replace('\\', '/').split('/') if p]
+        if len(parts) >= 2: first_dir = parts[0]; break
+    nid = datetime.datetime.now().strftime('%m%d-%H%M%S-') + uuid.uuid4().hex[:4]
+    job = jpath(nid); os.makedirs(job)
+    written, skipped, total = [], 0, 0
+    for m in members:
+        parts = [p for p in m.filename.replace('\\', '/').split('/') if p]
+        if not parts or any(p in ('.', '..') for p in parts): skipped += 1; continue
+        if first_dir and (len(parts) < 2 or parts[0] != first_dir): skipped += 1; continue
+        safe = os.path.basename(parts[-1])
+        if not safe or safe.startswith(('.', '_')) or safe in NOT_DELIVERABLE: skipped += 1; continue
+        if not safe.endswith(DELIVER_EXT) and safe != '任务.json': skipped += 1; continue
+        total += m.file_size
+        if total > IMPORT_MAX_BYTES: skipped += 1; continue
+        target = os.path.realpath(os.path.join(job, safe))
+        if os.path.dirname(target) != os.path.realpath(job): skipped += 1; continue
+        with archive.open(m) as src, open(target, 'wb') as dst: shutil.copyfileobj(src, dst)
+        written.append(safe)
+    if not written:
+        shutil.rmtree(job, ignore_errors=True)
+        return JSONResponse({'ok': False, 'error': '任务包里没有可导入的交付文件'}, 400)
+    imported_meta = read_json(os.path.join(job, '任务.json'), {}) if '任务.json' in written else {}
+    imported_meta = imported_meta if isinstance(imported_meta, dict) else {}
+    name = str(imported_meta.get('name') or os.path.splitext(os.path.basename(file.filename or ''))[0] or first_dir or '导入的任务')
+    write_json(os.path.join(job, '任务.json'), {
+        'name': name + ' · 导入', 'created_at': now(), 'staged': False, 'paused': False, 'tender': '',
+        'prompt': str(imported_meta.get('prompt') or ''), 'imported': True,
+        'imported_from': os.path.basename(file.filename or ''), 'imported_at': now(),
+        'template_snapshot': imported_meta.get('template_snapshot') if isinstance(imported_meta.get('template_snapshot'), dict) else {}})
+    write_json(os.path.join(job, 'product.json'), {'project_id': '', 'version': 1, 'root_job_id': nid, 'created_at': now()})
+    write_json(os.path.join(job, 'outcome.json'), {'state': 'done', 'reason': 'imported', 'at': now()})
+    emit(job, {'type': 'progress', 'stage': '已从任务包导入', 'pct': 100, 'step': 12, 'total': 12})
+    files = [f for f in written if f != '任务.json']
+    for fn in sorted(files):
+        emit(job, {'type': 'artifact', 'name': fn})
+    emit(job, {'type': 'message', 'role': 'agent',
+               'text': '已从任务包导入 %d 个文件。可以直接打开交付物、跑出件前检查;要继续生成或按招标重写,需要把招标文件作为新任务重新开始。' % len(files)})
+    return {'ok': True, 'job_id': nid, 'name': name + ' · 导入', 'files': len(files), 'skipped': skipped}
+
+
 @app.get('/v1/jobs/{jid}/events')
 def events(jid: str, offset: int = 0, follow: bool = True):
     """SSE:从 offset 行起回放并持续跟踪 events.jsonl;
@@ -8070,6 +8321,7 @@ def _coverage_view(job):
     items, covered = [], 0
     for row in rows[:200]:
         requirement, score, location, gap = row[1][:140], row[2][:20], row[3][:80], row[5][:140]
+        evidence = row[4][:140]          # 评估标准/证据:对照阅读器用它切词,「响应时间」才是正文里真正出现的词
         gap_clear = (gap in COVERAGE_CLEAR_GAPS) or not gap.strip()
         located = bool(location.strip()) and '需补充' not in location
         node_id, node_title, chapter_done = '', '', whole_done
@@ -8089,7 +8341,7 @@ def _coverage_view(job):
         elif not located: reason = 'unlocated'
         elif not gap_clear: reason = 'gap'
         else: reason = 'chapter_pending'
-        items.append({'requirement': requirement, 'score': score, 'location': location,
+        items.append({'requirement': requirement, 'score': score, 'location': location, 'evidence': evidence,
                       'gap': gap, 'covered': ok, 'node_id': node_id, 'chapter': node_title,
                       'reason': reason})
     # plan_source 让界面分得清「真实覆盖率」和「本地候选」:本地索引里没有一条落到章节,

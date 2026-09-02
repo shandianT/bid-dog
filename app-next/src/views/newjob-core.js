@@ -5,7 +5,7 @@ import { IS_WEB, FORCE_DEMO } from '../core/env.js';
 
 export const NJ = { items: [], tenderIdx: -1, step:1, templateDraft:null, recommendation:null, recommendSeq:0, starting:false,
                     req:'', template:'auto', project:'', saveAssets:true, confirmParse:true, msg:'', open:false,
-                    reqOpts:{ freshHeadings:true, itemized:true, noFabrication:true }, reqCustom:false };
+                    reqOpts:{ freshHeadings:true, itemized:true, noFabrication:true }, reqCustom:false, volumes:false };
 export const DOCLIKE = f => !/\.(png|jpe?g|gif|bmp|tiff?|zip)$/i.test(f);
 /* 默认要求:大多数人不知道该写什么,空着写出来的就是四平八稳的通稿。
    预填一份「投标方案专家」提示词当起点——用户改两句比从零写一段容易得多。
@@ -114,6 +114,7 @@ export async function njStart(startNow){
     fd.append('project_id', NJ.project.trim());fd.append('start', startNow ? '1' : '0');
     fd.append('save_to_assets', NJ.saveAssets ? '1' : '0');
     fd.append('confirm_parse', NJ.confirmParse ? '1' : '0');
+    fd.append('volumes', NJ.volumes ? '1' : '0');
     const createKey = 'create-'+(typeof crypto!=='undefined'&&crypto.randomUUID ? crypto.randomUUID() : Date.now()+'-'+Math.random().toString(16).slice(2));
     try{
       const r = await api('/v1/jobs', {method:'POST', headers:{'Idempotency-Key':createKey}, body:fd});

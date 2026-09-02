@@ -330,5 +330,22 @@ await test('向导开关全开时的要求文案与经典预填逐字一致;关�
   assert.strictEqual(NJ_REQ_SWITCHES.length, 3);
 });
 
+
+// —— P4:对照阅读器的关键词与命中(纯函数) ——
+const { compareTerms, compareHits } = await import('../src/views/compare-core.js');
+await test('对照阅读:评分点切成关键词(去掉分值与标点),原文按命中长度排序定位', () => {
+  const terms = compareTerms('售后服务承诺(响应时间)10 分');
+  assert.ok(terms.includes('售后服务承诺') && terms.includes('响应时间') && !terms.some(t => /分$/.test(t)));
+  assert.strictEqual(terms[0].length >= terms[terms.length - 1].length, true, '长词在前');
+  const lines = ['# 评分办法', '售后服务:响应时间 2 小时,售后服务承诺书。', '培训方案略', '响应时间另见附件'];
+  const hits = compareHits(lines, terms);
+  assert.strictEqual(hits[0].i, 1, '命中最多的行排第一');
+  assert.ok(hits.some(h => h.i === 3) && !hits.some(h => h.i === 2));
+  assert.deepStrictEqual(compareHits(lines, []), []);
+  // 章标题和正文同样命中时,跳到正文那一段,不是标题
+  const tie = compareHits(['# 售后服务承诺', '我方售后服务承诺如下'], compareTerms('售后服务承诺'));
+  assert.strictEqual(tie[0].i, 1, '同分正文优先');
+});
+
 console.log(`\n${passed} 通过, ${failed} 失败`);
 process.exit(failed ? 1 : 0);

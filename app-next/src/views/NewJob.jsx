@@ -191,6 +191,10 @@ export default function NewJob(){
                 <Input value={NJ.project} onChange={e => { NJ.project = e.target.value; bump(); }} placeholder="如:2026 华南区" />
               </div>
             </div>
+            <label className="req-sw" id="njVolumes" style={{ alignItems: 'center' }}>
+              <Switch size="small" checked={!!NJ.volumes} onChange={v => { NJ.volumes = v; bump(); }} />
+              <span><b>分册输出:技术标 / 商务标 / 报价标</b><i>按章节归属另出三册 Word,整册照常生成;招标要求分册装订时打开</i></span>
+            </label>
             <TemplatePanel />
             <TemplateDraftCard />
             {NJ.msg && <div style={{ color: 'var(--red)', fontSize: 12.5 }}>{NJ.msg}</div>}
