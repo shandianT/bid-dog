@@ -347,5 +347,26 @@ await test('对照阅读:评分点切成关键词(去掉分值与标点),原文�
   assert.strictEqual(tie[0].i, 1, '同分正文优先');
 });
 
+
+// —— P4:能力表 md ↔ 行数据(纯函数) ——
+const { parseCapabilityTable, serializeCapabilityTable, CAP_COLUMNS } = await import('../src/views/capability-core.js');
+await test('能力表:解析保留表前说明与表后文字,序列化回去逐格不丢,竖线转全角', () => {
+  const md = '# 产品能力表\n\n> 说明一行\n\n| 功能 | 支持情况 | 版本要求 | 证明材料 | 可定制 | 配图 |\n|---|---|---|---|---|---|\n| 权限分级 | 支持 | V3 | 产品资料.md | 是 | IMG-1 |\n| 报表 | 部分支持 |  |  |  |  |\n\n备注:以上仅示例。';
+  const doc = parseCapabilityTable(md);
+  assert.strictEqual(doc.preamble, '# 产品能力表\n\n> 说明一行');
+  assert.deepStrictEqual(doc.columns, CAP_COLUMNS);
+  assert.strictEqual(doc.rows.length, 2);
+  assert.deepStrictEqual(doc.rows[1], ['报表', '部分支持', '', '', '', '']);
+  assert.strictEqual(doc.tail, '备注:以上仅示例。');
+  doc.rows.push(['接口|对接', '可定制', '', '', '', '']);
+  const out = serializeCapabilityTable(doc);
+  assert.ok(out.startsWith('# 产品能力表\n\n> 说明一行\n\n| 功能 |'), out.slice(0, 60));
+  assert.ok(out.includes('| 接口｜对接 | 可定制 |  |  |  |  |'), '竖线转全角、空格保留');
+  assert.ok(out.trim().endsWith('备注:以上仅示例。'));
+  assert.deepStrictEqual(parseCapabilityTable(out).rows, doc.rows.map(r => r.map(v => v.replace(/\|/g, '｜'))));
+  const empty = parseCapabilityTable('没有表');
+  assert.deepStrictEqual(empty.rows, []); assert.deepStrictEqual(empty.columns, CAP_COLUMNS);
+});
+
 console.log(`\n${passed} 通过, ${failed} 失败`);
 process.exit(failed ? 1 : 0);

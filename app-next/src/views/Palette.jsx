@@ -37,6 +37,8 @@ export default function Palette(){
     openCompare: wrap(() => ui.openSheet('compare')),
     openAssets: wrap(() => ui.openSheet('assets')), openSettings: wrap(() => ui.openSheet('providers')),
     openUsage: wrap(() => ui.openSheet('usage')),
+    openCapability: wrap(() => ui.openSheet('capability')),
+    openAb: wrap(() => { ui.openSheet('providers'); setTimeout(() => { const d = document.getElementById('abDetails'); if(d){ d.open = true; d.scrollIntoView({ block: 'center' }); } }, 120); }),
     importZip: wrap(() => { const el = document.getElementById('zipin'); if(el) el.click(); }),
     checkUpdate: wrap(() => checkForUpdate()),
     prefs: getPrefs(), setPrefs: p => { close(); setPrefs(p); bump(); },

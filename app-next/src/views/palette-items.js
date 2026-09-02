@@ -20,7 +20,9 @@ export function paletteItems(query, ctx){
     add('动作', 'folder', '任务文件夹', '', ctx.openFolder, 'folder open 文件夹');
   }
   add('动作', 'assets', '素材库', '公司资料 / 图片 / 过往标书', ctx.openAssets, 'assets material 素材');
+  add('动作', 'capability', '产品能力表', '应答判定的第一依据,表格里直接改', ctx.openCapability, 'capability 能力表 产品 应答');
   add('动作', 'usage', '用量看板', 'token / 费用 / 耗时 / 复读率', ctx.openUsage, 'usage tokens cost 用量 费用 看板');
+  add('动作', 'ab', '试跑对比(A/B)', '同一份招标按模型 / 参数各跑一单', ctx.openAb, 'ab compare 对比 试跑 模型');
   add('动作', 'import', '导入任务包', '同事导出的 zip,接着改', ctx.importZip, 'import zip 导入');
   add('动作', 'settings', '设置 · 模型接入', '', ctx.openSettings, 'settings model 设置 模型');
   add('动作', 'update', '检查更新', '', ctx.checkUpdate, 'update version 更新 版本');

@@ -7,6 +7,7 @@ import { S, ui } from '../core/index.js';
 import { P, AG, QK, PROV, QK_MODES, loadProviders, fetchModels, addProvider, testProvider, delProvider,
          onKindChange, testAgent, loadS2Models, provisionShell, saveAgent, queueQkMode, quickS2 } from './settings-core.js';
 import { bump } from '../core/store.js';
+import AbPanel from './AbPanel.jsx';
 
 // 复刻经典 bindModelDrop:聚焦看全部,输入过滤,过滤空则回退全部
 function modelOptions(all, typed){
@@ -136,6 +137,10 @@ export default function SettingsSheet(){
             {AG.testMsg && <div id="agTestMsg" style={{ font: '400 12.5px/1.7 inherit', color: 'var(--sub)', whiteSpace: 'pre-line' }}>{AG.testMsg}</div>}
             {AG.msg && <div id="agMsg" style={{ font: '400 12px/1.7 inherit', color: 'var(--faint)' }}>{AG.msg}</div>}
           </div>
+        </details>
+        <details className="setdet" id="abDetails">
+          <summary>试跑对比(A/B):同一份招标文件按模型 / 参数各跑一单,看覆盖、质检、复读、费用</summary>
+          <AbPanel />
         </details>
         <div style={{ font: '400 11.5px/1.7 inherit', color: 'var(--faint)' }}>Key 存本地引擎配置(生产版转系统钥匙串)。sowork / workbuddy 等平台内使用见 docs/使用与绑定指南.md。</div>
         <div style={{ font: '400 11.5px/1.7 inherit', color: 'var(--faint)' }}>作者：FDE 家涛</div>

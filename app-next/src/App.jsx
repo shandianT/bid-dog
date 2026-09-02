@@ -23,6 +23,7 @@ import { njAddFiles, walkEntries, addRef, njOpen } from './views/newjob-core.js'
 import Palette, { openPalette } from './views/Palette.jsx';
 import CompareSheet from './views/Compare.jsx';
 import UsageSheet from './views/UsageSheet.jsx';
+import CapabilitySheet from './views/CapabilitySheet.jsx';
 
 function Hero({ hidden }){
   // 经典 renderMain 用 display 切换,#hero/#heroSub 常驻 DOM(spec 的反向断言依赖这点)
@@ -136,7 +137,7 @@ export default function App(){
       <ConfirmModal /><ProjectSheet /><LogSheet /><DiagnosticSheet /><MigratingSheet />
       <CheckSheet /><CoverageSheet /><RewriteSheet /><RedoSheet /><PreviewSheet />
       <SettingsSheet /><AssetsSheet /><UpdateSheet /><OnboardingSheet /><UpdateRestart />
-      <CompareSheet /><UsageSheet />
+      <CompareSheet /><UsageSheet /><CapabilitySheet />
       <Palette />
       <Toast />
       <DropOverlay visible={dropVisible} hot={hot} setHot={setHot} />

@@ -3376,10 +3376,12 @@ def _normalize_generation_params(raw):
     return out
 
 
-def _generation_params(conf=None):
+def _generation_params(conf=None, job=None):
     conf = conf if isinstance(conf, dict) else read_json(conf_path(), {})
     eng = conf.get('engine') if isinstance(conf.get('engine'), dict) else {}
     chosen = _normalize_generation_params(eng.get('generation_params'))
+    if job:     # A/B 变体把参数记在自己的 任务.json 里,只覆盖这一单,全局默认不动
+        chosen.update(_job_ab_overrides(job).get('params') or {})
     return {key: chosen.get(key, default) for key, (_low, _high, default) in GEN_PARAM_BOUNDS.items()}
 
 
@@ -3469,6 +3471,9 @@ def _initialize_generation_pipeline(job, meta, conf):
                   (selected_verified or verified[0]))
     quality_model = (S2_QUALITY_MODEL if S2_QUALITY_MODEL in verified else
                      (selected_verified or fast_model))
+    ab_model = (meta.get('ab') or {}).get('model') if isinstance(meta.get('ab'), dict) else ''
+    if ab_model and ab_model in verified:
+        fast_model = quality_model = ab_model       # A/B 变体:两条路由都走指定模型,结果才可比
     state = generation_pipeline.initialize(
         job,
         run_id=str(meta.get('run_id') or _new_run_id()),
@@ -4609,7 +4614,7 @@ def _pipeline_model_runner(job, node, prompt, model):
         'max_tokens': 3200 if is_plan else (
             2500 if node.get('id') == 'quality_review' else chapter_tokens),
     }
-    _apply_generation_params(payload, _generation_params(conf))
+    _apply_generation_params(payload, _generation_params(conf, job))
     hb_stop = _start_node_heartbeat(job, node)
     try:
         try:
@@ -7374,6 +7379,7 @@ def usage_dashboard(days: int = 30):
         outcome = read_json(os.path.join(job, 'outcome.json'), {})
         state = job_state(job, meta)
         elapsed = _job_elapsed(job, state, meta, outcome, _job_last_activity(job, meta, None, outcome)) or 0
+        if elapsed > 12 * 3600: elapsed = 0          # 建完没跑 / 半路丢掉的任务会把墙钟算进来:超过 12 小时视为不可信
         try: pipeline_nodes = generation_pipeline.load(job).get('nodes') or []
         except Exception: pipeline_nodes = []
         chapters = sum(1 for n in pipeline_nodes if str(n.get('id') or '').startswith('chapter_write:')
@@ -7415,6 +7421,7 @@ def usage_dashboard(days: int = 30):
         day = created[:10] or '未知'
         d = by_day.setdefault(day, {'day': day, 'jobs': 0, 'calls': 0, 'total_tokens': 0})
         d['jobs'] += 1; d['calls'] += row['calls']; d['total_tokens'] += row['total_tokens']
+    by_model = {k: v for k, v in by_model.items() if v['calls']}      # 一次都没调过模型的任务不占一行
     for agg in by_model.values():
         agg['repeat_rate'] = round(agg['repeat_hits'] / agg['chapters'] * 100, 1) if agg['chapters'] else None
     if not totals['has_cost']: totals['estimated_cost'] = None
@@ -10549,10 +10556,345 @@ async def ingest_asset(file: UploadFile = File(...)):
             auto_tagging = try_start_vision(False)
         except Exception:
             pass
+    facts_started = _start_fact_extraction(fn, digest, sections)      # 配了 Key 就顺手抽事实,人工确认后才进规范素材
     rec = {'ts': now(), 'source': fn, 'md5': digest, 'sections': len(sections), 'images': len(images), 'categories': cats}
     open(log_path, 'a', encoding='utf-8').write(json.dumps(rec, ensure_ascii=False) + '\n')
     return {'ok': True, **rec, 'created': created[:50], 'folder': assets_dir(),
-            'engine': 'local-parser', 'auto_tagging': auto_tagging}
+            'engine': 'local-parser', 'auto_tagging': auto_tagging, 'facts': facts_started}
+
+# ---------- 规范素材直接编辑(产品能力表等):读写素材库根目录的 md ----------
+# 能力表是应答判定的第一依据,以前只能在文件夹里用记事本改;现在有表格 UI,读写走这两个端点。
+ASSET_TEXT_NAMES = ('产品能力表.md', '应答要点.md', '公司介绍.md', '产品资料.md', '资质与案例.md')
+ASSET_TEXT_MAX_BYTES = 2 * 1024 * 1024
+CAPABILITY_TEMPLATE = ('# 产品能力表\n\n'
+                       '> 应答判定的第一依据:每一行一个功能点;「支持情况」只能写 支持 / 部分支持 / 不支持 / 可定制;\n'
+                       '> 「证明材料」写素材库里能证明的文件名或页码;「配图」写图片索引里的图片 ID。\n\n'
+                       '| 功能 | 支持情况 | 版本要求 | 证明材料 | 可定制 | 配图 |\n'
+                       '|---|---|---|---|---|---|\n'
+                       '| （示例）用户权限分级管理 | 支持 | V3.0 及以上 | 产品资料.md §2.1 | 是 | IMG-001 |\n')
+
+
+def _asset_text_path(name):
+    safe = os.path.basename(str(name or ''))
+    if safe != name or safe not in ASSET_TEXT_NAMES: return None
+    return os.path.join(assets_dir(), safe)
+
+
+@app.get('/v1/assets/text')
+def asset_text(name: str = '产品能力表.md'):
+    path = _asset_text_path(name)
+    if not path: return JSONResponse({'ok': False, 'error': '只能编辑素材库根目录的规范素材'}, 400)
+    exists = os.path.isfile(path)
+    text = open(path, encoding='utf-8', errors='ignore').read() if exists else ''
+    template = CAPABILITY_TEMPLATE if name == '产品能力表.md' else ''
+    return {'ok': True, 'name': name, 'exists': exists, 'text': text, 'template': template, 'folder': assets_dir()}
+
+
+@app.put('/v1/assets/text')
+async def save_asset_text(req: Request):
+    body = await req.json()
+    path = _asset_text_path(str(body.get('name') or ''))
+    if not path: return JSONResponse({'ok': False, 'error': '只能编辑素材库根目录的规范素材'}, 400)
+    text = str(body.get('text') or '')
+    if len(text.encode('utf-8')) > ASSET_TEXT_MAX_BYTES:
+        return JSONResponse({'ok': False, 'error': '内容超过 2MB'}, 413)
+    os.makedirs(assets_dir(), exist_ok=True)
+    _write_text_atomic(path, text if text.endswith('\n') else text + '\n')
+    return {'ok': True, 'name': os.path.basename(path), 'bytes': len(text.encode('utf-8'))}
+
+
+# ---------- 历史标书事实抽取:入库时抽公司 / 资质 / 业绩 / 人员,人工确认后进规范素材 ----------
+# 以前入库只是本地拆章:公司名、资质、业绩、人员这些「事实」还得人手抄进 公司介绍.md / 资质与案例.md,
+# 不抄的后果就是满篇〔需补充〕。现在小模型抽一遍,写成待确认清单;确认了才落库——不确认永远不进正文。
+FACTS_DIRNAME = '事实抽取'
+FACTS_TEXT_BUDGET = 14000
+FACTS_SCHEMA_HINT = ('{"company": {"name": "", "intro": ""}, '
+                     '"qualifications": [{"name": "", "level": "", "issuer": "", "valid_until": ""}], '
+                     '"performances": [{"project": "", "client": "", "amount": "", "date": "", "role": ""}], '
+                     '"people": [{"name": "", "title": "", "certs": ""}]}')
+
+
+def _facts_dir():
+    path = os.path.join(assets_dir(), FACTS_DIRNAME)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _facts_prompt(source, text):
+    system = ('你是投标资料整理员。从一份历史标书里抽取「可复用的事实」:投标人公司名与一句话介绍、资质证书、'
+              '业绩(项目/业主/金额/时间/角色)、关键人员(姓名/职务/证书)。只抽原文明确写出的,不推断、不补全;'
+              '没有的字段留空字符串,没有的类别给空数组。只返回一个 JSON 对象,结构为:' + FACTS_SCHEMA_HINT)
+    user = '来源文件:%s\n\n正文(节选):\n%s' % (source, text[:FACTS_TEXT_BUDGET])
+    return {'stream': False, 'temperature': 0, 'max_tokens': 1800,
+            'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]}
+
+
+def _normalize_facts(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    def rows(key, fields):
+        out = []
+        for item in raw.get(key) or []:
+            if not isinstance(item, dict): continue
+            row = {f: str(item.get(f) or '').strip()[:200] for f in fields}
+            if any(row.values()): out.append(row)
+        return out[:40]
+    company = raw.get('company') if isinstance(raw.get('company'), dict) else {}
+    return {'company': {'name': str(company.get('name') or '').strip()[:120], 'intro': str(company.get('intro') or '').strip()[:600]},
+            'qualifications': rows('qualifications', ('name', 'level', 'issuer', 'valid_until')),
+            'performances': rows('performances', ('project', 'client', 'amount', 'date', 'role')),
+            'people': rows('people', ('name', 'title', 'certs'))}
+
+
+def _facts_count(facts):
+    return (1 if (facts.get('company') or {}).get('name') else 0) + sum(
+        len(facts.get(k) or []) for k in ('qualifications', 'performances', 'people'))
+
+
+def _facts_to_markdown(facts, source, ts):
+    """确认后写进规范素材的段落:公司/人员 → 公司介绍.md,资质/业绩 → 资质与案例.md。"""
+    head = '\n\n## 来自《%s》 · 人工确认 %s\n\n' % (source, ts)
+    company, people = facts.get('company') or {}, facts.get('people') or []
+    intro = ''
+    if company.get('name') or company.get('intro'):
+        intro += '- 投标人:%s%s\n' % (company.get('name') or '〔需补充〕', ('。' + company['intro']) if company.get('intro') else '')
+    if people:
+        intro += '\n| 姓名 | 职务 | 证书 |\n|---|---|---|\n' + ''.join(
+            '| %s | %s | %s |\n' % (_pipeline_cell(p.get('name')), _pipeline_cell(p.get('title')), _pipeline_cell(p.get('certs'))) for p in people)
+    quals, perfs = facts.get('qualifications') or [], facts.get('performances') or []
+    cases = ''
+    if quals:
+        cases += '### 资质证书\n\n| 资质 | 等级 | 发证机关 | 有效期至 |\n|---|---|---|---|\n' + ''.join(
+            '| %s | %s | %s | %s |\n' % tuple(_pipeline_cell(q.get(f)) for f in ('name', 'level', 'issuer', 'valid_until')) for q in quals)
+    if perfs:
+        cases += ('\n' if cases else '') + '### 业绩\n\n| 项目 | 业主 | 金额 | 时间 | 角色 |\n|---|---|---|---|---|\n' + ''.join(
+            '| %s | %s | %s | %s | %s |\n' % tuple(_pipeline_cell(p.get(f)) for f in ('project', 'client', 'amount', 'date', 'role')) for p in perfs)
+    return {'公司介绍.md': (head + intro) if intro.strip() else '', '资质与案例.md': (head + cases) if cases.strip() else ''}
+
+
+def _facts_json_object(text):
+    """取最外层那个带事实键的对象:规划用的 _pipeline_json_object 会挑「键最多」的字典,
+    在这里会挑中嵌套的某条业绩(5 个键)而不是顶层(4 个键)。"""
+    raw = str(text or '').strip()
+    keys = {'company', 'qualifications', 'performances', 'people'}
+    candidates = []
+    try: candidates.append(json.loads(raw))
+    except (TypeError, ValueError): pass
+    for match in re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.I | re.S):
+        try: candidates.append(json.loads(match.group(1)))
+        except (TypeError, ValueError): pass
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r'\{', raw):
+        try: candidates.append(decoder.raw_decode(raw[match.start():])[0])
+        except (TypeError, ValueError): continue
+    for value in candidates:
+        if isinstance(value, dict) and keys & set(value): return value
+    return None
+
+
+def _extract_facts_now(fid, source, text, up):
+    record = {'id': fid, 'source': source, 'ts': now(), 'status': 'pending', 'model': str(up.get('model') or ''),
+              'facts': None, 'error': ''}
+    try:
+        payload = dict(_facts_prompt(source, text), model=up.get('model') or S2_DEFAULT_MODEL)
+        response = _openai_req(up['base_url'], up['api_key'], '/chat/completions', payload, timeout=150,
+                               verify=up.get('verify_ssl', True))
+        choices = response.get('choices') if isinstance(response, dict) else None
+        content = str(((choices or [{}])[0].get('message') or {}).get('content') or '') if choices else ''
+        parsed = _facts_json_object(content)
+        if not isinstance(parsed, dict):
+            raise ValueError('模型没有返回可解析的 JSON')
+        record['facts'] = _normalize_facts(parsed)
+        record['count'] = _facts_count(record['facts'])
+        if not record['count']: record['status'] = 'empty'
+    except Exception as exc:
+        record['status'] = 'failed'
+        record['error'] = net_hint(exc, (up.get('api_key'),))[:200] if 'net_hint' in globals() else str(exc)[:200]
+    write_json(os.path.join(_facts_dir(), fid + '.json'), record)
+    return record
+
+
+def _start_fact_extraction(source, digest, sections, sync=False):
+    """入库钩子:配了 Key 才抽(没 Key 静默跳过,不打扰);默认后台线程,不拖慢入库响应。"""
+    text = '\n\n'.join('## %s\n%s' % (title, content) for title, content in (sections or []) if str(content or '').strip())
+    if len(text.strip()) < 200: return False
+    up = s2_conf(read_json(conf_path(), {}))
+    if not (up.get('api_key') and up.get('base_url')): return False
+    fid = re.sub(r'[^0-9a-f]', '', str(digest or ''))[:32] or uuid.uuid4().hex
+    if sync:
+        _extract_facts_now(fid, source, text, up); return True
+    write_json(os.path.join(_facts_dir(), fid + '.json'),
+               {'id': fid, 'source': source, 'ts': now(), 'status': 'running', 'facts': None, 'error': ''})
+    threading.Thread(target=_extract_facts_now, args=(fid, source, text, up), daemon=True).start()
+    return True
+
+
+def _facts_list():
+    out = []
+    for fn in sorted(os.listdir(_facts_dir())):
+        if not fn.endswith('.json'): continue
+        record = read_json(os.path.join(_facts_dir(), fn), None)
+        if isinstance(record, dict) and record.get('id'): out.append(record)
+    order = {'pending': 0, 'running': 1, 'failed': 2, 'empty': 3, 'confirmed': 4, 'discarded': 5}
+    out.sort(key=lambda r: (order.get(r.get('status'), 9), str(r.get('ts') or '')), reverse=False)
+    return out
+
+
+@app.get('/v1/assets/facts')
+def assets_facts():
+    records = _facts_list()
+    return {'ok': True, 'items': records, 'pending': sum(1 for r in records if r.get('status') == 'pending')}
+
+
+@app.post('/v1/assets/facts/{fid}')
+async def assets_facts_decide(fid: str, req: Request):
+    safe = re.sub(r'[^0-9a-f]', '', str(fid or ''))[:32]
+    path = os.path.join(_facts_dir(), safe + '.json') if safe else ''
+    record = read_json(path, None) if path else None
+    if not isinstance(record, dict): return JSONResponse({'ok': False, 'error': '没有这条抽取记录'}, 404)
+    body = await req.json()
+    action = str(body.get('action') or '')
+    if action == 'discard':
+        record.update({'status': 'discarded', 'decided_at': now()}); write_json(path, record)
+        return {'ok': True, 'status': 'discarded'}
+    if action != 'confirm': return JSONResponse({'ok': False, 'error': 'action 只能是 confirm 或 discard'}, 400)
+    facts = _normalize_facts(body.get('facts')) if isinstance(body.get('facts'), dict) else (record.get('facts') or {})
+    if not _facts_count(facts): return JSONResponse({'ok': False, 'error': '没有可入库的事实'}, 400)
+    written = []
+    for name, section in _facts_to_markdown(facts, record.get('source') or '', now()).items():
+        if not section: continue
+        target = os.path.join(assets_dir(), name)
+        existing = open(target, encoding='utf-8', errors='ignore').read() if os.path.isfile(target) else ('# %s\n' % name[:-3])
+        _write_text_atomic(target, existing.rstrip('\n') + section)
+        written.append(name)
+    record.update({'status': 'confirmed', 'facts': facts, 'decided_at': now(), 'written': written}); write_json(path, record)
+    return {'ok': True, 'status': 'confirmed', 'written': written}
+
+
+# ---------- A/B 常态化:设置里「试跑对比」,同一份招标文件按变体各起一单,结果表里分得开 ----------
+# tools/model_ab.py 是研发跑批用的 CLI;一线用户要的是按钮。变体语法与 CLI 一致:
+#   model?temperature=0.5&frequency_penalty=0.4 —— 模型必须是已验证过的,参数落在任务自己的 任务.json 里,
+# 流水线按任务读(_generation_params / _initialize_generation_pipeline),全局默认值一个不动。
+AB_MAX_VARIANTS = 4
+
+
+def _ab_dir():
+    path = os.path.join(ws_root(), 'ab_groups'); os.makedirs(path, exist_ok=True); return path
+
+
+def _parse_ab_variant(spec):
+    raw = str(spec or '').strip()
+    if not raw: return None
+    model, _, query = raw.partition('?')
+    params = {}
+    for key, value in urllib.parse.parse_qsl(query, keep_blank_values=False):
+        if key in GEN_PARAM_BOUNDS: params[key] = value
+    params = _normalize_generation_params(params)
+    label = model.strip() + (('?' + '&'.join('%s=%s' % (k, params[k]) for k in sorted(params))) if params else '')
+    return {'model': model.strip(), 'params': params, 'label': label}
+
+
+def _job_ab_overrides(job):
+    meta = read_json(os.path.join(job, '任务.json'), {}) if job else {}
+    ab = meta.get('ab') if isinstance(meta, dict) and isinstance(meta.get('ab'), dict) else {}
+    return {'model': str(ab.get('model') or ''), 'params': _normalize_generation_params(ab.get('params'))}
+
+
+def _quality_level(job):
+    try: text = open(os.path.join(job, '成品质检报告.md'), encoding='utf-8', errors='ignore').read(4000)
+    except OSError: return ''
+    return 'red' if '🔴' in text else ('yellow' if '🟡' in text else ('green' if '✅' in text else ''))
+
+
+def _ab_row(child):
+    job = jpath(child)
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    if not meta: return None
+    state = job_state(job, meta)
+    outcome = read_json(os.path.join(job, 'outcome.json'), {})
+    elapsed = _job_elapsed(job, state, meta, outcome, _job_last_activity(job, meta, None, outcome)) or 0
+    cov = _coverage_view(job) if os.path.isfile(os.path.join(job, '评分点响应矩阵.md')) else {}
+    ab = meta.get('ab') if isinstance(meta.get('ab'), dict) else {}
+    return {'job_id': child, 'name': meta.get('name') or child, 'label': ab.get('label') or '', 'model': ab.get('model') or '',
+            'params': ab.get('params') or {}, 'state': state, 'elapsed_seconds': int(elapsed if elapsed <= 12 * 3600 else 0),
+            'usage': _job_usage(job, meta), 'coverage': {'covered': int(cov.get('covered') or 0), 'total': int(cov.get('total') or 0)}
+            if cov else None, 'quality': _quality_level(job), 'repeat_hits': _job_repeat_hits(job),
+            'has_word': bool(_body_docxs(job))}
+
+
+@app.get('/v1/ab')
+def ab_groups():
+    groups = []
+    for fn in sorted(os.listdir(_ab_dir()), reverse=True):
+        if fn.endswith('.json'):
+            g = read_json(os.path.join(_ab_dir(), fn), None)
+            if isinstance(g, dict): groups.append({k: g.get(k) for k in ('group', 'name', 'created_at', 'source_job', 'variants')})
+    return {'ok': True, 'groups': groups[:20]}
+
+
+@app.get('/v1/ab/{group}')
+def ab_group(group: str):
+    safe = re.sub(r'[^0-9a-zA-Z-]', '', str(group or ''))
+    g = read_json(os.path.join(_ab_dir(), safe + '.json'), None) if safe else None
+    if not isinstance(g, dict): return JSONResponse({'ok': False, 'error': '没有这组对比'}, 404)
+    rows = [r for r in (_ab_row(child) for child in g.get('jobs') or []) if r]
+    return {'ok': True, 'group': g.get('group'), 'name': g.get('name'), 'created_at': g.get('created_at'),
+            'source_job': g.get('source_job'), 'rows': rows,
+            'running': any(r['state'] in ('running', 'staged') for r in rows)}
+
+
+@app.post('/v1/ab/run')
+async def ab_run(req: Request):
+    gate = _generation_gate_response()
+    if gate is not None: return gate
+    body = await req.json()
+    source = str(body.get('job_id') or '')
+    old = jpath(source)
+    meta = read_json(os.path.join(old, '任务.json'), {}) if source and os.path.basename(source) == source else {}
+    tname = str(meta.get('tender') or '')
+    if not (meta and tname and os.path.isfile(os.path.join(old, tname))):
+        return JSONResponse({'ok': False, 'error': '请选一个带招标文件的任务作为对比基准'}, 400)
+    variants = [v for v in (_parse_ab_variant(x) for x in (body.get('variants') or [])) if v]
+    if not variants or len(variants) > AB_MAX_VARIANTS:
+        return JSONResponse({'ok': False, 'error': '请给 1–%d 个变体,如 模型?temperature=0.5' % AB_MAX_VARIANTS}, 400)
+    conf = read_json(conf_path(), {})
+    verified = _verified_model_ids(conf)
+    unknown = sorted({v['model'] for v in variants if v['model'] and v['model'] not in verified})
+    if unknown:
+        return JSONResponse({'ok': False, 'error': '这些模型还没通过连接测试:%s;已验证:%s' % ('、'.join(unknown), '、'.join(verified) or '无')}, 400)
+    group = datetime.datetime.now().strftime('%m%d-%H%M%S-') + uuid.uuid4().hex[:4]
+    old_product = product_meta(old, meta)
+    jobs, errors = [], []
+    for index, variant in enumerate(variants, 1):
+        nid = group + '-' + chr(96 + index)
+        nj = jpath(nid); os.makedirs(nj)
+        try:
+            shutil.copy2(os.path.join(old, tname), os.path.join(nj, tname))
+            for dirname in ('素材', '参考资料'):
+                src = os.path.join(old, dirname)
+                if os.path.isdir(src): shutil.copytree(src, os.path.join(nj, dirname))
+            requirements = os.path.join(old, '你的要求.md')
+            if os.path.isfile(requirements): shutil.copy2(requirements, os.path.join(nj, '你的要求.md'))
+            write_json(os.path.join(nj, '任务.json'), {
+                'name': '%s · A/B %s' % (old_product.get('name') or tname, variant['label']), 'created_at': now(),
+                'paused': False, 'staged': True, 'tender': tname, 'prompt': meta.get('prompt', ''),
+                'template_id': meta.get('template_id', ''), 'template_snapshot': meta.get('template_snapshot') or {},
+                'volumes': bool(meta.get('volumes')), 'confirm_parse': False,
+                'ab': {'group': group, 'label': variant['label'], 'model': variant['model'], 'params': variant['params'],
+                       'source_job': source}})
+            write_json(os.path.join(nj, 'product.json'), {'project_id': old_product.get('project_id') or '', 'version': 1,
+                                                          'root_job_id': nid, 'rerun_of': source, 'created_at': now()})
+            result = _launch_job(nid, nj, 'auto')
+            jobs.append(nid)
+            if result.get('mode') == 'error': errors.append('%s:%s' % (variant['label'], result.get('error') or 'error'))
+        except Exception as exc:
+            shutil.rmtree(nj, ignore_errors=True)
+            errors.append('%s:%s' % (variant['label'], exc))
+    record = {'group': group, 'name': str(body.get('name') or (old_product.get('name') or tname)), 'created_at': now(),
+              'source_job': source, 'variants': [v['label'] for v in variants], 'jobs': jobs, 'errors': errors}
+    write_json(os.path.join(_ab_dir(), group + '.json'), record)
+    if not jobs: return JSONResponse({'ok': False, 'error': '一个变体都没起来:' + '; '.join(errors)}, 500)
+    return {'ok': True, 'group': group, 'jobs': jobs, 'errors': errors}
+
 
 @app.post('/v1/transcribe')
 def transcribe():

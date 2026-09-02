@@ -747,3 +747,13 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .cmp-empty{color:var(--dim);font:400 var(--fs-sm)/1.7 inherit;padding:20px 6px;text-align:center}
 #usageTotals{grid-template-columns:repeat(6,1fr)}
 @media (max-width:900px){.cmp-panes{grid-template-columns:1fr}.cmp-body{height:38vh}#usageTotals{grid-template-columns:repeat(3,1fr)}}
+
+/* ============ P4:事实确认 / 能力表编辑 ============ */
+.fact-card{border:1px solid var(--line-soft);border-radius:11px;padding:10px 13px;display:flex;flex-direction:column;gap:6px;background:var(--panel)}
+.fact-head{display:flex;align-items:center;gap:8px;font:600 var(--fs-sm)/1.4 inherit}
+.fact-head .ant-tag{margin:0;border-radius:999px}
+.fact-body{display:flex;flex-direction:column;gap:4px}
+.fact-kind{font:600 var(--fs-xs)/1 inherit;letter-spacing:.05em;color:var(--dim);padding:6px 0 2px}
+.fact-row .ant-checkbox-wrapper{font:400 var(--fs-sm)/1.5 inherit}
+#capTable .ant-table-cell{padding:4px 6px!important}
+#capTable .ant-input{padding:2px 6px}
