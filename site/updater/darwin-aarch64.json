@@ -1,15 +1,15 @@
 {
-  "version": "0.22.0",
-  "notes": "详见 https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.22.0",
-  "pub_date": "2026-09-02T06:46:00Z",
+  "version": "0.22.1",
+  "notes": "详见 https://github.com/shandianT/bid-dog/releases/tag/desktop-v0.22.1",
+  "pub_date": "2026-09-02T14:37:08Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdlVmKzdRYXpjVTUrcnRDRy9KeGpIZHdpQUhKZFRYL2gvKzFVeEtGMFcvbUVnaFJZeVJWWUdEWmVWVGZrTkxYR2oyWFA0SlZpbFRzV21OSll1eFd4QzJoT0FsQitWZ1FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzMxMzY3CWZpbGU65Lit5qCH54uXLmFwcC50YXIuZ3oKRFA3MjFxdDJyTThHL1ZDQVBVWS9OZUM3SEZWalI4MWZuL1IvTnNJSzJydlVlQno4QTdpcEk3NHIxSFNobGgxeW5kWFNUTnpJYmVkdm5KVlZmdXQrQmc9PQo=",
-      "url": "https://github.com/shandianT/bid-dog/releases/download/desktop-v0.22.0/bid-dog_0.22.0_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdlVmKzdRYXpjVStJYWtrK2pzaTN5dDRUYmt1YTZLTDh3ek41Ukd1MDBOblhTVzhtMlJBbzNLSGxjdkhldU92Qm15WnZDT3Bhc1psM2VXQlNYY09ib0dEZmQ3cjNXNGdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzU5Njc5CWZpbGU65Lit5qCH54uXLmFwcC50YXIuZ3oKL3dzeTk5T2lHNmdEMTFTZTc4ak1UN1JmOExDaDJ3QUkzU1RXemRyaE1ZTkVXWUVPSll1VVVEY2l3TFBPVTNmdVNWakk0cUMvSGNSRXFNemRjUmJmQ3c9PQo=",
+      "url": "https://github.com/shandianT/bid-dog/releases/download/desktop-v0.22.1/bid-dog_0.22.1_aarch64.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdlVmKzdRYXpjVXl0RU1CZHBpY2Y3VEc5NkZJWktxVzRuc01oa04xMlp1T0EwbFBqa1hyN2M5R28rUkJQZVI3Y3RLK0RIeWdIZmNaajA2OUdKYnFpdmtZR3pmM2F5Y0FvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzMxNTIxCWZpbGU65Lit5qCH54uXXzAuMjIuMF94NjQtc2V0dXAuZXhlCm5kUDcvQTE5ODV6MzNiZFhmRkNwRVpTMkdVTG5Tcy9TNWI4VGdCamQweU0xK3M4TnI5c2xmSFZ3aEVGYlZvelZySUFMblpnOThYU0lrd0JmTEpMbUFBPT0K",
-      "url": "https://github.com/shandianT/bid-dog/releases/download/desktop-v0.22.0/bid-dog_0.22.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTdlVmKzdRYXpjVTE1NDJnQ0JTMExQcVRvc09wNGs3YVEvMlpSWlBjUmIwUWFCT2k4WlJpK2NnczZpb2J1Mys2ZHlXc2hLK1lEcUVkNFp1bjM3OFRNTFo3SjYwSWFjYXc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzU5NzkwCWZpbGU65Lit5qCH54uXXzAuMjIuMV94NjQtc2V0dXAuZXhlCk1ETnRiaFgxYy80YWJ1eVRTVFJoL05mV0pVYnJ5bEhmOEl3S2Z6RXJ2QW94ZlY3OUl1bnU2d2RJK3NuRE5SWHUzdWlGZzhIUnF0bTB1WnZmQ01EUkFRPT0K",
+      "url": "https://github.com/shandianT/bid-dog/releases/download/desktop-v0.22.1/bid-dog_0.22.1_x64-setup.exe"
     }
   }
 }
