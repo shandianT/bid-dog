@@ -778,3 +778,21 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .midtabs{border-radius:9px}
 .flow-console{gap:12px}
 .flow-detail{padding-top:11px;gap:8px}
+
+/* ============ 0.22.1:中栏一屏到底(大纲 / 执行过程 / 对话),不分页签 ============ */
+.sec-head{display:flex;align-items:center;gap:10px;padding:2px 2px 6px;min-width:0}
+.sec-title{font:650 var(--fs-md)/1.4 inherit;color:var(--ink);flex:none}
+.sec-meta{font:400 var(--fs-xs)/1.5 inherit;color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sec-meta b{color:var(--sub)}
+.sec-toggle{width:100%;border:1px solid var(--line-soft);background:var(--card);border-radius:10px;padding:8px 12px;cursor:pointer;
+  text-align:left;box-shadow:var(--sh);transition:border-color .16s}
+.sec-toggle:hover{border-color:var(--line)}
+.flow-sec.open .sec-toggle{border-bottom-left-radius:0;border-bottom-right-radius:0;box-shadow:none;border-bottom:0}
+.flow-sec.open .lcard-a{border-top-left-radius:0;border-top-right-radius:0}
+.flow-sec{display:flex;flex-direction:column;gap:0}
+.flow-sec .lcard-a + .lcard-a{margin-top:10px}
+.sec-caret{font-size:10px;color:var(--faint);transition:transform .18s}
+.sec-caret.open{transform:rotate(90deg)}
+.sec-x{font:450 var(--fs-xs)/1 inherit;color:var(--blue);flex:none}
+.chat-sec{padding-top:6px}
+.chat-sec .sec-head{border-top:1px solid var(--line-soft);padding-top:10px;margin-top:2px}

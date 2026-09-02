@@ -71,12 +71,12 @@ async function openFixture(page) {
   await page.goto('/');
   await expect(page.locator('#conn')).toContainText('已连接', { timeout: 15_000 });
   await page.getByText('P0大纲任务', { exact: false }).first().click();
-  await expect(page.locator('#midTabs')).toBeVisible();
+  await expect(page.locator('#outlineHost')).toBeVisible();   // 0.22.1:不分页签,大纲直接在中栏最上面
 }
 
 test('pipeline job opens on the outline tab with per-chapter states and word counts', async ({ page }) => {
   await openFixture(page);
-  await expect(page.locator('#midTabs button.on')).toHaveText('标书大纲');
+  await expect(page.locator('#outlineHost .sec-title')).toHaveText('标书大纲');
   const rows = page.locator('#outlineHost .outline-row');
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText('施工组织设计');
@@ -84,8 +84,8 @@ test('pipeline job opens on the outline tab with per-chapter states and word cou
   await expect(rows.nth(0).locator('[data-rw]')).toHaveText('重写本章');
   await expect(rows.nth(1)).toContainText('正在撰写');
   await expect(rows.nth(1).locator('[data-rw]')).toHaveCount(0);   // 在写章节没有重写入口
-  await page.locator('#midTabs [data-midtab="chat"]').click();
-  await expect(page.locator('#outlineHost')).toBeHidden();
+  // 对话就在大纲下面、输入框上面,不用切页签
+  await expect(page.locator('#outlineHost')).toBeVisible();
   await expect(page.locator('#chatWrap')).toBeVisible();
 });
 

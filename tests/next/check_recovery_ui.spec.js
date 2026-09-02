@@ -70,7 +70,7 @@ async function openStoppedJob(page) {
   await expect(page.locator('#conn')).toContainText('已连接', { timeout: 15_000 });
   await page.getByText('半路停下的任务', { exact: false }).first().click();
   await expect(page.locator('#hTitle')).toHaveText('半路停下的任务');
-  await expect(page.locator('#midTabs')).toBeVisible();
+  await expect(page.locator('#flowHost')).toBeVisible();
 }
 
 test('a stopped-but-resumable job offers the resume button instead of a dead end', async ({ page }) => {
@@ -104,7 +104,7 @@ test('a run that stopped before assembly is not flagged as missing its Word', as
 
 test('the flow console header and node rows follow the real state', async ({ page }) => {
   await openStoppedJob(page);
-  await page.locator('#midTabs [data-midtab="flow"]').click();
+  await page.evaluate(() => { S.flowOpen[S.active] = true; bump(); });   // 0.22.1:执行过程是可收起的一段,不是页签
   await expect(page.locator('#flowHost .flow-kicker')).toHaveText('已停止');   // 不再写死「生成进行中」
   const pending = page.locator('#flowHost .flow-node-row.pending').first();
   await expect(pending).toBeVisible();

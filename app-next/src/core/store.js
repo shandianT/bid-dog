@@ -13,7 +13,7 @@ export const S = { online:false, jobs:[], active:null, msgs:{}, prog:{}, arts:{}
 // connText ← el('conn').textContent;demoTag ← #demoTag(null=隐藏);brandDot ← 'ok'|'warn';
 // heroSub ← #heroSub;sbR ← #sbR;toastMsg ← #toast;checkingUpdate ← 版本徽章「检查中…」。
 Object.assign(S, { connText:'', demoTag:null, brandDot:'warn', heroSub:'', sbR:'',
-                   toastMsg:null, checkingUpdate:false, engineOffline:false, stale:null });
+                   toastMsg:null, checkingUpdate:false, engineOffline:false, stale:null, flowOpen:{}, railFold:{} });
 
 let version = 0;
 const listeners = new Set();

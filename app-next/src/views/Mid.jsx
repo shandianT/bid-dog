@@ -1,25 +1,14 @@
-// 中栏:页签(标书大纲/执行过程/对话与要求)+ 流程台 + 对话 + 工作日志。
-// 页签默认逻辑、流程台视图模型、消息渲染逐字对应经典 currentMidTab/renderFlowConsole/renderChat/renderWorklog。
+// 中栏:一屏到底,不分页签——上面是标书大纲(内容),中间是可收起的执行过程(过程),
+// 下面是对话(就在输入框上方,在哪打字就在哪看到回复)。流程台视图模型、消息渲染逐字对应经典。
 import React, { useLayoutEffect, useRef, useState } from 'react';
-import { Card, Steps, List, Tag } from 'antd';
+import { Card, Steps, List, Tag, Button } from 'antd';
 import { ThoughtChain } from '@ant-design/x';
-import { CheckCircleFilled, LoadingOutlined, CloseCircleFilled, ClockCircleOutlined } from '@ant-design/icons';
+import { CheckCircleFilled, LoadingOutlined, CloseCircleFilled, ClockCircleOutlined, RightOutlined } from '@ant-design/icons';
 import { S, ui, bump, flowConsoleView, taskPresentation, phaseTimingLabel, timing, fmtDur,
-         jobState, _friendlyText, _friendlyActionLabel, errAction, answer, ASK_SELF } from '../core/index.js';
+         jobState, publicTaskState, _friendlyText, _friendlyActionLabel, errAction, answer, ASK_SELF } from '../core/index.js';
 import { mdHtml } from '../lib.js';
 import Outline, { _chapterNodes } from './Outline.jsx';
 import ConfirmCard from './ConfirmCard.jsx';
-
-// 三个页签各管一摊:大纲 = 章节;执行过程 = 流程台 + 工作日志;对话 = 对话。不再互相重复。
-const MID_TABS = [['outline', '标书大纲'], ['flow', '执行过程'], ['chat', '对话']];
-
-export function currentMidTab(id){
-  if(S.midTab[id]) return S.midTab[id];
-  if(_chapterNodes(id).length) return 'outline';
-  if(((S.arts[id]) || []).some(a => /^章节_/.test(a.name || ''))) return 'outline';
-  const job = (S.jobs || []).find(x => x.job_id === id);
-  return (job && job.flow) ? 'flow' : 'chat';
-}
 
 const STATE_LABELS = { done: '已完成', active: '进行中', attention: '需关注', failed: '未完成', pending: '等待中' };
 
@@ -218,25 +207,49 @@ function Worklog(){
   );
 }
 
+// 执行过程一行摘要 + 展开/收起:没有章节可看、或任务停了/没完成 → 默认展开;在写/已完成 → 收成一行
+function FlowSection({ id, job, open }){
+  const p = taskPresentation(job);
+  const prog = S.prog[id] || {};
+  const step = prog.step ? (prog.step + '/' + (prog.total || 12)) : '';
+  return (
+    <div className={'sec flow-sec' + (open ? ' open' : '')}>
+      <button type="button" className="sec-head sec-toggle" id="flowToggle" aria-expanded={open}
+        onClick={() => { S.flowOpen[id] = !open; bump(); }}>
+        <RightOutlined className={'sec-caret' + (open ? ' open' : '')} />
+        <span className="sec-title">执行过程</span>
+        <span className="sec-meta">{[p.currentAction, step, '最近活动 ' + p.lastActivity].filter(Boolean).join(' · ')}</span>
+        <span className="sec-x">{open ? '收起' : '展开'}</span>
+      </button>
+      {open && <>
+        <Card variant="borderless" className="lcard-a"><FlowConsole /></Card>
+        <Worklog />
+      </>}
+    </div>
+  );
+}
+
 export default function Mid(){
   const id = S.active;
   const job = id ? (S.jobs || []).find(x => x.job_id === id) : null;
   const on = !!(id && job);
-  const tab = on ? currentMidTab(id) : 'chat';
+  const hasOutline = on && (_chapterNodes(id).length > 0 || (S.arts[id] || []).some(a => /^章节_/.test(a.name || '')));
+  const st = job ? publicTaskState(job) : '';
+  const flowDefault = !hasOutline || st === 'failed';
+  const flowOpen = on && (S.flowOpen[id] != null ? !!S.flowOpen[id] : flowDefault);
+  const msgs = (on && S.msgs[id]) || [];
   return (
     <div id="chat" className="mid">
-      {on && (
-        <div className="cwrap"><div className="midtabs" id="midTabs">
-          {MID_TABS.map(([k, label]) => <button key={k} type="button" data-midtab={k} className={k === tab ? 'on' : ''}
-            onClick={() => { S.midTab[id] = k; bump(); }}>{label}</button>)}
-        </div></div>
-      )}
       <div className="cwrap"><ConfirmCard /></div>
-      {on && tab === 'outline' && <div className="cwrap" id="outlineHost"><Outline /></div>}
-      {(!on || tab === 'flow') && <div className="cwrap" id="flowHost">
-        <Card variant="borderless" className="lcard-a"><FlowConsole /></Card></div>}
-      {(!on || tab === 'flow') && <div className="cwrap"><Worklog /></div>}
-      {(!on || tab === 'chat') && <div className="cwrap"><ChatMessages /></div>}
+      {on && <div className="cwrap" id="outlineHost"><Outline /></div>}
+      {on && <div className="cwrap" id="flowHost"><FlowSection id={id} job={job} open={flowOpen} /></div>}
+      {on && (
+        <div className="cwrap chat-sec">
+          <div className="sec-head"><span className="sec-title">对话</span>
+            <span className="sec-meta">{msgs.length ? msgs.length + ' 条' : '问进度、提要求;AI 的提问也在这里回答'}</span></div>
+          <ChatMessages />
+        </div>
+      )}
     </div>
   );
 }

@@ -51,7 +51,8 @@ export default function Outline(){
     });
     return (
       <>
-        <div className="outline-note" title="点章节看内容;已完成的章节可以只重写这一章">已完成 <b>{done}/{nodes.length}</b> 章{totalKb ? ' · 共' + _fmtWords(totalKb) : ''}</div>
+        <div className="sec-head"><span className="sec-title">标书大纲</span>
+          <span className="sec-meta outline-note" title="点章节看内容;已完成的章节可以只重写这一章">已完成 <b>{done}/{nodes.length}</b> 章{totalKb ? ' · 共' + _fmtWords(totalKb) : ''}</span></div>
         <List className="outline" split={false} dataSource={rows} renderItem={r => r} />
       </>
     );
@@ -75,7 +76,8 @@ export default function Outline(){
   }
   return (
     <>
-      <div className="outline-note">本任务由智能体模式生成:可逐章预览;「单章重写」需要分段生成模式(新建任务默认使用)。</div>
+      <div className="sec-head"><span className="sec-title">标书大纲</span>
+        <span className="sec-meta outline-note">智能体模式生成:可逐章预览;「单章重写」需要分段生成模式(新建任务默认使用)</span></div>
       <List className="outline" split={false} dataSource={chapterArts}
         renderItem={(a, i) => (
           <List.Item className="outline-row done" data-pv={a.name} onClick={() => ui.openPreview(a.name)}

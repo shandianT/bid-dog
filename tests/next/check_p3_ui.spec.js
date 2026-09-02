@@ -173,7 +173,6 @@ test('⌘⏎ sends the composer draft', async ({ page }) => {
   await openApp(page);
   await page.getByText('P3真预览任务', { exact: false }).first().click();
   await expect(page.locator('#composer')).toBeVisible();
-  await page.locator('#midTabs [data-midtab="chat"]').click();
   await page.route('**/v1/jobs/*/messages', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }));
   const box = page.locator('#composer textarea').first();
   await box.fill('各章分别写了多少字?');
