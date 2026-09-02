@@ -4,42 +4,74 @@ import { S, ui, bump, api, select, demoNew, presentProblem } from '../core/index
 import { IS_WEB, FORCE_DEMO } from '../core/env.js';
 
 export const NJ = { items: [], tenderIdx: -1, step:1, templateDraft:null, recommendation:null, recommendSeq:0, starting:false,
-                    req:'', template:'auto', project:'', saveAssets:true, confirmParse:true, msg:'', open:false };
+                    req:'', template:'auto', project:'', saveAssets:true, confirmParse:true, msg:'', open:false,
+                    reqOpts:{ freshHeadings:true, itemized:true, noFabrication:true }, reqCustom:false };
 export const DOCLIKE = f => !/\.(png|jpe?g|gif|bmp|tiff?|zip)$/i.test(f);
 /* 默认要求:大多数人不知道该写什么,空着写出来的就是四平八稳的通稿。
    预填一份「投标方案专家」提示词当起点——用户改两句比从零写一段容易得多。
    ⚠ 提示词里不能出现看起来像小标题的名词清单——只写"怎么写"的纪律,不写"要有哪几块"。
    (完整教训见经典源码同位置注释;此文案与经典逐字一致,改动需两边同步) */
-export const NJ_DEFAULT_REQ = [
+// 三个开关对应「最重要的三条」;开关全开时 composeReq() 的产物与经典预填文案逐字一致
+// (core-smoke 钉住)。关掉某一条,它在「最重要」与「写法」两处的句子一起拿掉,序号重排。
+export const NJ_REQ_HEAD = [
   '# 角色',
   '你是有 30 年经验的投标方案专家,负责编写本项目的投标技术方案。',
   '',
-  '# 最重要的三条',
-  '1. **每一章的小标题必须依据这一章自己的内容现拟**。严禁给所有章节套用同一组小标题——',
-  '   评审一眼就能看出是模板灌水,直接失分。两个章节的小标题重复,就是写砸了。',
-  '2. **逐条应答招标文件**。技术规格、商务条款、评分办法里的每一条,都要能在标书里找到',
-  '   对应的应答段落或表格行;偏离表的条数要和招标条款条数同量级,不能只挑几条象征性地填。',
-  '3. **不编造**。我方身份、产品能力、资质案例一律取自素材库,素材里没有的写〔需补充〕。',
-  '',
-  '# 写法',
-  '- 篇幅按招标文件的分量走,写透为准;凑字数的套话、换个说法重复一遍的段落,一律不要。',
-  '- 每一段都要有具体信息:具体的做法、参数、时间、责任人、验收口径。',
-  '  写不出具体内容的地方,说明素材不够,标〔需补充〕,不要用空话填满。',
-  '- 评分办法要求承诺函的(如违约承诺、服务期满后的服务承诺),直接写出完整承诺函正文。',
-  '- 资质 / 业绩 / 合同 / 证照:按招标规定的名称建一个章节整块留位,**不要拆成一个资质一个小标题**',
-  '  (公司手上都是现成扫描件,实际是整块粘贴,拆碎了没法贴);写清该放什么,留〔此处粘贴:…〕空白位,',
-  '  **不要自动插这类图**——插错一张就是造假风险。',
-  '- 配图只做一件事:证明我方对某条技术要求或评分点的响应。不为插图而插图。',
-  '- 商务和技术偏离表每份必写;另出一份《评标索引》放在整册最前面(评分项|分值|评估标准|对应章节)。',
-  '- 语言专业、严谨,不堆形容词。'
-].join('\n');
+];
+export const NJ_REQ_SWITCHES = [
+  { key: 'freshHeadings', label: '小标题按本章现拟,不套模板', hint: '两个章节小标题重复就是写砸了;凑字数的套话、换个说法重复的段落一律不要',
+    top: ['1. **每一章的小标题必须依据这一章自己的内容现拟**。严禁给所有章节套用同一组小标题——',
+          '   评审一眼就能看出是模板灌水,直接失分。两个章节的小标题重复,就是写砸了。'] },
+  { key: 'itemized', label: '逐条应答招标文件', hint: '每条技术规格 / 商务条款 / 评分办法都要有对应段落或表格行;偏离表与《评标索引》必出',
+    top: ['2. **逐条应答招标文件**。技术规格、商务条款、评分办法里的每一条,都要能在标书里找到',
+          '   对应的应答段落或表格行;偏离表的条数要和招标条款条数同量级,不能只挑几条象征性地填。'] },
+  { key: 'noFabrication', label: '不编造,素材里没有的写〔需补充〕', hint: '我方身份、产品能力、资质案例只取自素材库;写不出具体内容就明说素材不够',
+    top: ['3. **不编造**。我方身份、产品能力、资质案例一律取自素材库,素材里没有的写〔需补充〕。'] },
+];
+// 「写法」段:每行标注它归哪个开关(null = 常驻),顺序与经典文案一致
+export const NJ_REQ_HOW = [
+  ['freshHeadings', '- 篇幅按招标文件的分量走,写透为准;凑字数的套话、换个说法重复一遍的段落,一律不要。'],
+  ['noFabrication', '- 每一段都要有具体信息:具体的做法、参数、时间、责任人、验收口径。'],
+  ['noFabrication', '  写不出具体内容的地方,说明素材不够,标〔需补充〕,不要用空话填满。'],
+  ['itemized', '- 评分办法要求承诺函的(如违约承诺、服务期满后的服务承诺),直接写出完整承诺函正文。'],
+  [null, '- 资质 / 业绩 / 合同 / 证照:按招标规定的名称建一个章节整块留位,**不要拆成一个资质一个小标题**'],
+  [null, '  (公司手上都是现成扫描件,实际是整块粘贴,拆碎了没法贴);写清该放什么,留〔此处粘贴:…〕空白位,'],
+  [null, '  **不要自动插这类图**——插错一张就是造假风险。'],
+  [null, '- 配图只做一件事:证明我方对某条技术要求或评分点的响应。不为插图而插图。'],
+  ['itemized', '- 商务和技术偏离表每份必写;另出一份《评标索引》放在整册最前面(评分项|分值|评估标准|对应章节)。'],
+  [null, '- 语言专业、严谨,不堆形容词。'],
+];
+export function composeReq(opts){
+  const on = key => !key || !(opts && opts[key] === false);
+  const picked = NJ_REQ_SWITCHES.filter(sw => on(sw.key));
+  let n = 0;
+  const top = picked.flatMap(sw => sw.top.map((line, i) => i === 0 ? line.replace(/^\d+\./, () => (++n) + '.') : line));
+  const head = top.length
+    ? [...NJ_REQ_HEAD, picked.length === NJ_REQ_SWITCHES.length ? '# 最重要的三条' : '# 最重要的原则', ...top, '']
+    : [...NJ_REQ_HEAD];
+  return [...head, '# 写法', ...NJ_REQ_HOW.filter(([key]) => on(key)).map(([, line]) => line)].join('\n');
+}
+export const NJ_DEFAULT_REQ = composeReq({});
+export function setReqOpt(key, on){
+  NJ.reqOpts = { ...NJ.reqOpts, [key]: !!on };
+  if(!NJ.reqCustom) NJ.req = composeReq(NJ.reqOpts);
+  bump();
+}
+// 用户在高级框里改过 → 记为自定义,开关不再覆盖它;改回与开关一致的文本就自动解除
+export function editReq(text){
+  NJ.req = String(text || '');
+  NJ.reqCustom = NJ.req.trim() !== composeReq(NJ.reqOpts).trim();
+  bump();
+}
+export function resetReq(){ NJ.reqCustom = false; NJ.req = composeReq(NJ.reqOpts); bump(); }
 
 export function njReset(){ NJ.items = []; NJ.tenderIdx = -1; NJ.step=1;NJ.templateDraft=null;NJ.recommendation=null;NJ.recommendSeq++;
-  NJ.req = NJ_DEFAULT_REQ; NJ.template='auto'; NJ.project=''; NJ.msg=''; bump(); }
+  NJ.reqOpts = { freshHeadings:true, itemized:true, noFabrication:true }; NJ.reqCustom = false;
+  NJ.req = composeReq(NJ.reqOpts); NJ.template='auto'; NJ.project=''; NJ.msg=''; bump(); }
 
 export function njOpen(){
   NJ.open = true;
-  if(!NJ.req.trim()) NJ.req = NJ_DEFAULT_REQ;   // 空着就补默认;用户改过的原样保留
+  if(!NJ.req.trim()) NJ.req = composeReq(NJ.reqOpts);   // 空着就补默认;用户改过的原样保留
   NJ.step = 1; bump();
   loadJobTemplates();
 }

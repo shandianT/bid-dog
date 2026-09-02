@@ -10,6 +10,7 @@ import { S, ui, bump, taskPresentation, publicTaskState, taskGroupOpen, checkFor
          toggleTaskSelection, toggleAllTaskSelection, runBulkTaskAction, deleteSelectedJobs,
          archiveJob, restoreJob, runTaskRowAction, select, BUNDLED_ENGINE_VERSION } from '../core/index.js';
 import { njAddFiles } from './newjob-core.js';
+import Logo from '../Logo.jsx';
 
 const STATE_COLOR = { preparing:'var(--dim)', generating:'var(--blue)', needs_input:'var(--amber)', completed:'var(--green)', failed:'var(--red)' };
 
@@ -30,7 +31,9 @@ function TaskRow({ j, compact }){
           onClick={e => e.stopPropagation()}
           onChange={e => toggleTaskSelection(j.job_id, e.target.checked)}
           aria-label={'选择任务 ' + (j.name || j.job_id)} />}
-        <span className="dot" style={{ background: STATE_COLOR[present.state] }} />
+        {/* 出了 Word 但没过门禁的「待处理」用独立色阶,不和「需要你确认」的琥珀混 */}
+        <span className={'dot' + (present.state === 'failed' && j.has_word ? ' pending' : '')}
+          style={{ background: present.state === 'failed' && j.has_word ? 'var(--violet)' : STATE_COLOR[present.state] }} />
         <span className="tn" title={j.name || j.job_id}>{j.name || j.job_id}</span>
         {!S.taskBulkMode && <>
           <button className="task-archive" type="button" title={archived ? '恢复' : '归档'}
@@ -118,7 +121,8 @@ export default function Sidebar(){
   return (
     <aside className="sider">
       <div className="brand">
-        <span className="bd" id="brandDot" style={{ background: S.brandDot === 'ok' ? 'var(--green)' : 'var(--amber)' }} />
+        <span className="logo"><Logo size={26} />
+          <span className="bd" id="brandDot" style={{ background: S.brandDot === 'ok' ? 'var(--green)' : 'var(--amber)' }} /></span>
         <b>中标狗</b>
         <span className={'ver' + (info ? ' new' : '')} id="brandVer" role="button" tabIndex={0}
           title={info ? '有新版 v' + info.version + ',点这里查看并更新' : '当前版本,点击检查更新'}
@@ -130,7 +134,7 @@ export default function Sidebar(){
 
       <div className="newbtn" onClick={() => fileRef.current && fileRef.current.click()}>
         <PlusOutlined style={{ fontSize: 15 }} />
-        <div className="nb-t"><b>新建任务</b><i>选择或拖入招标文件</i></div>
+        <div className="nb-t"><b>新建任务</b><i>选择或拖入招标文件 · ⌘N</i></div>
         <input ref={fileRef} type="file" id="filein" multiple style={{ display: 'none' }}
           onChange={e => { njAddFiles(Array.from(e.target.files)); e.target.value = ''; }} />
       </div>

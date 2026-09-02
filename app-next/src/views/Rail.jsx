@@ -1,14 +1,30 @@
-// 右栏:进度(刻度条+当前步语义)/ 已产出(四组分层)/ 参考资料(素材与参考两组)/ 出件前检查。
-// 全部判定逐字对应经典 renderRail(含等待确认停表、停止不转圈、PR #10 的检查卡句式)。
+// 右栏:交付 / 进度 / 评分点覆盖 / 已产出 / 参考资料 / 出件前检查——六张卡按任务阶段折叠
+// (rail-fold.js 的纯规则),点标题可手动开合。判定公式逐字对应经典 renderRail
+// (含等待确认停表、停止不转圈、PR #10 的检查卡句式)。
 import React, { useRef } from 'react';
 import { Card, List, Tag, Button, Progress, Collapse, Empty } from 'antd';
 import { PlusOutlined, FileWordOutlined, FolderOpenOutlined, DownloadOutlined,
-         ExportOutlined, RightOutlined } from '@ant-design/icons';
+         ExportOutlined, RightOutlined, EyeOutlined } from '@ant-design/icons';
 import { S, ui, bump, verdict, timing, fmtDur, DEFAULT_STAGES, _friendlyText, wordPresence,
-         completionGate, deliveryDeadEnd, knownStep, jobState, deliveryViewModel } from '../core/index.js';
+         completionGate, deliveryDeadEnd, knownStep, jobState, publicTaskState, deliveryViewModel } from '../core/index.js';
 import { IS_WEB } from '../core/env.js';
 import { addRef } from './newjob-core.js';
 import { ART_GROUPS, artGroup, artKind, artPurpose, openArtifact, openJobFolder } from './artifacts.js';
+import { railPhase, railDefaults, railIsOpen, railToggle } from './rail-fold.js';
+
+function FoldCard({ id, k, phase, defaults, title, extra, summary, className, children, ...rest }){
+  const open = railIsOpen(S, id, k, phase, defaults);
+  const toggle = e => { if(e) e.stopPropagation(); railToggle(S, id, k, phase, defaults, bump); };
+  return (
+    <Card variant="borderless" size="small" data-rail={k} data-open={open ? '1' : '0'}
+      className={'rcard' + (open ? '' : ' folded') + (className ? ' ' + className : '')}
+      title={<span className="rc-title" role="button" aria-expanded={open} onClick={toggle}>
+        <RightOutlined className={'rc-caret' + (open ? ' open' : '')} />{title}</span>}
+      extra={open ? extra : null} {...rest}>
+      {open ? children : <div className="rc-summary" onClick={toggle}>{summary}</div>}
+    </Card>
+  );
+}
 
 export default function Rail(){
   const id = S.active;
@@ -72,12 +88,25 @@ export default function Rail(){
   const primary = vm.primary;
   const cov = S.coverage[id];
   const covLocal = !!(cov && cov.available && cov.plan_source === 'local');
+
+  // 折叠规则:阶段决定默认开合,手动开合只在同一阶段内记忆
+  const phase = railPhase({ missingWord, done100, waiting, halted, hasPrimary: !!primary, running: state === 'running',
+    staged: !!(job && job.staged), preparing: !!(job && publicTaskState(job) === 'preparing') });
+  const defaults = railDefaults(phase, { hasHealth: !!hth });
+  const fc = { id, phase, defaults };
+  const filesSummary = arts.length
+    ? arts.length + ' 个文件 · ' + groups.map(g => g.title.split(' ')[0] + ' ' + g.items.length).join(' · ')
+    : '生成过程中陆续出现';
+  const refsSummary = (mats.length || refs.length)
+    ? [mats.length ? '本单素材 ' + mats.length : '', refs.length ? '参考资料 ' + refs.length : ''].filter(Boolean).join(' · ')
+    : '给 AI 的写法参照,如过往标书';
   return (
-    <div className="rail" id="rail">
+    <div className="rail" id="rail" data-phase={phase}>
       {/* 交付物永远是右栏第一张卡(原型定的规矩):还没出件时也先告诉用户「将要交付什么」 */}
-      <Card variant="borderless" className="rcard" size="small"
-        title={primary ? '最终交付' : '将要交付'}
-        extra={primary ? <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={openJobFolder}>文件夹</Button> : null}>
+      <FoldCard {...fc} k="deliver" title={primary ? '最终交付' : '将要交付'}
+        extra={primary ? <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={openJobFolder}>文件夹</Button> : null}
+        summary={primary ? <><b>{primary.name || '投标文件.docx'}</b> · 请人工复核后提交</>
+          : (terminalDelivery ? '本单尚未生成最终 Word' : '投标文件_整册.docx · 生成完成后出现在这里')}>
         <div className="wordrow">
           <div className={'wordicon' + (primary ? '' : ' dim')}><FileWordOutlined style={{ fontSize: 20 }} /></div>
           <div className="wordcopy">
@@ -91,14 +120,20 @@ export default function Rail(){
           <div className="result-actions" style={{ marginTop: 12 }}>
             <Button type="primary" size="small"
               onClick={() => openArtifact(primary.name || '投标文件.docx', primary.url || '')}>打开</Button>
+            <Button size="small" icon={<EyeOutlined />} className="pv-word"
+              onClick={() => ui.openPreview(primary.name || '投标文件.docx', primary.url || '')}>预览</Button>
             <Button size="small" onClick={() => ui.openCheck()}>出件前检查</Button>
           </div>
         )}
-      </Card>
-      <Card variant="borderless" className="rcard" size="small"
-        title={<span>进度<Button type="link" size="small" id="stepsTgl"
-          onClick={() => { S.stepsOpen = !S.stepsOpen; bump(); }}>{S.stepsOpen ? '收起' : '展开'}</Button></span>}
-        extra={<span className="cr" id="etaTop">{etaTop}</span>}>
+      </FoldCard>
+      <FoldCard {...fc} k="progress"
+        title={<span>进度</span>}
+        extra={<span className="cr"><span id="etaTop">{etaTop}</span>
+          <Button type="link" size="small" id="stepsTgl"
+            onClick={() => { S.stepsOpen = !S.stepsOpen; bump(); }}>{S.stepsOpen ? '收起' : '展开'}</Button></span>}
+        summary={<><b style={railColor ? { color: railColor } : undefined}>{curName}</b>{cur ? ' · ' + cur + '/' + total : ''}
+          {/* 「已停止 · 不计时」与「已停止 · 停在…」开头相同,只保留一次 */}
+          {etaTop ? (etaTop.startsWith(curName) ? etaTop.slice(curName.length) : ' · ' + etaTop) : ''}</>}>
         <div id="miniProg">
           <div className="ticks">{ticks}</div>
           <div className="curstep" style={railColor ? { color: railColor } : undefined}>
@@ -120,13 +155,14 @@ export default function Rail(){
             })}
           </div>
         )}
-      </Card>
+      </FoldCard>
       {/* 评分点覆盖:比例本身就是结论(覆盖率=得分依据),用环形一眼看出还差多少。
           数据来自 /v1/jobs/{id}/coverage,每写完一章引擎重算一次。 */}
       {cov && cov.available && (
-        <Card variant="borderless" className="rcard" size="small"
+        <FoldCard {...fc} k="coverage"
           title={covLocal ? '评分点 · 待核对' : '评分点覆盖 · 实时'}
-          extra={<Button type="link" size="small" onClick={() => ui.openCoverage()}>查看明细 <RightOutlined /></Button>}>
+          extra={<Button type="link" size="small" onClick={() => ui.openCoverage()}>查看明细 <RightOutlined /></Button>}
+          summary={covLocal ? <><b>{cov.total} 项</b>候选 · 待模型核对</> : <>已覆盖 <b className="num">{cov.covered}/{cov.total}</b></>}>
           <div className="covrow">
             {/* 本地索引没有一条落到章节:环形图不能画 0%,那是把没意义的数字当结论 */}
             <Progress type="circle" size={68}
@@ -143,12 +179,13 @@ export default function Rail(){
                     <i>每个评分点都能点开看「原文依据 ↔ 落位章节」</i></>}
             </div>
           </div>
-        </Card>
+        </FoldCard>
       )}
       {/* 自然高度:产物少时不撑出空白,多了由 .cardlist 自己滚(整列也可滚) */}
-      <Card variant="borderless" className="rcard" size="small"
+      <FoldCard {...fc} k="files"
         title={<span>已产出 <span id="artCount" className="num">{arts.length ? '· ' + arts.length : ''}</span></span>}
-        extra={<Button type="link" size="small" onClick={openJobFolder}>任务文件夹</Button>}>
+        extra={<Button type="link" size="small" onClick={openJobFolder}>任务文件夹</Button>}
+        summary={filesSummary}>
         <div className="cardlist" id="files">
           {!arts.length
             ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="生成过程中陆续出现" style={{ margin: '6px 0' }} />
@@ -162,7 +199,7 @@ export default function Rail(){
                   children: (
                     <List size="small" split={false} dataSource={g.items}
                       renderItem={a => {
-                        const md = /\.md$/i.test(a.name);
+                        const pv = /\.(md|docx)$/i.test(a.name);   // md 看章节稿,docx 看真实 Word 版式
                         return (
                           // 右栏只有 316px:操作用图标按钮,把宽度让给文件名
                           <List.Item className="file"
@@ -172,8 +209,8 @@ export default function Rail(){
                               onClick={() => openArtifact(a.name, a.url || '')} />]}>
                             <div className="fmain">
                               <div className="ftop"><Tag bordered={false} className="tag">{artKind(a)}</Tag>
-                                <span className={'fn' + (md ? ' pv' : '')} title={a.name}
-                                  onClick={md ? () => ui.openPreview(a.name, a.url || '') : undefined}>{a.name}</span></div>
+                                <span className={'fn' + (pv ? ' pv' : '')} title={pv ? '预览 ' + a.name : a.name}
+                                  onClick={pv ? () => ui.openPreview(a.name, a.url || '') : undefined}>{a.name}</span></div>
                               <span className="fdesc">{artPurpose(a)}</span>
                             </div>
                           </List.Item>
@@ -183,13 +220,14 @@ export default function Rail(){
                 }))} />
             )}
         </div>
-      </Card>
-      <Card variant="borderless" className="rcard" size="small" title="参考资料"
+      </FoldCard>
+      <FoldCard {...fc} k="refs" title="参考资料"
         extra={<Button type="link" size="small" icon={<PlusOutlined />} onClick={() => {
             if(!S.active){ ui.toast('先选中一个任务,参考资料是加给具体任务的'); return; }
             if(!S.online){ ui.toast('未连接本地服务'); return; }
             refIn.current && refIn.current.click();
-          }}>添加</Button>}>
+          }}>添加</Button>}
+        summary={refsSummary}>
         <div id="attsList">
           {mats.length > 0 && <><div className="attgrp">本单导入素材 · {mats.length} 个(生成时与素材库合并,同名以本单为准)</div>
             {mats.map((a, i) => <AttRow key={'m' + i} a={a} />)}</>}
@@ -200,19 +238,19 @@ export default function Rail(){
         <input ref={refIn} type="file" multiple style={{ display: 'none' }}
           accept=".docx,.doc,.pdf,.md,.txt,.html,.htm,.png,.jpg,.jpeg,.webp"
           onChange={e => { const fs = Array.from(e.target.files); (async () => { for(const f of fs) await addRef(f); })(); e.target.value = ''; }} />
-      </Card>
-      <Card variant="borderless" className="rcard warncard" size="small" onClick={() => ui.openCheck()} hoverable>
-        <div className="t"><span className="dot" id="warnDot" style={{ background: hth ? verdict(id).color : 'var(--amber)' }} />
-          <span id="warnT">{hth ? '提交前需处理 ' + openGaps.length + ' 项' : '出件前检查'}</span></div>
-        <div className="d" id="warnD">{warnD}</div>
-        {/* 3 项里几项是「不改不能投」、几项是「建议改」,紧急度差很远——只报总数等于让人自己去点开数 */}
-        {openGaps.length > 0 && (
-          <div className="gapmix">
+      </FoldCard>
+      {/* 标题行常驻(结论 + 红黄计数),正文只在展开时给「第一条怎么补」;整卡可点进检查面板 */}
+      <FoldCard {...fc} k="check" className="warncard" hoverable onClick={() => ui.openCheck()}
+        title={<span className="t"><span className="dot" id="warnDot" style={{ background: hth ? verdict(id).color : 'var(--amber)' }} />
+          <span id="warnT">{hth ? '提交前需处理 ' + openGaps.length + ' 项' : '出件前检查'}</span></span>}
+        extra={openGaps.length > 0 ? (
+          <span className="gapmix">
             {reds > 0 && <Tag color="error" bordered={false}>必办 {reds}</Tag>}
             {yellows > 0 && <Tag color="warning" bordered={false}>建议 {yellows}</Tag>}
-          </div>
-        )}
-      </Card>
+          </span>) : null}
+        summary={hth ? (openGaps.length ? '必办 ' + reds + ' · 建议 ' + yellows + ' · 点开逐条处理' : '关键检查已通过,可以准备提交') : '出 Word 后在这里看结论与补料清单'}>
+        <div className="d" id="warnD">{warnD}</div>
+      </FoldCard>
     </div>
   );
 }

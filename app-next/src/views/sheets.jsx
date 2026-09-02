@@ -8,6 +8,7 @@ import { IS_WEB } from '../core/env.js';
 import { net } from '../core/env.js';
 import { mdHtml } from '../lib.js';
 import { _chapterNodes, _fmtWords } from './Outline.jsx';
+import { checkGroups } from './check-groups.js';
 
 const DOT = { red: 'var(--red)', yellow: 'var(--amber)', green: 'var(--green)' };
 
@@ -18,6 +19,8 @@ export function CheckSheet(){
   useEffect(() => { if(open) setFixMsg(''); }, [open]);
   const h = S.active ? S.health[S.active] : null;
   const gaps = h ? (h.gaps || []) : [];
+  const [showPassed, setShowPassed] = useState(false);
+  const groups = checkGroups(gaps);
   const canRepair = gaps.some(g => (g.actions || []).some(a => a.act === 'repair'));
   async function repairJob(){
     if(!S.active) return;
@@ -34,19 +37,35 @@ export function CheckSheet(){
       {h && <div id="ckLv" className={'cklv ' + (h.level || '')}>{h.level === 'red' ? '不可交付' : '仅可作初稿'}</div>}
       {/* 每条只在后端给了可执行动作时才画按钮(经典同注释:假按钮比没有更糟) */}
       <div className="ckList" id="check"><div id="ckList" style={{display:'contents'}}>
-        <List split={false} dataSource={gaps} locale={{ emptyText: h ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有待处理项" /> : <span /> }}
-          renderItem={g => (
-            <List.Item className="lrow"
-              actions={(g.actions || []).map((a, ai) => (
-                <Button key={ai} size="small" type="link" className="gap-act" data-eact={a.act} data-eparam={a.param || ''}
-                  onClick={() => { ui.closeAll(); errAction(a.act, a.file || '', a.param || ''); }}>{_friendlyActionLabel(a.label)}</Button>
-              ))}>
-              <List.Item.Meta
-                avatar={<span className="dot" style={{ background: DOT[g.level] || 'var(--amber)' }} />}
-                title={<span className="n">{_friendlyText(g.title)}</span>}
-                description={<span className="s">{_friendlyText(g.detail)}</span>} />
-            </List.Item>
-          )} />
+        {!groups.length && (h ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有待处理项" /> : null)}
+        {/* 必办 / 建议 / 已通过 三组,每组一个主动作;每条只在后端给了可执行动作时才画按钮(假按钮比没有更糟) */}
+        {groups.map(grp => (
+          <div className={'ckgrp ' + grp.key + (grp.key === 'green' ? ' passed' : '')} key={grp.key} data-ckgrp={grp.key}>
+            <div className="ckgrp-head">
+              <Tag color={grp.color} bordered={false}>{grp.label} {grp.items.length}</Tag>
+              <span className="hint">{grp.hint}</span>
+              {grp.primary && <Button size="small" type={grp.key === 'red' ? 'primary' : 'default'} className="ckgrp-act"
+                data-eact={grp.primary.act}
+                onClick={() => { ui.closeAll(); errAction(grp.primary.act, grp.primary.file || '', grp.primary.param || ''); }}>{grp.primary.label}</Button>}
+              {grp.key === 'green' && <Button size="small" type="link" onClick={() => setShowPassed(v => !v)}>{showPassed ? '收起' : '展开'}</Button>}
+            </div>
+            {(grp.key !== 'green' || showPassed) && (
+              <List split={false} dataSource={grp.items}
+                renderItem={g => (
+                  <List.Item className="lrow"
+                    actions={(g.actions || []).map((a, ai) => (
+                      <Button key={ai} size="small" type="link" className="gap-act" data-eact={a.act} data-eparam={a.param || ''}
+                        onClick={() => { ui.closeAll(); errAction(a.act, a.file || '', a.param || ''); }}>{_friendlyActionLabel(a.label)}</Button>
+                    ))}>
+                    <List.Item.Meta
+                      avatar={<span className="dot" style={{ background: DOT[g.level] || 'var(--amber)' }} />}
+                      title={<span className="n">{_friendlyText(g.title)}</span>}
+                      description={<span className="s">{_friendlyText(g.detail)}</span>} />
+                  </List.Item>
+                )} />
+            )}
+          </div>
+        ))}
       </div></div>
       {canRepair && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 }}>
@@ -298,7 +317,8 @@ export function RewriteSheet(){
         )}
         <div>
           <div className="lbl2">补充要求(选填)</div>
-          <Input.TextArea id="rwNote" rows={4} autoFocus value={note} onChange={e => setNote(e.target.value)}
+          <Input.TextArea id="rwNote"
+            onKeyDown={e => { if((e.metaKey || e.ctrlKey) && e.key === 'Enter'){ e.preventDefault(); submit(); } }} rows={4} autoFocus value={note} onChange={e => setNote(e.target.value)}
             placeholder="例:把实施进度改成 90 天;第二节补一段应急预案;引用素材库里的 XX 案例" />
         </div>
       </div>
@@ -376,6 +396,7 @@ export function RedoSheet(){
       okText={effScope === 'chapter' ? '只改这一章' : '开始修改'} onOk={doRedo} cancelText="取消">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <Input.TextArea rows={5} autoFocus value={txt} onChange={e => setTxt(e.target.value)} id="rwInstruction"
+          onKeyDown={e => { if((e.metaKey || e.ctrlKey) && e.key === 'Enter'){ e.preventDefault(); doRedo(); } }}
           placeholder="写清楚要修改哪一部分、改成什么样。例:第三章售后响应时间改为 2 小时;整册把公司名统一为 XX 科技" />
         {S.online && chapters.length > 0 && (
           <div className="rw-scope" id="rwScope">
@@ -416,6 +437,16 @@ export function PreviewSheet(){
         try{ const list = await api('/v1/jobs/' + S.active + '/artifacts');
           const hit = list.find(a => a.name === sh.pv); if(hit) url = hit.url; }catch(e){}
       }
+      if(/\.docx$/i.test(String(sh.pv || ''))){
+        // Word 真预览:引擎按 docx 真实内容出 HTML(标题/对齐/表格/图片/分页),不再拿 md 冒充
+        if(!S.online || !S.active){ if(alive) setState({ text: '', status: '（演示模式：连接本地服务后可预览真实 Word）', md: false }); return; }
+        try{
+          const r = await api('/v1/jobs/' + S.active + '/artifacts/' + encodeURIComponent(sh.pv) + '/html');
+          if(!alive) return;
+          setState({ text: r.html || '', status: r.html ? '' : '(空文档)', md: false, docx: true, stats: r.stats || {} });
+        }catch(e){ if(alive) setState({ text: '', status: 'Word 预览失败:' + ((e && e.message) || '') + ';请点右上角“' + (IS_WEB ? '下载' : '打开') + '”查看文件', md: false }); }
+        return;
+      }
       if(!url){ if(alive) setState({ text: '', status: '（演示模式：连接本地服务后可预览真实产出）', md: false }); return; }
       try{
         const r = await fetch(net.API + url); const t = (await r.text()).slice(0, 60000);
@@ -428,7 +459,7 @@ export function PreviewSheet(){
   }, [open, open && sh.pv]);
   const word = (S.pvPref || 'word') === 'word';
   return (
-    <Modal open={open} onCancel={ui.closeAll} width={760} centered
+    <Modal open={open} onCancel={ui.closeAll} width={state.docx ? 900 : 760} centered
       title={open ? sh.pv : ''} footer={null}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         {state.md && (
@@ -439,8 +470,12 @@ export function PreviewSheet(){
         <span style={{ flex: 1 }} />
         <Button size="small" onClick={() => { import('./artifacts.js').then(m => m.openArtifact(sh.pv, sh.url || '')); }}>{IS_WEB ? '下载' : '打开'}</Button>
       </div>
-      <div className="pvBody">
-        {state.status ? state.status : state.md
+      <div className={'pvBody' + (state.docx ? ' docx' : '')} id="pvBody">
+        {state.status ? state.status : state.docx
+          ? <><div className="docxpage"><div className="wordview docx" dangerouslySetInnerHTML={{ __html: state.text }} /></div>
+              <div className="pv-stats">真实 Word 内容 · {(state.stats || {}).paragraphs || 0} 段 · {(state.stats || {}).tables || 0} 表 · {(state.stats || {}).images || 0} 图
+                {(state.stats || {}).images_skipped ? '(' + state.stats.images_skipped + ' 张大图略过)' : ''} · 页眉页脚与实际分页以 Word 为准</div></>
+          : state.md
           ? (word
             ? <><div className="wordview" dangerouslySetInnerHTML={{ __html: mdHtml(state.text) }} />
                 <div style={{ color: 'var(--faint)', font: '400 10.5px/1.6 inherit', padding: '8px 2px 2px' }}>版式为导出同款示意（宋体 · 居中标题 · 实线表格），最终以导出 Word 为准。</div></>

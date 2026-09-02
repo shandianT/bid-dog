@@ -42,7 +42,7 @@ export default function Head(){
     <Tag bordered={false} id="hBadge" className={'badge ' + cls} icon={<span className="bdot" />}>{children}</Tag>
   );
   if(missingWord) badge = <Badge cls="bad">没出 Word，未完成</Badge>;
-  else if(state === 'failed' && word === 'ready') badge = <Badge cls="warn">待处理</Badge>;
+  else if(state === 'failed' && word === 'ready') badge = <Badge cls="warn pending">待处理</Badge>;   // 独立色阶(紫),不和「需要你确认」撞色
   else {
     const cls = { preparing: 'none', generating: 'none', needs_input: 'warn', completed: 'ok', failed: 'bad' }[state] || 'none';
     badge = <Badge cls={cls}>{PUBLIC_TASK_LABELS[state] || '未完成'}</Badge>;

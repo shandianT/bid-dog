@@ -22,7 +22,7 @@ function ProviderRows(){
   const ps = PROV.list;
   const [testing, setTesting] = useState({});
   if(!ps.length) return (
-    <div className="lrow" style={{ borderTop: 'none' }}><span className="dot" style={{ background: '#e5e5ea' }} />
+    <div className="lrow" style={{ borderTop: 'none' }}><span className="dot" style={{ background: 'var(--line)' }} />
       <div className="c"><span className="n" style={{ color: 'var(--sub)' }}>还没有接入点</span>
         <span className="s">默认已填好 senseaudio 网关,填入 API Key、选好模型,点「添加并测试」</span></div></div>
   );

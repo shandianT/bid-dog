@@ -8629,6 +8629,115 @@ def download(jid: str, fn: str):
     if not path: return JSONResponse({'ok': False, 'error': '文件不存在'}, 404)
     return FileResponse(path, filename=os.path.basename(path))
 
+# ---------- Word 真预览:docx → HTML(只读 python-docx,零 token) ----------
+# 以前「预览」是把章节 md 套仿宋体 CSS 假装成 Word;出了 Word 之后用户看到的还是 md。
+# 现在按 docx 的真实内容出 HTML:标题层级、段落对齐、加粗/斜体/下划线、表格(合并格按
+# gridSpan/vMerge 处理)、内嵌图片(data URI,单张 ≤2MB、合计 ≤6MB)、分页符。
+# 页眉页脚与真实分页仍以 Word 为准——预览说清这一点,不冒充。
+DOCX_PREVIEW_IMAGE_BYTES = 2 * 1024 * 1024
+DOCX_PREVIEW_IMAGE_TOTAL = 6 * 1024 * 1024
+DOCX_PREVIEW_MAX_BLOCKS = 6000
+
+
+def _docx_preview_html(path):
+    import base64
+    import html as _html
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.table import Table, _Cell
+    from docx.text.paragraph import Paragraph
+    doc = Document(path)
+    stats = {'paragraphs': 0, 'tables': 0, 'images': 0, 'images_skipped': 0, 'truncated': False}
+    budget = {'images': DOCX_PREVIEW_IMAGE_TOTAL, 'blocks': DOCX_PREVIEW_MAX_BLOCKS}
+    align_names = {WD_ALIGN_PARAGRAPH.CENTER: 'center', WD_ALIGN_PARAGRAPH.RIGHT: 'right',
+                   WD_ALIGN_PARAGRAPH.JUSTIFY: 'justify'}
+    esc = lambda value: _html.escape(str(value or ''), quote=False)
+
+    def run_html(run):
+        out = []
+        if run._element.xpath('.//w:br[@w:type="page"]'):
+            out.append('<hr class="pb">')
+        for blip in run._element.xpath('.//a:blip'):
+            rid = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+            part = run.part.related_parts.get(rid) if rid else None
+            blob = getattr(part, 'blob', b'') if part is not None else b''
+            if not blob: continue
+            if len(blob) > DOCX_PREVIEW_IMAGE_BYTES or len(blob) > budget['images']:
+                stats['images_skipped'] += 1
+                out.append('<span class="img-skip">〔图片较大,预览略过;以 Word 为准〕</span>')
+                continue
+            budget['images'] -= len(blob); stats['images'] += 1
+            mime = str(getattr(part, 'content_type', '') or 'image/png')
+            out.append('<img src="data:%s;base64,%s" alt="">' % (mime, base64.b64encode(blob).decode('ascii')))
+        text = esc(run.text)
+        if text:
+            if run.bold: text = '<b>%s</b>' % text
+            if run.italic: text = '<i>%s</i>' % text
+            if run.underline: text = '<u>%s</u>' % text
+            out.append(text)
+        return ''.join(out)
+
+    def para_html(para, in_cell=False):
+        stats['paragraphs'] += 1
+        try: style = str(para.style.name or '') if para.style is not None else ''
+        except Exception: style = ''
+        m = re.match(r'(?:heading|标题)\s*(\d)', style, re.I)
+        level = int(m.group(1)) if m else (1 if style.lower() == 'title' else 0)
+        inner = ''.join(run_html(r) for r in para.runs)
+        if not re.sub(r'<[^>]+>', '', inner).strip() and para.text.strip():
+            inner = esc(para.text)          # 超链接/域代码不在 runs 里:退回纯文本
+        alignment = para.alignment
+        if alignment is None:
+            try: alignment = para.style.paragraph_format.alignment if para.style is not None else None
+            except Exception: alignment = None
+        align = align_names.get(alignment, '')
+        cls = ' class="a-%s"' % align if align else ''
+        if level:
+            level = min(level, 6)
+            return '<h%d%s>%s</h%d>' % (level, cls, inner, level)
+        if not inner.strip(): return '' if in_cell else '<p class="empty"></p>'
+        return '<p%s>%s</p>' % (cls, inner)
+
+    def table_html(table):
+        stats['tables'] += 1
+        rows = []
+        for row in table.rows:
+            cells = []
+            for tc in row._tr.tc_lst:
+                if getattr(tc, 'vMerge', None) == 'continue': continue     # 纵向合并的续格:内容在上面那格
+                cell = _Cell(tc, table)
+                span = int(getattr(tc, 'grid_span', 1) or 1)
+                inner = ''.join(block_html(b, in_cell=True) for b in cell.iter_inner_content())
+                cells.append('<td%s>%s</td>' % ((' colspan="%d"' % span) if span > 1 else '', inner or '&nbsp;'))
+            rows.append('<tr>%s</tr>' % ''.join(cells))
+        return '<table>%s</table>' % ''.join(rows)
+
+    def block_html(block, in_cell=False):
+        if budget['blocks'] <= 0:
+            stats['truncated'] = True; return ''
+        budget['blocks'] -= 1
+        if isinstance(block, Paragraph): return para_html(block, in_cell)
+        if isinstance(block, Table): return table_html(block)
+        return ''
+
+    pieces = [block_html(block) for block in doc.iter_inner_content()]
+    if stats['truncated']:
+        pieces.append('<p class="a-center img-skip">〔预览到此为止:文档很长,完整内容请打开 Word〕</p>')
+    return ''.join(pieces), stats
+
+
+@app.get('/v1/jobs/{jid}/artifacts/{fn}/html')
+def artifact_html(jid: str, fn: str):
+    path = _artifact_path(jid, fn)
+    if not path: return JSONResponse({'ok': False, 'error': '文件不存在'}, 404)
+    if not path.lower().endswith('.docx'):
+        return JSONResponse({'ok': False, 'error': '只有 Word(.docx)能按真实版式预览'}, 400)
+    try:
+        body, stats = _docx_preview_html(path)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': 'Word 解析失败:%s' % exc}, 422)
+    return {'ok': True, 'name': os.path.basename(path), 'html': body, 'stats': stats}
+
 def _artifact_path(jid, name):
     """只允许访问任务根目录中已登记的交付物，阻止 ../ 与任意本机路径。"""
     raw = str(name or '')

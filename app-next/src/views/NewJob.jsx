@@ -1,9 +1,9 @@
 // 新建任务向导:第 1 步放文件(多选/整文件夹、主件自动识别),第 2 步要求与项目归属。
 // 提交路径在 newjob-core.js(经典 njStart 逐字);模板推荐/派生在视图迁移 C 补全。
 import React, { useEffect, useRef, useState } from 'react';
-import { Modal, Input, Checkbox, Select, Button, Steps } from 'antd';
+import { Modal, Input, Checkbox, Select, Button, Steps, Switch } from 'antd';
 import { S, ui, bump } from '../core/index.js';
-import { NJ, DOCLIKE, njAddFiles, njPickTender, njStart, njReset,
+import { NJ, DOCLIKE, NJ_REQ_SWITCHES, setReqOpt, editReq, resetReq, njAddFiles, njPickTender, njStart, njReset,
          recommendTemplateForTender, deriveTemplateFromFile, saveDerivedTemplate,
          discardDerivedTemplate, saveCurrentTemplate, deleteSelectedTemplate } from './newjob-core.js';
 import { fmtSize } from '../lib.js';
@@ -156,9 +156,24 @@ export default function NewJob(){
         {NJ.step === 2 && (
           <>
             <div>
-              <div className="lbl2">对这份标书的要求(可改,已预填专家提示词)</div>
-              <Input.TextArea rows={9} value={NJ.req} onChange={e => { NJ.req = e.target.value; bump(); }}
-                style={{ font: "400 12px/1.7 'SF Mono',Menlo,Consolas,monospace" }} />
+              <div className="lbl2">对这份标书的要求</div>
+              {/* 20 行专家提示词折成三个开关(默认全开);全文在「高级」里,改了就以改的为准 */}
+              <div className="req-switches" id="njReqSwitches">
+                {NJ_REQ_SWITCHES.map(sw => (
+                  <label className="req-sw" key={sw.key} data-req={sw.key}>
+                    <Switch size="small" checked={NJ.reqOpts[sw.key] !== false} disabled={NJ.reqCustom}
+                      onChange={v => setReqOpt(sw.key, v)} />
+                    <span><b>{sw.label}</b><i>{sw.hint}</i></span>
+                  </label>
+                ))}
+                {NJ.reqCustom && <div className="req-custom">要求已按你在高级框里改的为准,开关暂不生效。
+                  <a onClick={resetReq} style={{ marginLeft: 6 }}>恢复为开关生成的版本</a></div>}
+              </div>
+              <details className="setdet" style={{ marginTop: 8 }} open={NJ.reqCustom || undefined}>
+                <summary>高级 · 查看 / 修改完整要求{NJ.reqCustom ? '(已自定义)' : ''}</summary>
+                <Input.TextArea id="njReq" rows={9} value={NJ.req} onChange={e => editReq(e.target.value)}
+                  style={{ font: "400 12px/1.7 'SF Mono',Menlo,Consolas,monospace", marginTop: 6 }} />
+              </details>
             </div>
             <div style={{ display: 'flex', gap: 10 }}>
               <div style={{ flex: 1 }}>

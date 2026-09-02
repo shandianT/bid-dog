@@ -19,7 +19,8 @@ import AssetsSheet from './views/AssetsSheet.jsx';
 import UpdateSheet, { UpdateRestart } from './views/UpdateSheet.jsx';
 import OnboardingSheet from './views/OnboardingSheet.jsx';
 import { renderUpdateSteps, openUpdatePanel, bindUpdateProgress, showUpdateRestart } from './views/update-core.js';
-import { njAddFiles, walkEntries, addRef } from './views/newjob-core.js';
+import { njAddFiles, walkEntries, addRef, njOpen } from './views/newjob-core.js';
+import Palette, { openPalette } from './views/Palette.jsx';
 
 function Hero({ hidden }){
   // 经典 renderMain 用 display 切换,#hero/#heroSub 常驻 DOM(spec 的反向断言依赖这点)
@@ -86,11 +87,19 @@ export default function App(){
         walkEntries(Array.from(items), fs => { if(fs.length) njAddFiles(fs); });
       } else if(plainFiles.length){ njAddFiles(plainFiles); }
     };
+    // 快捷键:⌘K 命令面板 / ⌘N 新建任务(⌘⏎ 由输入框与弹层各自处理)
+    const keys = e => {
+      const mod = e.metaKey || e.ctrlKey; if(!mod || e.altKey) return;
+      const k = String(e.key || '').toLowerCase();
+      if(k === 'k'){ e.preventDefault(); openPalette(); }
+      else if(k === 'n' && !e.shiftKey){ e.preventDefault(); openPalette(false); njOpen(); }
+    };
+    window.addEventListener('keydown', keys);
     document.body.addEventListener('dragover', over);
     document.body.addEventListener('dragenter', enter);
     document.body.addEventListener('dragleave', leave);
     document.body.addEventListener('drop', drop);
-    return () => { clearInterval(clock);
+    return () => { clearInterval(clock); window.removeEventListener('keydown', keys);
       document.body.removeEventListener('dragover', over); document.body.removeEventListener('dragenter', enter);
       document.body.removeEventListener('dragleave', leave); document.body.removeEventListener('drop', drop); };
   }, []);
@@ -118,12 +127,14 @@ export default function App(){
       </div>
       <div className="statusbar">
         <span id="sbL">{isWin ? '任务栏显示进度 · 完成后系统通知' : 'Dock 显示进度 · 完成后系统通知 · 托盘常驻'}</span>
+        <span className="sbk"> · <kbd>⌘K</kbd>命令面板 <kbd>⌘N</kbd>新建</span>
         <span> · © 2026 张家涛</span><span style={{ flex: 1 }} /><span id="sbR">{S.sbR}</span>
       </div>
       <NewJob />
       <ConfirmModal /><ProjectSheet /><LogSheet /><DiagnosticSheet /><MigratingSheet />
       <CheckSheet /><CoverageSheet /><RewriteSheet /><RedoSheet /><PreviewSheet />
       <SettingsSheet /><AssetsSheet /><UpdateSheet /><OnboardingSheet /><UpdateRestart />
+      <Palette />
       <Toast />
       <DropOverlay visible={dropVisible} hot={hot} setHot={setHot} />
     </>
