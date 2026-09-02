@@ -3,7 +3,7 @@
 import React from 'react';
 import { Card, Button, Statistic } from 'antd';
 import { FileWordOutlined, CheckCircleFilled, WarningFilled, CloseCircleFilled,
-         QuestionCircleFilled } from '@ant-design/icons';
+         QuestionCircleFilled, EyeOutlined } from '@ant-design/icons';
 import { S, ui, bump, deliveryViewModel, publicTaskState, taskPresentation, _shortDuration } from '../core/index.js';
 import { openArtifact, downloadResultWord } from './artifacts.js';
 
@@ -60,6 +60,8 @@ export default function ResultView({ job }){
             </div>
             <div className="result-actions">
               <Button type="primary" disabled={!word} onClick={() => word && openArtifact(word.name || '投标文件.docx', word.url || '')}>打开</Button>
+              <Button disabled={!word} icon={<EyeOutlined />} className="pv-word"
+                onClick={() => word && ui.openPreview(word.name || '投标文件.docx', word.url || '')}>预览</Button>
               <Button disabled={!word} onClick={downloadResultWord}>下载</Button>
               <Button disabled={!word} onClick={() => ui.openRevision()}>继续修改</Button>
             </div>

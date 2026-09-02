@@ -366,7 +366,8 @@ def test_model_node_uses_non_stream_completion_and_injects_skill_contract(
     assert captured["payload"]["model"] == engine.S2_DEFAULT_MODEL
     assert captured["payload"]["max_tokens"] == 4800
     assert "不得编造资质" in captured["payload"]["messages"][0]["content"]
-    assert "至少 2500 个中文字符" in captured["payload"]["messages"][1]["content"]
+    assert "不少于 3500 个中文字符" in captured["payload"]["messages"][1]["content"]
+    assert "【小标题】" in captured["payload"]["messages"][0]["content"]
     assert "禁止反复使用“信息项｜内容”" in captured["payload"]["messages"][1]["content"]
     assert "write/edit" not in captured["payload"]["messages"][1]["content"]
     assert (job / "章节_01.md").is_file()
@@ -432,9 +433,11 @@ def test_truncated_chapter_continues_once_without_discarding_first_response(
     assert "不要重复已经完成的内容" in calls[1]["messages"][-1]["content"]
 
 
-def test_response_plan_is_built_locally_without_calling_the_model(
+def test_response_plan_local_index_is_written_first_and_survives_model_failure(
     engine, tmp_path, monkeypatch
 ):
+    """本地索引是保底:模型核对连不上也要把四份规划文件写好、节点照常完成。"""
+    monkeypatch.setattr(engine.time, "sleep", lambda *_args, **_kwargs: None)
     job = Path(engine.jpath("local-response-plan"))
     job.mkdir(parents=True)
     skill_dir = tmp_path / "local-plan-skill"
@@ -468,17 +471,14 @@ def test_response_plan_is_built_locally_without_calling_the_model(
         if item["id"] == "response_plan"
     )
     node.update({"attempt": 1, "attempt_serial": 1})
+    import urllib.error as _urlerr
     monkeypatch.setattr(
         engine, "_openai_req",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("response planning must be deterministic and local")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(_urlerr.URLError("gateway down")),
     )
     monkeypatch.setattr(
         engine, "_openai_stream_req",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("response planning must be deterministic and local")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(_urlerr.URLError("gateway down")),
     )
 
     engine._pipeline_model_runner(
@@ -486,6 +486,7 @@ def test_response_plan_is_built_locally_without_calling_the_model(
     )
 
     plan = engine.read_json(str(job / "response_plan.json"), {})
+    assert plan["source"] == "local"
     assert [item["title"] for item in plan["chapters"]] == ["项目理解", "实施验收"]
     assert "取消投标资格" in (job / "废标风险清单.md").read_text(encoding="utf-8")
     assert (job / "评分点响应矩阵.md").is_file()

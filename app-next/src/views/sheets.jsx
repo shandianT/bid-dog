@@ -1,13 +1,14 @@
 // 视图 B 的弹层组:出件前检查 / 评分点覆盖 / 单章重写(预演 diff)/ 修改结果 / 产物预览。
 // 数据路径逐字对应经典 renderCheck/repairJob/openCoverage/submitRewrite/doRedo/openPreview。
-import React, { useEffect, useState } from 'react';
-import { Modal, Input, Checkbox, Button, List, Progress, Tag, Alert, Empty, Segmented } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { Modal, Input, Checkbox, Button, List, Progress, Tag, Alert, Empty, Segmented, Select } from 'antd';
 import { S, ui, bump, api, select, errAction, presentProblem, refreshArts, loadPipeline, loadCoverage, jobState,
          covReasonHint, _friendlyText, _friendlyActionLabel } from '../core/index.js';
 import { IS_WEB } from '../core/env.js';
 import { net } from '../core/env.js';
 import { mdHtml } from '../lib.js';
 import { _chapterNodes, _fmtWords } from './Outline.jsx';
+import { checkGroups } from './check-groups.js';
 
 const DOT = { red: 'var(--red)', yellow: 'var(--amber)', green: 'var(--green)' };
 
@@ -18,6 +19,8 @@ export function CheckSheet(){
   useEffect(() => { if(open) setFixMsg(''); }, [open]);
   const h = S.active ? S.health[S.active] : null;
   const gaps = h ? (h.gaps || []) : [];
+  const [showPassed, setShowPassed] = useState(false);
+  const groups = checkGroups(gaps);
   const canRepair = gaps.some(g => (g.actions || []).some(a => a.act === 'repair'));
   async function repairJob(){
     if(!S.active) return;
@@ -34,19 +37,35 @@ export function CheckSheet(){
       {h && <div id="ckLv" className={'cklv ' + (h.level || '')}>{h.level === 'red' ? '不可交付' : '仅可作初稿'}</div>}
       {/* 每条只在后端给了可执行动作时才画按钮(经典同注释:假按钮比没有更糟) */}
       <div className="ckList" id="check"><div id="ckList" style={{display:'contents'}}>
-        <List split={false} dataSource={gaps} locale={{ emptyText: h ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有待处理项" /> : <span /> }}
-          renderItem={g => (
-            <List.Item className="lrow"
-              actions={(g.actions || []).map((a, ai) => (
-                <Button key={ai} size="small" type="link" className="gap-act" data-eact={a.act} data-eparam={a.param || ''}
-                  onClick={() => { ui.closeAll(); errAction(a.act, a.file || '', a.param || ''); }}>{_friendlyActionLabel(a.label)}</Button>
-              ))}>
-              <List.Item.Meta
-                avatar={<span className="dot" style={{ background: DOT[g.level] || 'var(--amber)' }} />}
-                title={<span className="n">{_friendlyText(g.title)}</span>}
-                description={<span className="s">{_friendlyText(g.detail)}</span>} />
-            </List.Item>
-          )} />
+        {!groups.length && (h ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有待处理项" /> : null)}
+        {/* 必办 / 建议 / 已通过 三组,每组一个主动作;每条只在后端给了可执行动作时才画按钮(假按钮比没有更糟) */}
+        {groups.map(grp => (
+          <div className={'ckgrp ' + grp.key + (grp.key === 'green' ? ' passed' : '')} key={grp.key} data-ckgrp={grp.key}>
+            <div className="ckgrp-head">
+              <Tag color={grp.color} bordered={false}>{grp.label} {grp.items.length}</Tag>
+              <span className="hint">{grp.hint}</span>
+              {grp.primary && <Button size="small" type={grp.key === 'red' ? 'primary' : 'default'} className="ckgrp-act"
+                data-eact={grp.primary.act}
+                onClick={() => { ui.closeAll(); errAction(grp.primary.act, grp.primary.file || '', grp.primary.param || ''); }}>{grp.primary.label}</Button>}
+              {grp.key === 'green' && <Button size="small" type="link" onClick={() => setShowPassed(v => !v)}>{showPassed ? '收起' : '展开'}</Button>}
+            </div>
+            {(grp.key !== 'green' || showPassed) && (
+              <List split={false} dataSource={grp.items}
+                renderItem={g => (
+                  <List.Item className="lrow"
+                    actions={(g.actions || []).map((a, ai) => (
+                      <Button key={ai} size="small" type="link" className="gap-act" data-eact={a.act} data-eparam={a.param || ''}
+                        onClick={() => { ui.closeAll(); errAction(a.act, a.file || '', a.param || ''); }}>{_friendlyActionLabel(a.label)}</Button>
+                    ))}>
+                    <List.Item.Meta
+                      avatar={<span className="dot" style={{ background: DOT[g.level] || 'var(--amber)' }} />}
+                      title={<span className="n">{_friendlyText(g.title)}</span>}
+                      description={<span className="s">{_friendlyText(g.detail)}</span>} />
+                  </List.Item>
+                )} />
+            )}
+          </div>
+        ))}
       </div></div>
       {canRepair && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 }}>
@@ -95,6 +114,9 @@ export function CoverageSheet(){
   useEffect(() => { if(open){ setBusy(''); setSent(''); setDrop(new Set()); } }, [open]);
   const cov = S.active ? S.coverage[S.active] : null;
   if(open && (!cov || !cov.available)){ /* openCoverage 入口已拦,防御兜底 */ }
+  // 本地关键词索引只是候选:没有一条落到章节,派不出补写,也不该显示成「已覆盖 0/N」
+  const covLocal = !!(cov && cov.available && cov.plan_source === 'local');
+  const planNotes = (cov && cov.plan_notes) || [];
   const un = cov ? (cov.items || []).filter(x => !x.covered) : [];
   const ok = cov ? (cov.items || []).filter(x => x.covered) : [];
 
@@ -146,7 +168,7 @@ export function CoverageSheet(){
           ? <Button key="b" size="small" data-cov={i} loading={busy === ('i:' + i)}
               disabled={!!lockedReason || busy !== ''} title={lockedReason}
               onClick={() => dispatch('i:' + i, [{ x, i }], x.chapter || '本章')}>补写应答</Button>
-          : <span key="b" style={{ color: 'var(--faint)', fontSize: 11 }}>{covReasonHint(x)}</span>,
+          : <span key="b" style={{ color: 'var(--faint)', fontSize: 11 }}>{covLocal ? '候选项,待模型核对落位' : covReasonHint(x)}</span>,
       ]}>
       <List.Item.Meta
         avatar={groupable ? <Checkbox checked={!drop.has(i)} onChange={() => toggle(i)} /> : null}
@@ -160,9 +182,19 @@ export function CoverageSheet(){
       <div id="covSheet">
       {cov && cov.available ? (
         <>
-          <div className="covHead" id="covHead">评分点是评标专家打分的依据。已覆盖 <b>{cov.covered}/{cov.total}</b> 项——「已覆盖」= 规划无缺口 + 落到具体章节 + 该章节已写完。</div>
-          <Progress className="covBar" percent={cov.total ? Math.round(cov.covered / cov.total * 100) : 0}
-            showInfo={false} strokeColor="var(--blue)" trailColor="var(--line-soft)" id="covBarFill" />
+          {covLocal && (
+            <Alert type="warning" showIcon className="covlocal" style={{ marginBottom: 10 }}
+              message="这份评分点清单来自本地关键词索引,尚未经模型核对"
+              description="候选项还没落到章节,暂不能派发补写;模型核对成功后会自动更新。核对为什么没成功,看「运行日志」里「响应规划」那一行。" />
+          )}
+          {!covLocal && planNotes.length > 0 && (
+            <Alert type="info" showIcon className="covnote" style={{ marginBottom: 10 }} message={planNotes.join(';')} />
+          )}
+          <div className="covHead" id="covHead">{covLocal
+            ? <>识别到 <b>{cov.total}</b> 处评分相关条款(候选)。这是按关键词从招标文件里挑出来的原文行,先对一眼评分办法有没有被读到。</>
+            : <>评分点是评标专家打分的依据。已覆盖 <b>{cov.covered}/{cov.total}</b> 项——「已覆盖」= 规划无缺口 + 落到具体章节 + 该章节已写完。</>}</div>
+          {!covLocal && <Progress className="covBar" percent={cov.total ? Math.round(cov.covered / cov.total * 100) : 0}
+            showInfo={false} strokeColor="var(--blue)" trailColor="var(--line-soft)" id="covBarFill" />}
           <div className="covList" id="covList">
             {un.length ? (
               <>
@@ -192,7 +224,7 @@ export function CoverageSheet(){
                 })}
                 {orphans.length > 0 && (
                   <div className="covgroup" data-covgroup="">
-                    {groups.length > 0 && <div className="covgroup-head"><span className="cg-name">还没落到章节</span>
+                    {groups.length > 0 && !covLocal && <div className="covgroup-head"><span className="cg-name">还没落到章节</span>
                       <span className="cg-n num">{orphans.length} 条</span></div>}
                     <List split={false} dataSource={orphans} rowKey={r => r.i} renderItem={r => renderRow(r, false)} />
                   </div>
@@ -285,7 +317,8 @@ export function RewriteSheet(){
         )}
         <div>
           <div className="lbl2">补充要求(选填)</div>
-          <Input.TextArea id="rwNote" rows={4} autoFocus value={note} onChange={e => setNote(e.target.value)}
+          <Input.TextArea id="rwNote"
+            onKeyDown={e => { if((e.metaKey || e.ctrlKey) && e.key === 'Enter'){ e.preventDefault(); submit(); } }} rows={4} autoFocus value={note} onChange={e => setNote(e.target.value)}
             placeholder="例:把实施进度改成 90 天;第二节补一段应急预案;引用素材库里的 XX 案例" />
         </div>
       </div>
@@ -293,14 +326,57 @@ export function RewriteSheet(){
   );
 }
 
-/* ---------- 修改结果(整册修改,经典 openRevision/doRedo) ---------- */
+/* ---------- 修改结果:先判范围,指到一章就只重写那一章 ----------
+   以前「继续修改」一律建子任务从头跑全部节点:写「第三章售后响应时间改成 2 小时」
+   要等 5–12 章全部重写完。现在停顿 400ms 就问引擎 /revisions/plan 这条要求会改到哪,
+   把范围先亮出来(只改一章 / 整册新版本),用户可改;只改一章走既有的单章重写通道。 */
 export function RedoSheet(){
   const open = !!(S.sheet && S.sheet.name === 'redo');
   const [txt, setTxt] = useState('');
-  useEffect(() => { if(open) setTxt(''); }, [open]);
+  const [route, setRoute] = useState(null);     // 引擎的范围判定
+  const [scope, setScope] = useState('');       // 用户手动改过的范围('' = 跟引擎判定)
+  const [node, setNode] = useState('');         // 只改一章时选的章
+  const seq = useRef(0);
+  useEffect(() => { if(open){ setTxt(''); setRoute(null); setScope(''); setNode(''); seq.current++; } }, [open]);
+  useEffect(() => {
+    if(!open || !S.online || !S.active) return undefined;
+    const t = txt.trim();
+    if(!t){ setRoute(null); return undefined; }
+    const mine = ++seq.current;
+    const timer = setTimeout(async () => {
+      try{
+        const r = await api('/v1/jobs/' + encodeURIComponent(S.active) + '/revisions/plan',
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction: t }) });
+        if(mine !== seq.current) return;
+        setRoute(r && r.ok !== false ? r : null);
+        // 引擎指到了某一章:替用户选上;用户已经自己选过的不动
+        if(r && r.scope === 'chapter' && r.node_id) setNode(prev => prev || r.node_id);
+      }catch(_){ if(mine === seq.current) setRoute(null); }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [txt, open]);
+  const chapters = (route && route.chapters) || [];
+  const effScope = scope || (route && route.scope) || 'whole';
+  const effNode = effScope === 'chapter' ? (node || (route && route.node_id) || '') : '';
+  const effTitle = (chapters.find(c => c.node_id === effNode) || {}).title || '';
   async function doRedo(){
     const t = txt.trim();
     if(!t){ ui.toast('先写清楚要修改哪一部分'); return; }
+    if(effScope === 'chapter'){
+      if(!effNode){ ui.toast('先选要改的那一章'); return; }
+      ui.closeAll();
+      try{
+        const r = await api('/v1/jobs/' + encodeURIComponent(S.active) + '/chapters/' + encodeURIComponent(effNode) + '/rewrite',
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: t }) });
+        if(r && r.ok === false) throw new Error(r.error || '重写没能启动');
+        ui.toast('已开始重写「' + (effTitle || '所选章节') + '」,其余章节不动');
+        setTimeout(() => { loadPipeline(S.active); loadCoverage(S.active); }, 800);
+      }catch(err){
+        ui.toast(err && err.message || '重写没能启动,稍后重试');
+        presentProblem({ level: 'error', title: '单章重写没有启动', text: _friendlyText(err && err.message || '请检查任务状态后重试。'), detail: err && err.message || '', actions: [{ act: 'retry_revision', label: '重新填写' }] });
+      }
+      return;
+    }
     ui.closeAll();
     try{
       let r;
@@ -316,14 +392,32 @@ export function RedoSheet(){
     }
   }
   return (
-    <Modal open={open} onCancel={ui.closeAll} width={540} centered title="修改结果:出一个新版本"
-      okText="开始修改" onOk={doRedo} cancelText="取消">
+    <Modal open={open} onCancel={ui.closeAll} width={560} centered title="修改结果"
+      okText={effScope === 'chapter' ? '只改这一章' : '开始修改'} onOk={doRedo} cancelText="取消">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div className="rw-diff">
-          <div className="drow"><span className="dk">会发生什么</span><span>按你的要求出一个新版本任务,原任务与文件全部保留</span></div>
-        </div>
-        <Input.TextArea rows={5} autoFocus value={txt} onChange={e => setTxt(e.target.value)}
+        <Input.TextArea rows={5} autoFocus value={txt} onChange={e => setTxt(e.target.value)} id="rwInstruction"
+          onKeyDown={e => { if((e.metaKey || e.ctrlKey) && e.key === 'Enter'){ e.preventDefault(); doRedo(); } }}
           placeholder="写清楚要修改哪一部分、改成什么样。例:第三章售后响应时间改为 2 小时;整册把公司名统一为 XX 科技" />
+        {S.online && chapters.length > 0 && (
+          <div className="rw-scope" id="rwScope">
+            <Segmented size="small" value={effScope} onChange={v => setScope(v)}
+              options={[{ label: '只改一章', value: 'chapter' }, { label: '整册出新版本', value: 'whole' }]} />
+            {effScope === 'chapter' && (
+              <Select id="rwChapter" size="small" style={{ minWidth: 220 }} placeholder="选要改的那一章"
+                value={effNode || undefined} onChange={v => setNode(v)}
+                options={chapters.map(c => ({ value: c.node_id, label: c.title }))} />
+            )}
+            {route && route.reason ? <span className="outline-note" id="rwRouteReason">{route.reason}</span> : null}
+          </div>
+        )}
+        <div className="rw-diff" id="rwPlan">
+          {effScope === 'chapter'
+            ? <>
+                <div className="drow"><span className="dk">会发生什么</span><span>只重写「{effTitle || '所选章节'}」,其余章节原样保留;旧稿存入「历史版本」文件夹</span></div>
+                <div className="drow keep"><span className="dk">完成后</span><span>自动重新汇总成册并跑质检,Word 一起更新</span></div>
+              </>
+            : <div className="drow"><span className="dk">会发生什么</span><span>按你的要求出一个新版本任务,原任务与文件全部保留;所有章节都会重写</span></div>}
+        </div>
       </div>
     </Modal>
   );
@@ -343,6 +437,16 @@ export function PreviewSheet(){
         try{ const list = await api('/v1/jobs/' + S.active + '/artifacts');
           const hit = list.find(a => a.name === sh.pv); if(hit) url = hit.url; }catch(e){}
       }
+      if(/\.docx$/i.test(String(sh.pv || ''))){
+        // Word 真预览:引擎按 docx 真实内容出 HTML(标题/对齐/表格/图片/分页),不再拿 md 冒充
+        if(!S.online || !S.active){ if(alive) setState({ text: '', status: '（演示模式：连接本地服务后可预览真实 Word）', md: false }); return; }
+        try{
+          const r = await api('/v1/jobs/' + S.active + '/artifacts/' + encodeURIComponent(sh.pv) + '/html');
+          if(!alive) return;
+          setState({ text: r.html || '', status: r.html ? '' : '(空文档)', md: false, docx: true, stats: r.stats || {} });
+        }catch(e){ if(alive) setState({ text: '', status: 'Word 预览失败:' + ((e && e.message) || '') + ';请点右上角“' + (IS_WEB ? '下载' : '打开') + '”查看文件', md: false }); }
+        return;
+      }
       if(!url){ if(alive) setState({ text: '', status: '（演示模式：连接本地服务后可预览真实产出）', md: false }); return; }
       try{
         const r = await fetch(net.API + url); const t = (await r.text()).slice(0, 60000);
@@ -355,7 +459,7 @@ export function PreviewSheet(){
   }, [open, open && sh.pv]);
   const word = (S.pvPref || 'word') === 'word';
   return (
-    <Modal open={open} onCancel={ui.closeAll} width={760} centered
+    <Modal open={open} onCancel={ui.closeAll} width={state.docx ? 900 : 760} centered
       title={open ? sh.pv : ''} footer={null}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         {state.md && (
@@ -366,8 +470,12 @@ export function PreviewSheet(){
         <span style={{ flex: 1 }} />
         <Button size="small" onClick={() => { import('./artifacts.js').then(m => m.openArtifact(sh.pv, sh.url || '')); }}>{IS_WEB ? '下载' : '打开'}</Button>
       </div>
-      <div className="pvBody">
-        {state.status ? state.status : state.md
+      <div className={'pvBody' + (state.docx ? ' docx' : '')} id="pvBody">
+        {state.status ? state.status : state.docx
+          ? <><div className="docxpage"><div className="wordview docx" dangerouslySetInnerHTML={{ __html: state.text }} /></div>
+              <div className="pv-stats">真实 Word 内容 · {(state.stats || {}).paragraphs || 0} 段 · {(state.stats || {}).tables || 0} 表 · {(state.stats || {}).images || 0} 图
+                {(state.stats || {}).images_skipped ? '(' + state.stats.images_skipped + ' 张大图略过)' : ''} · 页眉页脚与实际分页以 Word 为准</div></>
+          : state.md
           ? (word
             ? <><div className="wordview" dangerouslySetInnerHTML={{ __html: mdHtml(state.text) }} />
                 <div style={{ color: 'var(--faint)', font: '400 10.5px/1.6 inherit', padding: '8px 2px 2px' }}>版式为导出同款示意（宋体 · 居中标题 · 实线表格），最终以导出 Word 为准。</div></>

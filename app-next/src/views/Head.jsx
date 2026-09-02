@@ -3,7 +3,7 @@
 import React from 'react';
 import { Tag, Button, Progress, Tooltip } from 'antd';
 import { PauseOutlined, CaretRightOutlined, ReloadOutlined, FileTextOutlined,
-         SafetyCertificateOutlined, StopOutlined } from '@ant-design/icons';
+         SafetyCertificateOutlined, StopOutlined, ColumnWidthOutlined } from '@ant-design/icons';
 import { S, ui, jobState, publicTaskState, taskPresentation, taskCapabilities, wordPresence,
          completionGate, deliveryDeadEnd, verdict, timing, fmtDur, knownStep, PUBLIC_TASK_LABELS,
          resumeJob, togglePause, stopJob, deliveryViewModel } from '../core/index.js';
@@ -42,7 +42,7 @@ export default function Head(){
     <Tag bordered={false} id="hBadge" className={'badge ' + cls} icon={<span className="bdot" />}>{children}</Tag>
   );
   if(missingWord) badge = <Badge cls="bad">没出 Word，未完成</Badge>;
-  else if(state === 'failed' && word === 'ready') badge = <Badge cls="warn">待处理</Badge>;
+  else if(state === 'failed' && word === 'ready') badge = <Badge cls="warn pending">待处理</Badge>;   // 独立色阶(紫),不和「需要你确认」撞色
   else {
     const cls = { preparing: 'none', generating: 'none', needs_input: 'warn', completed: 'ok', failed: 'bad' }[state] || 'none';
     badge = <Badge cls={cls}>{PUBLIC_TASK_LABELS[state] || '未完成'}</Badge>;
@@ -65,7 +65,12 @@ export default function Head(){
 
   // 覆盖仪表(PR #10:title 汇总未覆盖原因)
   let covPill = null;
-  if(cov && cov.available){
+  if(cov && cov.available && cov.plan_source === 'local'){
+    // 本地关键词索引只是候选:一条都没落到章节,0/N 不是事实。说清「待核对」,点开能看候选清单。
+    covPill = <Button id="covPill" className="pill covpill"
+      title="评分点来自本地关键词索引(候选),尚未经模型核对;模型核对成功后这里才是真实覆盖率。点开可看候选清单"
+      onClick={() => ui.openCoverage()}>评分点 <span className="num">{cov.total}</span> 项 · 待核对</Button>;
+  } else if(cov && cov.available){
     const un = (cov.items || []).filter(x => !x.covered);
     const names = { unlocated: '还没落到具体章节', gap: '规划里还留着缺口', chapter_pending: '所在章节还没写完' };
     const tally = {};
@@ -107,6 +112,10 @@ export default function Head(){
         <Button type="primary" id="resultTabBtn" className="pill primary"
           onClick={() => { S.processView[S.active] = false; ui.render('main'); }}>交付结果</Button>}
       {covPill}
+      {/* 对照阅读:解析版出来就能左右对照;评分点有了就能点它两边定位 */}
+      {(S.arts[S.active] || []).some(a => a.name === '招标文件_解析版.md') &&
+        <Button id="compareBtn" className="pill" icon={<ColumnWidthOutlined />} title="左招标原文、右标书章节,点评分点两边同时定位"
+          onClick={() => ui.openSheet('compare')}>对照阅读</Button>}
       <Button id="hAct" icon={<SafetyCertificateOutlined />}
         type={(state === 'completed' || state === 'failed' || state === 'needs_input') ? 'primary' : 'default'}
         className={'pill' + ((state === 'completed' || state === 'failed' || state === 'needs_input') ? ' primary' : '')}

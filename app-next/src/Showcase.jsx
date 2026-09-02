@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
+// 原型专用样式:真实应用只用 live.css(两份重复定义曾并存,互相覆盖)
+import './app.css'
 import {
   Button, Card, Tag, Tabs, Steps, Alert, Drawer, List, Progress, Modal, Input,
   Tooltip, Segmented, Space, Divider, Timeline, App as AntApp,

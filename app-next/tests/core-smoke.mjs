@@ -231,5 +231,142 @@ await test('引擎发来不认识的动作:当面说不认识,不做死按钮', 
   assert.ok(/不认识「teleport_to_moon」/.test(S.toastMsg.text));
 });
 
+
+// —— P3:右栏折叠规则 / 出件前检查分组 / 命令面板条目 / 向导开关与经典预填文案逐字一致 ——
+const { railPhase, railDefaults, railIsOpen, railToggle } = await import('../src/views/rail-fold.js');
+const { checkGroups } = await import('../src/views/check-groups.js');
+const { paletteItems } = await import('../src/views/palette-items.js');
+const { composeReq, NJ_DEFAULT_REQ, NJ_REQ_SWITCHES } = await import('../src/views/newjob-core.js');
+
+await test('右栏折叠:出了件看交付与检查,在写看进度与产物,停了先看停在哪', () => {
+  assert.strictEqual(railPhase({ done100:true }), 'delivered');
+  assert.strictEqual(railPhase({ hasPrimary:true, halted:true }), 'delivered', '出了 Word 的停止单按出件处理');
+  assert.strictEqual(railPhase({ hasPrimary:true, running:true }), 'generating');
+  assert.strictEqual(railPhase({ missingWord:true, done100:true }), 'missing');
+  assert.strictEqual(railPhase({ waiting:true }), 'waiting');
+  assert.strictEqual(railPhase({ halted:true }), 'halted');
+  assert.strictEqual(railPhase({ staged:true }), 'preparing');
+  assert.strictEqual(railPhase({}), 'generating');
+  const d = railDefaults('delivered', { hasHealth:true });
+  assert.ok(d.deliver && d.check && !d.progress, '出了件:交付与检查展开,进度折叠');
+  const g = railDefaults('generating', {});
+  assert.ok(g.progress && g.files && !g.deliver && !g.check, '在写:进度与产物展开');
+  assert.ok(!railDefaults('halted', { hasHealth:false }).check && railDefaults('halted', { hasHealth:true }).check, '停了:有质检结论才展开检查');
+  assert.ok(railDefaults('preparing', {}).refs, '还没开始:参考资料展开');
+});
+
+await test('右栏手动开合只在同一阶段内记忆,阶段一变规则重新接管', () => {
+  const St = { railFold: {} };
+  const gen = railDefaults('generating', {});
+  assert.strictEqual(railIsOpen(St, 'j', 'check', 'generating', gen), false);
+  railToggle(St, 'j', 'check', 'generating', gen, null);
+  assert.strictEqual(railIsOpen(St, 'j', 'check', 'generating', gen), true, '手动展开生效');
+  const del = railDefaults('delivered', {});
+  assert.strictEqual(railIsOpen(St, 'j', 'progress', 'delivered', del), false, '换阶段后旧的手动记忆不再作数');
+});
+
+await test('出件前检查分组:必办在前给「定向重做」,建议其次,已通过最后;组内顺序不变', () => {
+  const gaps = [
+    { level:'red', title:'章节「技术方案」字数不足', actions:[{ act:'redo', param:'重写章节「技术方案」' }] },
+    { level:'red', title:'逐项详情见《成品质检报告.md》', actions:[{ act:'open_artifact', file:'成品质检报告.md' }] },
+    { level:'yellow', title:'也可以对整册不达标章节一起重做' },
+    { level:'green', title:'目录完整' },
+  ];
+  const g = checkGroups(gaps);
+  assert.deepStrictEqual(g.map(x => x.key), ['red', 'yellow', 'green']);
+  assert.deepStrictEqual(g[0].items.map(x => x.title), gaps.slice(0, 2).map(x => x.title));
+  assert.strictEqual(g[0].primary.act, 'open_redo');
+  assert.strictEqual(g[1].primary, null);
+  assert.deepStrictEqual(checkGroups([]), []);
+  assert.strictEqual(checkGroups([{ level:'yellow', actions:[{ act:'open_artifact', file:'模型复核报告.md' }] }])[0].primary.label, '打开模型复核报告');
+});
+
+await test('命令面板:任务可搜可切,没有当前任务就不给检查/覆盖,外观与字号可搜中文', () => {
+  const calls = [];
+  const ctx = { jobs:[{ job_id:'a', name:'清湖片区棚户区改造' }, { job_id:'b', name:'智慧管网' }], active:'',
+    stateLabel: () => '已完成', selectJob: id => calls.push('select:' + id), newJob(){}, openAssets(){}, openSettings(){}, checkUpdate(){},
+    prefs:{ theme:'system', fontScale:'md' }, setPrefs: p => calls.push('prefs:' + JSON.stringify(p)) };
+  const all = paletteItems('', ctx);
+  assert.ok(all.some(x => x.key === 'job:a') && !all.some(x => x.key === 'check'));
+  const hit = paletteItems('棚户', ctx); assert.strictEqual(hit.length, 1); hit[0].run(); assert.deepStrictEqual(calls, ['select:a']);
+  const dark = paletteItems('深色', ctx); assert.ok(dark.length === 1 && dark[0].key === 'theme:dark'); dark[0].run();
+  assert.strictEqual(calls[1], 'prefs:{"theme":"dark"}');
+  assert.strictEqual(paletteItems('字号', ctx).length, 3);
+  const withJob = paletteItems('', { ...ctx, active:'a', canRedo:true, hasResult:true, openCheck(){}, openCoverage(){}, openLog(){}, openFolder(){}, openRedo(){}, toggleResult(){} });
+  assert.ok(withJob.some(x => x.key === 'check') && withJob.some(x => x.key === 'redo') && withJob.some(x => x.key === 'result'));
+});
+
+await test('向导开关全开时的要求文案与经典预填逐字一致;关一条就少一条并重排序号', () => {
+  const legacy = [
+    "# 角色",
+    "你是有 30 年经验的投标方案专家,负责编写本项目的投标技术方案。",
+    "",
+    "# 最重要的三条",
+    "1. **每一章的小标题必须依据这一章自己的内容现拟**。严禁给所有章节套用同一组小标题——",
+    "   评审一眼就能看出是模板灌水,直接失分。两个章节的小标题重复,就是写砸了。",
+    "2. **逐条应答招标文件**。技术规格、商务条款、评分办法里的每一条,都要能在标书里找到",
+    "   对应的应答段落或表格行;偏离表的条数要和招标条款条数同量级,不能只挑几条象征性地填。",
+    "3. **不编造**。我方身份、产品能力、资质案例一律取自素材库,素材里没有的写〔需补充〕。",
+    "",
+    "# 写法",
+    "- 篇幅按招标文件的分量走,写透为准;凑字数的套话、换个说法重复一遍的段落,一律不要。",
+    "- 每一段都要有具体信息:具体的做法、参数、时间、责任人、验收口径。",
+    "  写不出具体内容的地方,说明素材不够,标〔需补充〕,不要用空话填满。",
+    "- 评分办法要求承诺函的(如违约承诺、服务期满后的服务承诺),直接写出完整承诺函正文。",
+    "- 资质 / 业绩 / 合同 / 证照:按招标规定的名称建一个章节整块留位,**不要拆成一个资质一个小标题**",
+    "  (公司手上都是现成扫描件,实际是整块粘贴,拆碎了没法贴);写清该放什么,留〔此处粘贴:…〕空白位,",
+    "  **不要自动插这类图**——插错一张就是造假风险。",
+    "- 配图只做一件事:证明我方对某条技术要求或评分点的响应。不为插图而插图。",
+    "- 商务和技术偏离表每份必写;另出一份《评标索引》放在整册最前面(评分项|分值|评估标准|对应章节)。",
+    "- 语言专业、严谨,不堆形容词。"
+  ].join('\n');
+  assert.strictEqual(composeReq({}), legacy);
+  assert.strictEqual(NJ_DEFAULT_REQ, legacy);
+  const noItem = composeReq({ itemized:false });
+  assert.ok(!/逐条应答招标文件/.test(noItem) && !/评标索引/.test(noItem) && /1\. \*\*每一章/.test(noItem) && /2\. \*\*不编造/.test(noItem));
+  assert.ok(/# 最重要的原则/.test(noItem) && !/# 最重要的三条/.test(noItem));
+  const none = composeReq({ freshHeadings:false, itemized:false, noFabrication:false });
+  assert.ok(!/最重要/.test(none) && /# 写法/.test(none) && /资质 \/ 业绩/.test(none));
+  assert.strictEqual(NJ_REQ_SWITCHES.length, 3);
+});
+
+
+// —— P4:对照阅读器的关键词与命中(纯函数) ——
+const { compareTerms, compareHits } = await import('../src/views/compare-core.js');
+await test('对照阅读:评分点切成关键词(去掉分值与标点),原文按命中长度排序定位', () => {
+  const terms = compareTerms('售后服务承诺(响应时间)10 分');
+  assert.ok(terms.includes('售后服务承诺') && terms.includes('响应时间') && !terms.some(t => /分$/.test(t)));
+  assert.strictEqual(terms[0].length >= terms[terms.length - 1].length, true, '长词在前');
+  const lines = ['# 评分办法', '售后服务:响应时间 2 小时,售后服务承诺书。', '培训方案略', '响应时间另见附件'];
+  const hits = compareHits(lines, terms);
+  assert.strictEqual(hits[0].i, 1, '命中最多的行排第一');
+  assert.ok(hits.some(h => h.i === 3) && !hits.some(h => h.i === 2));
+  assert.deepStrictEqual(compareHits(lines, []), []);
+  // 章标题和正文同样命中时,跳到正文那一段,不是标题
+  const tie = compareHits(['# 售后服务承诺', '我方售后服务承诺如下'], compareTerms('售后服务承诺'));
+  assert.strictEqual(tie[0].i, 1, '同分正文优先');
+});
+
+
+// —— P4:能力表 md ↔ 行数据(纯函数) ——
+const { parseCapabilityTable, serializeCapabilityTable, CAP_COLUMNS } = await import('../src/views/capability-core.js');
+await test('能力表:解析保留表前说明与表后文字,序列化回去逐格不丢,竖线转全角', () => {
+  const md = '# 产品能力表\n\n> 说明一行\n\n| 功能 | 支持情况 | 版本要求 | 证明材料 | 可定制 | 配图 |\n|---|---|---|---|---|---|\n| 权限分级 | 支持 | V3 | 产品资料.md | 是 | IMG-1 |\n| 报表 | 部分支持 |  |  |  |  |\n\n备注:以上仅示例。';
+  const doc = parseCapabilityTable(md);
+  assert.strictEqual(doc.preamble, '# 产品能力表\n\n> 说明一行');
+  assert.deepStrictEqual(doc.columns, CAP_COLUMNS);
+  assert.strictEqual(doc.rows.length, 2);
+  assert.deepStrictEqual(doc.rows[1], ['报表', '部分支持', '', '', '', '']);
+  assert.strictEqual(doc.tail, '备注:以上仅示例。');
+  doc.rows.push(['接口|对接', '可定制', '', '', '', '']);
+  const out = serializeCapabilityTable(doc);
+  assert.ok(out.startsWith('# 产品能力表\n\n> 说明一行\n\n| 功能 |'), out.slice(0, 60));
+  assert.ok(out.includes('| 接口｜对接 | 可定制 |  |  |  |  |'), '竖线转全角、空格保留');
+  assert.ok(out.trim().endsWith('备注:以上仅示例。'));
+  assert.deepStrictEqual(parseCapabilityTable(out).rows, doc.rows.map(r => r.map(v => v.replace(/\|/g, '｜'))));
+  const empty = parseCapabilityTable('没有表');
+  assert.deepStrictEqual(empty.rows, []); assert.deepStrictEqual(empty.columns, CAP_COLUMNS);
+});
+
 console.log(`\n${passed} 通过, ${failed} 失败`);
 process.exit(failed ? 1 : 0);

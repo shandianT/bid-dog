@@ -84,7 +84,7 @@ export function ConfirmModal(){
       okText="确认" cancelText="取消" width={430} centered
       okButtonProps={sh && sh.danger ? { danger: true } : undefined}
       title={<span id="cfT">{open ? sh.title : ''}</span>} data-sheet="confirm">
-      <div id="confirm" style={{ color:'var(--ant-color-text-secondary,#54575f)', whiteSpace:'pre-line' }}><span id="cfD">{open ? sh.desc : ''}</span></div>
+      <div id="confirm" style={{ color:'var(--ant-color-text-secondary,var(--sub))', whiteSpace:'pre-line' }}><span id="cfD">{open ? sh.desc : ''}</span></div>
     </Modal>
   );
 }
@@ -101,7 +101,7 @@ export function ProjectSheet(){
         <Input value={name} onChange={e=>setName(e.target.value)} placeholder="项目名称(新建或选择已有)"
           list="projectChoices" autoFocus onPressEnter={() => applyProjectMoveWith(name)} />
         <datalist id="projectChoices">{names.map(n => <option key={n} value={n} />)}</datalist>
-        {names.length ? <div style={{ color:'#8b8f98', font:'400 12px/1.6 inherit' }}>已有项目:{names.join('、')}</div> : null}
+        {names.length ? <div style={{ color:'var(--dim)', font:'400 12px/1.6 inherit' }}>已有项目:{names.join('、')}</div> : null}
       </div>
     </Modal>
   );
@@ -121,16 +121,16 @@ export function LogSheet(){
   const r = state.skill || {};
   const skillLine = !state.skill ? null
     : (r.skill_state==='verified' || (!r.skill_state && r.skill_used))
-      ? <span style={{color:'#22a06b'}}>✓ 已核验技能包运行证据:{(r.hits||[]).join('、')}</span>
+      ? <span style={{color:'var(--green)'}}>✓ 已核验技能包运行证据:{(r.hits||[]).join('、')}</span>
       : r.skill_state==='unverifiable'
-        ? <span style={{color:'#b8860b'}}>△ 技能指令已随任务加载,但本轮无法核验实际读取 — {r.why||''}<br/>这不等于未使用;部分生成方式不会返回完整过程记录。请以响应矩阵、交付检查和 Word 质检结果为准。</span>
-        : <span style={{color:'#d4380d'}}>✗ 技能规则未成功加载 — {r.why||''}<br/>请先运行“一键诊断”;如仍未恢复,再到高级设置检查技能包路径和注入状态。</span>;
+        ? <span style={{color:'var(--amber)'}}>△ 技能指令已随任务加载,但本轮无法核验实际读取 — {r.why||''}<br/>这不等于未使用;部分生成方式不会返回完整过程记录。请以响应矩阵、交付检查和 Word 质检结果为准。</span>
+        : <span style={{color:'var(--red)'}}>✗ 技能规则未成功加载 — {r.why||''}<br/>请先运行“一键诊断”;如仍未恢复,再到高级设置检查技能包路径和注入状态。</span>;
   return (
     <Modal open={open} onCancel={ui.closeAll} footer={null} width={720} centered title="运行日志">
       <div id="logSheet"><div id="logSkill" style={{ font:'400 12px/1.7 inherit', marginBottom:8 }}>{skillLine}</div>
       <pre id="logBody" style={{ font:"400 12px/1.7 'SF Mono',Menlo,Consolas,monospace", whiteSpace:'pre-wrap',
-        wordBreak:'break-all', maxHeight:'56vh', overflow:'auto', background:'#f7f8fa',
-        border:'1px solid #eceef2', borderRadius:10, padding:'10px 12px' }}>{state.text}</pre></div>
+        wordBreak:'break-all', maxHeight:'56vh', overflow:'auto', background:'var(--panel)',
+        border:'1px solid var(--line-soft)', borderRadius:10, padding:'10px 12px' }}>{state.text}</pre></div>
     </Modal>
   );
 }
@@ -188,8 +188,8 @@ export function DiagnosticSheet(){
       okText={busy ? (S.engineOffline?'修复中…':'诊断中…') : ((S.engineOffline && !repaired)?'检查并修复':'开始诊断')}
       okButtonProps={{ loading:busy, id:'diagnosticRun' }} onOk={runNow} cancelText="关闭">
       <div id="diagnosticSheet"><pre id="diagnosticStatus" style={{ whiteSpace:'pre-wrap', font:'400 12.5px/1.8 inherit', minHeight:40 }}>{out || '点「开始诊断」检查连接、引擎与当前任务。'}</pre>
-      {detail ? <details id="diagnosticDetailWrap"><summary style={{cursor:'pointer',color:'#8b8f98'}}>技术详情</summary>
-        <pre id="diagnosticDetail" style={{ whiteSpace:'pre-wrap', wordBreak:'break-all', font:"400 11.5px/1.7 'SF Mono',Menlo,Consolas,monospace", maxHeight:'32vh', overflow:'auto', background:'#f7f8fa', borderRadius:8, padding:'8px 10px' }}>{detail}</pre>
+      {detail ? <details id="diagnosticDetailWrap"><summary style={{cursor:'pointer',color:'var(--dim)'}}>技术详情</summary>
+        <pre id="diagnosticDetail" style={{ whiteSpace:'pre-wrap', wordBreak:'break-all', font:"400 11.5px/1.7 'SF Mono',Menlo,Consolas,monospace", maxHeight:'32vh', overflow:'auto', background:'var(--panel)', borderRadius:8, padding:'8px 10px' }}>{detail}</pre>
       </details> : null}</div>
     </Modal>
   );
@@ -199,7 +199,7 @@ export function MigratingSheet(){
   const sh = S.sheet; const open = !!(sh && sh.name === 'migrating');
   return (
     <Modal open={open} onCancel={ui.closeAll} footer={null} width={430} centered title={open ? sh.label : ''}>
-      <div style={{ color:'#54575f', lineHeight:1.8 }}>
+      <div style={{ color:'var(--sub)', lineHeight:1.8 }}>
         这个面板正在迁移到新界面(按 PARITY.md 的顺序推进),很快可用。<br/>
         着急的话,当前发布版(经典界面)里此功能完整可用。
       </div>

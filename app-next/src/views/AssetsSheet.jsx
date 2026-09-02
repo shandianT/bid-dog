@@ -4,6 +4,7 @@ import { Modal, Input, Button } from 'antd';
 import { S, ui, api } from '../core/index.js';
 import { isWin } from '../core/env.js';
 import { esc } from '../lib.js';
+import FactsPanel from './FactsPanel.jsx';
 
 export default function AssetsSheet(){
   const open = !!(S.sheet && S.sheet.name === 'assets');
@@ -14,6 +15,7 @@ export default function AssetsSheet(){
   const [visionMsg, setVisionMsg] = useState({ text: '', html: null });
   const ingestRef = useRef(null);
   const timerRef = useRef(null);
+  const [factsKey, setFactsKey] = useState(0);
 
   async function loadAssets(){
     if(!S.online){ setA({ folder: isWin ? 'C:\\Users\\me\\Documents\\中标狗\\素材库' : '~/Documents/中标狗/素材库', offline: true, items: [], recent: [] }); return; }
@@ -57,7 +59,9 @@ export default function AssetsSheet(){
         : '✓ 已入库(本地解析,未调用模型):' + r.sections + ' 个章节、' + r.images + ' 张图片'
           + (Object.keys(r.categories || {}).length ? ' · ' + Object.entries(r.categories).map(([k, v]) => k + '×' + v).join(' · ') : '')
           + ' — 存放于 ' + (r.folder || '素材库') + '/章节模板、图片'
-          + (r.auto_tagging ? ' · 已自动开始 AI 识图打标' : ''));
+          + (r.auto_tagging ? ' · 已自动开始 AI 识图打标' : '')
+          + (r.facts ? ' · 正在抽取公司/资质/业绩/人员事实,稍后在下方确认' : ''));
+      if(r.facts){ setTimeout(() => setFactsKey(k => k + 1), 1500); setTimeout(() => setFactsKey(k => k + 1), 6000); }
     }catch(e){ setIngestMsg('✗ 入库失败:' + ((e && e.message) || '支持 docx/doc/pdf/md/txt/html 及图片(png/jpg)')); }
     loadAssets();
   }
@@ -123,6 +127,13 @@ export default function AssetsSheet(){
         <input ref={ingestRef} type="file" multiple style={{ display: 'none' }}
           accept=".docx,.doc,.pdf,.md,.txt,.html,.htm,.png,.jpg,.jpeg,.webp"
           onChange={e => { const fs = Array.from(e.target.files); (async () => { for(const f of fs) await ingestAsset(f); })(); e.target.value = ''; }} />
+        <div className="gcard" id="capCard">
+          <span className="dot" style={{ background: 'var(--violet)' }} />
+          <div style={{ flex: 1 }}><div style={{ font: '500 13px/1.4 inherit' }}>产品能力表 · 应答判定的第一依据</div>
+            <div style={{ font: '400 11.5px/1.6 inherit', color: 'var(--dim)' }}>功能 | 支持情况 | 版本要求 | 证明材料 | 可定制 | 配图,表格里直接改;偏离表按它逐条判定满足/部分满足/不满足。</div></div>
+          <span className="a" id="capOpen" onClick={() => ui.openSheet('capability')}>编辑</span>
+        </div>
+        <FactsPanel refreshKey={factsKey + (open ? 1 : 0)} />
         <div className="gcard">
           <span className="dot" style={{ background: 'var(--amber)' }} />
           <div style={{ flex: 1 }}><div style={{ font: '500 13px/1.4 inherit' }}>AI 识图打标(调用你配的视觉模型)</div>

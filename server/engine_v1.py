@@ -10,7 +10,7 @@
 import os, re, sys, ssl, json, glob, time, signal, hashlib, hmac, secrets, base64, contextvars, uuid, shlex, shutil, zipfile, threading, subprocess, datetime, asyncio, socket, http.client, urllib.request, urllib.error, urllib.parse, io, platform
 import xml.etree.ElementTree as ET
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from threading import Lock as _ThreadLock, RLock as _ThreadRLock
 from typing import List
 from fastapi import FastAPI, UploadFile, File, Form, Request
@@ -22,6 +22,7 @@ from template_engine import (builtin_templates, compare_instruction_coverage,
                              extract_document_structure, normalize_package,
                              recommend_template, validate_package)
 import generation_pipeline
+import prompts
 
 def _configure_stdio_utf8():
     """Windows GUI/重定向日志常落到 cp1252；启动横幅含中文时不能因此让整个 sidecar 崩溃。"""
@@ -35,7 +36,7 @@ def _configure_stdio_utf8():
 if os.name == 'nt':
     _configure_stdio_utf8()
 
-ENGINE_VERSION = '0.21.1'
+ENGINE_VERSION = '0.22.0'
 MAX_TEMPLATE_UPLOAD_BYTES = 50 * 1024 * 1024
 AUTHOR = 'FDE-家涛'
 ENGINE_FEATURES = ['probe_models', 'chat_test', 'agent_binding', 'assets_ingest', 'attachments', 'rerun', 'job_cancel', 'assets_dir_config', 'cli_autofind', 'sowork_engine', 'agent_test',
@@ -457,6 +458,8 @@ def artifact_info(fn):
         group, kind, rank = 0, {'.docx': 'WORD', '.xlsx': 'EXCEL', '.pdf': 'PDF'}[ext], 10
         if ext == '.docx' and ('完整' in fn or '投标文件' in fn):
             purpose, rank = '主要交付文件：可编辑的完整投标文件，提交前请人工复核、签字和盖章。', 0
+            if '整册' in fn: rank = -1          # 有分册时整册仍排第一
+            elif any(v in fn for v in VOLUME_ORDER): purpose = '分册交付文件：按招标要求的装订方式单独提交的一册。'
         elif ext == '.xlsx':
             purpose = '可编辑的表格附件，用于核对清单、报价或响应数据。'
         elif ext == '.pdf':
@@ -609,7 +612,8 @@ def _job_usage(job, meta=None):
             'output_tokens': max(0, int(raw.get('output_tokens') or 0)),
             'total_tokens': max(0, int(raw.get('total_tokens') or 0)),
             'estimated_cost': raw.get('estimated_cost'),
-            'currency': raw.get('currency') or None}
+            'currency': raw.get('currency') or None,
+            'estimated': bool(raw.get('estimated'))}
 
 # 工作台词过滤:agent 的原始输出噪声很大,只留人能看懂的动作行
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
@@ -1623,6 +1627,7 @@ def ensure_docx(job, known, force=False):
     导出是确定性脚本、零 token,没有任何理由不兜。返回新出的文件名列表。"""
     if not force and _body_docxs(job, known): return []
     body = _body_mds(job, known)
+    body.sort(key=lambda f: (0 if '整册' in f else 1, f))    # 整册先出:它是主交付,分册跟在后面
     if not body: return []
     bt = _skill_module('build_tender_docx')
     if not bt:
@@ -1819,13 +1824,13 @@ def quality_audit(job, known):
     for fn in mds:
         mp = os.path.join(job, fn)
         try:
-            res = qg.audit(mp, materials=mat, min_chapter=3500, score=score, deviations=devs)
+            res = qg.audit(mp, materials=mat, min_chapter=prompts.CHAPTER_TARGET_CHARS, score=score, deviations=devs)
             fixed, pre_images = None, None
             if res['plan'] or any(l == 'red' and ('打散' in t or '重复' in t) for l, t in res['items']):
                 pre_images = res['images']
                 fixed = qg.apply_fix(mp, res)
                 fixed_total += fixed or 0
-                res = qg.audit(mp, materials=mat, min_chapter=3500, score=score, deviations=devs)
+                res = qg.audit(mp, materials=mat, min_chapter=prompts.CHAPTER_TARGET_CHARS, score=score, deviations=devs)
             try: qg.write_report(os.path.join(job, '成品质检报告.md'), fn, res, fixed, images_pre=pre_images)
             except TypeError: qg.write_report(os.path.join(job, '成品质检报告.md'), fn, res, fixed)
             if order[res['level']] > order[worst]: worst = res['level']
@@ -1864,6 +1869,14 @@ def quality_audit(job, known):
                 pass
             except Exception as e:
                 lines.append('⚠ 重建 %s 失败:%s(md 修复稿仍有效)' % (target, e))
+    # 标准模式的模型复核报告:必办 → 红,建议 → 黄,和确定性质检的结论合在同一张出件前检查里
+    review_gaps = _review_report_gaps(job)
+    review_red = [g for g in review_gaps if g['level'] == 'red']
+    if review_gaps:
+        lines.append('🧐 模型复核:必办 %d 项、建议 %d 项(见《模型复核报告.md》)'
+                     % (len(review_red), len(review_gaps) - len(review_red)))
+        if review_red: worst = 'red'
+        elif worst == 'green': worst = 'yellow'
     verdict = {'green': '✅ 成品质检通过', 'yellow': '🟡 成品质检:有建议项(见《成品质检报告.md》)',
                'red': '🔴 成品质检:有必须处理项——按报告处理或对相应章节「定向重做」后再交付'}[worst]
     emit(job, {'type': 'message', 'role': 'agent', 'text': verdict + '\n\n' + '\n'.join(lines[:14]),
@@ -1884,10 +1897,17 @@ def quality_audit(job, known):
                 g['actions'] = [{'act': 'redo', 'label': '重做这一章',
                                  'param': '重写章节「%s」:%s' % (ch.group(1), t)}]
             gaps.append(g)
+        gaps.extend(review_gaps)
         gaps.append({'level': 'yellow', 'title': '也可以对整册不达标章节一起重做',
                      'detail': '只重做这些章节,其余产物保留,完成后自动重新汇总并更新自检',
                      'actions': [{'act': 'open_redo', 'label': '定向重做'}]})
         emit(job, {'type': 'health', 'level': 'red', 'summary': '成品质检有必须处理项', 'gaps': gaps})
+    elif review_gaps:
+        emit(job, {'type': 'health', 'level': 'yellow', 'summary': '模型复核有建议项',
+                   'gaps': review_gaps + [{'level': 'yellow', 'title': '逐项详情见《模型复核报告.md》',
+                                           'detail': '建议项改了更好,不改也能提交',
+                                           'actions': [{'act': 'open_artifact', 'label': '打开复核报告',
+                                                        'file': '模型复核报告.md'}]}]})
     if audit_errors:
         append_diagnostic(job, 'quality_audit_partial_error', '; '.join(audit_errors), level='error')
         return {'status': 'unknown', 'level': 'unknown', 'summary': '部分关键检查没有完成'}
@@ -3336,6 +3356,75 @@ def oc_run(job, prompt, allow_cli_fallback=True):
     return result
 
 
+# ---------- 生成参数(可配,给 A/B 用) ----------
+# 复读循环最爱的组合是「低温 + 无 penalty + 长输出」。默认值不动(没有证据不改默认),
+# 但必须能配:tools/model_ab.py 跑同一份招标文件对比 temperature / frequency_penalty,
+# 换参数才有数字可依。penalty 为 0 时不放进请求体,免得少数网关拒收未知字段。
+GEN_PARAM_BOUNDS = {'temperature': (0.0, 2.0, 0.2),
+                    'frequency_penalty': (-2.0, 2.0, 0.0),
+                    'presence_penalty': (-2.0, 2.0, 0.0)}
+
+
+def _normalize_generation_params(raw):
+    out = {}
+    if not isinstance(raw, dict): return out
+    for key, (low, high, _default) in GEN_PARAM_BOUNDS.items():
+        if raw.get(key) in (None, ''): continue
+        try: value = float(raw.get(key))
+        except (TypeError, ValueError): continue
+        out[key] = round(max(low, min(high, value)), 3)
+    return out
+
+
+def _generation_params(conf=None, job=None):
+    conf = conf if isinstance(conf, dict) else read_json(conf_path(), {})
+    eng = conf.get('engine') if isinstance(conf.get('engine'), dict) else {}
+    chosen = _normalize_generation_params(eng.get('generation_params'))
+    if job:     # A/B 变体把参数记在自己的 任务.json 里,只覆盖这一单,全局默认不动
+        chosen.update(_job_ab_overrides(job).get('params') or {})
+    return {key: chosen.get(key, default) for key, (_low, _high, default) in GEN_PARAM_BOUNDS.items()}
+
+
+def _apply_generation_params(payload, params):
+    payload['temperature'] = float(params.get('temperature', 0.2))
+    for key in ('frequency_penalty', 'presence_penalty'):
+        if params.get(key): payload[key] = float(params[key])
+    return payload
+
+
+# ---------- 章节并行度 ----------
+# 以前 batch = ready[:2]:两章一批、等两章都写完才发下一批。10 章 × 2–4 分钟就是 20 分钟串行。
+# 现在是持续 N 路在飞:一章写完立刻补位;某一章撞到 429 限流,这一单余下的章节自动降到 2 路。
+PIPELINE_THROTTLED = set()          # 本轮撞过限流的任务 id
+
+
+def _chapter_parallelism():
+    try: value = int(os.environ.get('BIDDOG_CHAPTER_PARALLEL', 4))
+    except (TypeError, ValueError): value = 4
+    return max(1, min(8, value))
+
+
+def _chapter_slots(base):
+    limit = _chapter_parallelism()
+    return min(limit, 2) if base in PIPELINE_THROTTLED else limit
+
+
+def _used_chapter_headings(job, node, state=None):
+    """其他已写完章节的小标题清单:传给撰写员,本章不得重复(SKILL 第 4 步的纪律,流水线以前没做)。"""
+    state = state or generation_pipeline.load(job)
+    out = []
+    for item in state.get('nodes') or []:
+        if item.get('id') == node.get('id') or item.get('state') != 'done': continue
+        if not str(item.get('id') or '').startswith('chapter_write:'): continue
+        for name in item.get('outputs') or []:
+            path = os.path.join(job, os.path.basename(str(name)))
+            try: text = open(path, encoding='utf-8', errors='ignore').read(200000)
+            except OSError: continue
+            for heading in prompts.used_headings_from_text(text):
+                if heading not in out: out.append(heading)
+    return out[:prompts.CHAPTER_MAX_USED_HEADINGS]
+
+
 def _pipeline_mode(conf=None):
     conf = conf if isinstance(conf, dict) else read_json(conf_path(), {})
     eng = conf.get('engine') or {}
@@ -3382,6 +3471,9 @@ def _initialize_generation_pipeline(job, meta, conf):
                   (selected_verified or verified[0]))
     quality_model = (S2_QUALITY_MODEL if S2_QUALITY_MODEL in verified else
                      (selected_verified or fast_model))
+    ab_model = (meta.get('ab') or {}).get('model') if isinstance(meta.get('ab'), dict) else ''
+    if ab_model and ab_model in verified:
+        fast_model = quality_model = ab_model       # A/B 变体:两条路由都走指定模型,结果才可比
     state = generation_pipeline.initialize(
         job,
         run_id=str(meta.get('run_id') or _new_run_id()),
@@ -3467,26 +3559,91 @@ def _pipeline_material_paths(job):
     return result
 
 
+# ---------- 素材按章检索 ----------
+# 以前每个章节节点都把整个 素材/ 拷进尝试目录,再按文件名顺序读到 140k 预算——素材库越大,
+# 排在后面的文件越被截光,而且每一章都在重复读同一堆无关的章节模板(token 成本大头)。
+# 现在:根目录的规范素材(能力表/应答要点/公司介绍/资质案例/图片索引)永远带上;
+# 子目录(章节模板/、任务导入/)按本章标题、素材槽位、评分点的关键词命中排序,装到预算为止;
+# 图片等二进制不进节点目录——模型读不到,导出 Word 时从 job/素材 取。
+MATERIAL_CANONICAL = ('产品能力表.md', '应答要点.md', '公司介绍.md', '产品资料.md', '资质与案例.md',
+                      '图片索引.md', '图片索引.json')
+MATERIAL_TEXT_EXTS = ('.md', '.txt', '.json', '.csv', '.docx', '.pdf', '.html', '.htm', '.doc')
+
+
+def _material_terms(node):
+    raw = [node.get('title')] + list(node.get('material_slots') or []) + \
+          list(node.get('scoring_points') or []) + list(node.get('basis') or [])
+    terms = set()
+    for value in raw:
+        for piece in re.split(r'[\s、,，;；:：()（）/／|｜\-—_.。\d〔〕「」]+', str(value or '')):
+            piece = piece.strip()
+            if len(piece) >= 2: terms.add(piece)
+            # 中文长词整词常撞不上,再切 2-gram
+            for i in range(len(piece) - 1):
+                gram = piece[i:i + 2]
+                if re.fullmatch(r'[\u4e00-\u9fff]{2}', gram): terms.add(gram)
+    return terms
+
+
+def _pipeline_select_materials(job, node, paths):
+    """返回 (按相关性排好序的素材路径, 跳过数)。"""
+    materials = os.path.join(job, '素材')
+    budget = max(10000, int(os.environ.get('BIDDOG_CHAPTER_MATERIAL_CHARS', 60000)))
+    canonical, ranked, skipped = [], [], 0
+    terms = _material_terms(node)
+    for source in paths:
+        rel = os.path.relpath(source, materials).replace(os.sep, '/')
+        name = os.path.basename(source)
+        if os.path.splitext(name)[1].lower() not in MATERIAL_TEXT_EXTS:
+            skipped += 1; continue
+        if '/' not in rel or name in MATERIAL_CANONICAL:
+            canonical.append(source); continue
+        haystack = name + '\n' + _pipeline_model_file_text(source, 2000)
+        score = sum((3 if term in name else 1) for term in terms if term in haystack)
+        ranked.append((score, rel, source))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    chosen, used = list(canonical), 0
+    for score, _rel, source in ranked:
+        if score <= 0:
+            skipped += 1; continue
+        try: size = os.path.getsize(source)
+        except OSError: continue
+        if used + size > budget:
+            skipped += 1; continue
+        chosen.append(source); used += size
+    return chosen, skipped
+
+
 def _pipeline_copy_inputs(job, node, target):
-    """Materialize the exact read set for one model attempt; never use symlinks."""
+    """Materialize the exact read set for one model attempt; never use symlinks.
+
+    返回按「该先给模型看什么」排好的相对路径:声明输入(解析版/要求/规划/前置章节)在前,
+    规范素材其次,按相关性挑出来的章节模板最后——预算不够时被截掉的是最不相干的。"""
     node_id = str(node.get('id') or '')
-    copied = set()
+    copied, ordered = set(), []
     for name in _pipeline_declared_input_names(job, node):
         safe = os.path.basename(str(name or ''))
         if not safe or safe in copied: continue
         source = os.path.join(job, safe)
         if os.path.isfile(source) and not os.path.islink(source):
-            shutil.copy2(source, os.path.join(target, safe)); copied.add(safe)
+            shutil.copy2(source, os.path.join(target, safe)); copied.add(safe); ordered.append(safe)
     skill_file = os.path.join(skill_dir_conf(read_json(conf_path(), {})), 'SKILL.md')
     if os.path.isfile(skill_file) and not os.path.islink(skill_file):
         shutil.copy2(skill_file, os.path.join(target, 'SKILL.md'))
     materials = os.path.join(job, '素材')
     if node_id.startswith('chapter_write:'):
-        for source in _pipeline_material_paths(job):
+        chosen, skipped = _pipeline_select_materials(job, node, _pipeline_material_paths(job))
+        for source in chosen:
             rel = os.path.relpath(source, materials)
             destination = os.path.join(target, '素材', rel)
             os.makedirs(os.path.dirname(destination), exist_ok=True)
             shutil.copy2(source, destination)
+            ordered.append(os.path.join('素材', rel).replace(os.sep, '/'))
+        if skipped:
+            append_diagnostic(job, 'material_selected',
+                              '本章按相关性带入 %d 份素材,跳过 %d 份(二进制或与本章无关)' % (len(chosen), skipped),
+                              level='info', node_id=node_id)
+    return ordered
 
 
 def _pipeline_model_file_text(path, budget):
@@ -3580,17 +3737,9 @@ def _pipeline_direct_task(job, node):
         return ('生成商务偏离表，使用 Markdown 表格，覆盖报价、付款、工期、质保、交付、签章等；'
                 '列为“序号｜招标条款/商务要求｜投标响应｜偏离情况｜依据/证据｜备注”。')
     if node_id.startswith('chapter_write:'):
-        user_note = str(node.get('user_note') or '').strip()
-        return ('撰写章节“%s”。逐项响应招标要求并标注依据；素材缺失写〔需补充〕。'
-                '本章依据：%s；评分点：%s；素材槽位：%s。正文至少 2500 个中文字符。'
-                '表格必须按具体用途命名列，同一章内禁止反复使用“信息项｜内容”等泛化表头。%s' % (
-                    node.get('title') or '本章', '、'.join(node.get('basis') or []) or '招标解析版',
-                    '、'.join(node.get('scoring_points') or []) or '按响应矩阵核对',
-                    '、'.join(node.get('material_slots') or []) or '无指定素材槽位',
-                    ('本次为人工发起的单章重写，用户补充要求（必须落实）：%s。' % user_note) if user_note else ''))
+        return prompts.chapter_task(node)
     if node_id == 'quality_review':
-        return ('复核整册对评分点、废标风险、偏离表和事实边界的覆盖情况，输出明确的质检结论、'
-                '缺口和提交前人工确认项；不改写正文。')
+        return prompts.review_task()
     return '完成节点“%s”，只输出本节点指定文件。' % (node.get('title') or node_id)
 
 
@@ -3614,8 +3763,12 @@ def _pipeline_cell(value):
     return str(value if value not in (None, '') else '〔需补充〕').replace('|', '｜').replace('\n', ' ')
 
 
-def _pipeline_write_response_plan(job, attempt_root, compact):
-    """Expand a small model analysis into the four deterministic planning artifacts."""
+def _pipeline_write_response_plan(job, attempt_root, compact, source='local', model='', notes=()):
+    """Expand a small model analysis into the four deterministic planning artifacts.
+
+    ``source`` 记录这份规划是谁给的:'local' = 本地关键词索引(候选,永远先落盘兜底),
+    'model' = 模型逐项核对过的结构化结果。覆盖仪表和确认卡据此决定显示「真实覆盖率」
+    还是「候选,待核对」——本地索引算出来的 0/N 不是事实,只会把人吓一跳。"""
     if not isinstance(compact, dict):
         raise generation_pipeline.NodeExecutionError('model_plan_invalid', retryable=True)
     state = generation_pipeline.load(job)
@@ -3645,8 +3798,10 @@ def _pipeline_write_response_plan(job, attempt_root, compact):
         raise generation_pipeline.NodeExecutionError('model_plan_has_no_chapters', retryable=False)
 
     composition = [str(value) for value in (compact.get('composition') or []) if str(value).strip()][:40]
+    source_line = (('> 规划来源:模型逐项核对(%s)' % model) if source == 'model'
+                   else '> 规划来源:本地关键词索引(候选项,尚未经模型核对)')
     composition_lines = [
-        '# 投标文件组成', '',
+        '# 投标文件组成', '', source_line, '',
         '> 本目录根据场景模板与招标文件解析结果生成；客户专属事实和最终装订顺序须在提交前人工核对。', '',
         '## 文件组成建议', '',
     ]
@@ -3659,10 +3814,13 @@ def _pipeline_write_response_plan(job, attempt_root, compact):
                               '- 核对投标人名称、报价、资质、案例、人员、签章和日期。',
                               '- 所有〔需补充〕项完成后，方可作为正式投标文件提交。'])
 
-    score_lines = ['# 评分点响应矩阵', '',
-                   '> 分值或证据未在原文中明确时保留〔需补充〕，不得推测。', '',
-                   '| 序号 | 原要求/评分点 | 分值 | 响应位置 | 证据 | 缺口 |',
-                   '|---|---|---:|---|---|---|']
+    score_lines = ['# 评分点响应矩阵', '', source_line, '',
+                   '> 分值或证据未在原文中明确时保留〔需补充〕，不得推测。', '']
+    note_lines = ['> ' + str(item).strip() for item in (notes or []) if str(item).strip()]
+    if note_lines:
+        score_lines.extend(note_lines); score_lines.append('')
+    score_lines.extend(['| 序号 | 原要求/评分点 | 分值 | 响应位置 | 证据 | 缺口 |',
+                        '|---|---|---:|---|---|---|'])
     scores = [item for item in (compact.get('scoring_points') or []) if isinstance(item, dict)][:120]
     if not scores:
         scores = [{'requirement': '未识别到独立评分点', 'score': '未知',
@@ -3677,7 +3835,7 @@ def _pipeline_write_response_plan(job, attempt_root, compact):
                         '- 正文撰写按本矩阵逐项落位，质检阶段再次核对响应位置与证据。',
                         '- 评分分值、证明材料或客户事实缺失时必须保留〔需补充〕。'])
 
-    risk_lines = ['# 废标风险清单', '',
+    risk_lines = ['# 废标风险清单', '', source_line, '',
                   '> 本清单用于提交前逐项人工核验，不替代招标文件原文和法律审查。', '',
                   '| 序号 | 类别 | 招标要求 | 风险 | 提交前动作 |', '|---|---|---|---|---|']
     risks = [item for item in (compact.get('risks') or []) if isinstance(item, dict)][:160]
@@ -3696,7 +3854,10 @@ def _pipeline_write_response_plan(job, attempt_root, compact):
         '投标文件组成.md': '\n'.join(composition_lines) + '\n',
         '评分点响应矩阵.md': '\n'.join(score_lines) + '\n',
         '废标风险清单.md': '\n'.join(risk_lines) + '\n',
-        'response_plan.json': json.dumps({'chapters': chapters}, ensure_ascii=False, indent=2) + '\n',
+        'response_plan.json': json.dumps({
+            'chapters': chapters, 'source': source, 'model': str(model or ''),
+            'notes': [str(item) for item in (notes or []) if str(item).strip()],
+        }, ensure_ascii=False, indent=2) + '\n',
     }
     for name, text in artifacts.items():
         target = os.path.join(attempt_root, name)
@@ -3783,12 +3944,327 @@ def _pipeline_local_response_plan(job, attempt_root):
                                if any(word in line for word in keywords)][:8],
             'material_slots': ['与本章要求对应的资质、案例、人员或承诺证据〔需补充〕'],
         })
-    _pipeline_write_response_plan(job, attempt_root, {
-        'composition': composition,
-        'scoring_points': scores,
-        'risks': risks,
-        'chapter_guidance': guidance,
-    })
+    compact = {'composition': composition, 'scoring_points': scores,
+               'risks': risks, 'chapter_guidance': guidance}
+    _pipeline_write_response_plan(job, attempt_root, compact, source='local')
+    return compact
+
+
+# ---------- 响应规划:模型逐项核对(本地索引永远兜底) ----------
+# 0.20.4 把规划改成纯本地,是为了「规划一步不能拖垮整单」(模型返回被截断,整单卡死在
+# 章节撰写之前)。但纯本地的代价一直没人算:评分点矩阵只是含「分」字的行、「响应位置」
+# 是一句常量、「缺口」全是〔需补充〕——于是覆盖仪表永远 0/N,按章补写一条都派不出去,
+# 章节提示词里的「评分点」是含'分'字的句子而不是本章要拿的分。
+# 现在分两步:本地索引先落盘(保底,零 token、秒级);模型只做「核对」——逐项提取评分点、
+# 把每一项落到真实章节标题上、给出分值与缺口。核对失败/超时/格式不对,一律沿用本地索引
+# 并记诊断,节点照样完成;界面按「候选,待核对」显示,而不是显示一个假的 0/N。
+PLAN_OUTPUT_CONTRACT = (
+    '只返回严格 JSON：{"composition":["文件组成"],'
+    '"scoring_points":[{"requirement":"原要求","score":"分值或未知",'
+    '"location":"响应章节标题","evidence":"所需证据","gap":"缺口或无"}],'
+    '"risks":[{"category":"类别","requirement":"要求","risk":"风险",'
+    '"action":"提交前动作"}],"chapter_guidance":[{"title":"章节标题原文",'
+    '"basis":["招标依据"],"scoring_points":["评分点"],'
+    '"material_slots":["所需素材"]}]}。评分点最多 120 项、风险最多 160 项、其余最多 40 项，'
+    '不要返回章节正文。')
+PLAN_MODEL_TRIES = 2
+PLAN_SECTION_RX = re.compile(r'(评分|评标|评审|打分|资格|否决|废标|无效|实质性|投标文件的组成|投标文件组成|格式|装订|密封)')
+_CN_DIGITS = {'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5,
+              '六': 6, '七': 7, '八': 8, '九': 9}
+
+
+def _plan_model_enabled():
+    return str(os.environ.get('BIDDOG_PLAN_MODEL', '1')).strip().lower() not in ('0', 'false', 'no', 'off')
+
+
+def _cn_int(text):
+    """'3' / '３' / '三' / '十二' → int;认不出返回 0。"""
+    s = str(text or '').strip().translate(str.maketrans('０１２３４５６７８９', '0123456789'))
+    if s.isdigit(): return int(s)
+    if not s or any(ch not in _CN_DIGITS and ch != '十' for ch in s): return 0
+    if '十' not in s: return _CN_DIGITS.get(s, 0) if len(s) == 1 else 0
+    head, _, tail = s.partition('十')
+    tens = _CN_DIGITS.get(head, 1) if head else 1
+    ones = _CN_DIGITS.get(tail, 0) if tail else 0
+    return tens * 10 + ones
+
+
+def _plan_norm(text):
+    return re.sub(r'[\s\u3000·•・,，。;；:：、()（）\[\]【】《》「」\-—_/\\|｜]+', '', str(text or '')).casefold()
+
+
+def _plan_match_title(value, titles):
+    """把「响应位置」落到真实章节标题上;落不到返回 ''。
+
+    先精确,再「第 N 章」序号,最后才是包含关系——覆盖仪表、章节提示词都靠这一步
+    才知道某个评分点归哪一章,匹配不上就只能算「还没落到章节」。"""
+    raw = str(value or '').strip()
+    if not raw or '需补充' in raw: return ''
+    titles = [str(t) for t in (titles or []) if str(t).strip()]
+    key = _plan_norm(raw)
+    if not key or not titles: return ''
+    normed = [(_plan_norm(t), t) for t in titles]
+    for nk, title in normed:
+        if nk and nk == key: return title
+    m = (re.search(r'第\s*([0-9０-９零〇一二两三四五六七八九十]+)\s*(?:章|部分|节|篇)', raw)
+         or re.fullmatch(r'\s*([0-9０-９]{1,2})\s*[.、．]?\s*', raw))
+    if m:
+        idx = _cn_int(m.group(1))
+        if 1 <= idx <= len(titles): return titles[idx - 1]
+    for nk, title in normed:
+        if nk and len(nk) >= 2 and len(key) >= 2 and (nk in key or key in nk): return title
+    return ''
+
+
+def _plan_score(value):
+    s = str(value if value is not None else '').strip()
+    m = re.search(r'(\d+(?:\.\d+)?)', s.translate(str.maketrans('０１２３４５６７８９', '0123456789')))
+    if not m: return '未知'
+    n = float(m.group(1))
+    if n <= 0 or n > 1000: return '未知'
+    return ('%d 分' % n) if n.is_integer() else ('%s 分' % ('%.1f' % n).rstrip('0').rstrip('.'))
+
+
+def _plan_score_value(text):
+    m = re.search(r'\d+(?:\.\d+)?', str(text or ''))
+    return float(m.group(0)) if m else 0.0
+
+
+def _plan_score_sum(values):
+    return sum(_plan_score_value(v) for v in values)
+
+
+def _fmt_num(n):
+    n = float(n or 0)
+    return ('%d' % n) if n.is_integer() else ('%.1f' % n)
+
+
+def _plan_expected_total(parsed):
+    """从解析版里找评分办法的总分(「总分 100 分」「满分为100分」),找不到返回 None。"""
+    for m in re.finditer(r'(?:总分|满分|合计|共计|总计)[^\d\n]{0,12}(\d{2,4})\s*分', str(parsed or '')):
+        value = int(m.group(1))
+        if 10 <= value <= 1000: return value
+    return None
+
+
+def _pipeline_plan_context(parsed, budget):
+    """解析版超预算时,优先把评分/评标/资格/否决这些决定规划的章节整段喂给模型,再用文档开头补齐。"""
+    text = str(parsed or '')
+    if len(text) <= budget: return text
+    blocks, current = [], []
+    for line in text.splitlines():
+        if line.startswith('#') and current:
+            blocks.append('\n'.join(current)); current = []
+        current.append(line)
+    if current: blocks.append('\n'.join(current))
+    picked, used, rest = [], 0, []
+    for block in blocks:
+        head = block.splitlines()[0] if block else ''
+        if PLAN_SECTION_RX.search(head) and used + len(block) <= int(budget * 0.7):
+            picked.append(block); used += len(block)
+        else:
+            rest.append(block)
+    for block in rest:
+        if used >= budget: break
+        take = block[:budget - used]
+        picked.append(take); used += len(take)
+    return '\n\n'.join(picked)
+
+
+def _plan_cell(value, limit):
+    text = re.sub(r'\s+', ' ', str(value if value is not None else '')).strip()
+    text = ''.join(ch for ch in text if not 0xD800 <= ord(ch) <= 0xDFFF)
+    return text[:limit]
+
+
+def _pipeline_normalize_plan(envelope, titles, candidate=None):
+    """把模型回的规划 JSON 收成可信的结构:落位只认真实章节,分值统一成「N 分」,
+    「无缺口」统一成「无」(空串会被写成〔需补充〕,那一项就永远算不上覆盖)。
+    什么都没提取到返回 None,由调用方沿用本地索引。"""
+    if not isinstance(envelope, dict): return None
+    titles = [str(t) for t in (titles or []) if str(t).strip()]
+    scores = []
+    for item in (envelope.get('scoring_points') or [])[:200]:
+        if not isinstance(item, dict): continue
+        requirement = _plan_cell(item.get('requirement') or item.get('item') or item.get('name'), 240)
+        if not requirement: continue
+        gap = _plan_cell(item.get('gap'), 140)
+        scores.append({'requirement': requirement, 'score': _plan_score(item.get('score')),
+                       'location': _plan_match_title(item.get('location') or item.get('chapter'), titles),
+                       'evidence': _plan_cell(item.get('evidence'), 140) or '招标文件_解析版.md',
+                       'gap': '无' if (not gap or gap in COVERAGE_CLEAR_GAPS) else gap})
+    risks = []
+    for item in (envelope.get('risks') or [])[:200]:
+        if not isinstance(item, dict): continue
+        requirement = _plan_cell(item.get('requirement') or item.get('clause'), 240)
+        if not requirement: continue
+        risks.append({'category': _plan_cell(item.get('category'), 20) or '实质性要求',
+                      'requirement': requirement,
+                      'risk': _plan_cell(item.get('risk'), 140) or '未逐项响应可能导致无效投标',
+                      'action': _plan_cell(item.get('action'), 140) or '提交前由投标负责人对照原文核对'})
+    if not scores and not risks: return None
+    composition = [_plan_cell(v, 120) for v in (envelope.get('composition') or []) if _plan_cell(v, 120)][:40]
+    candidate = candidate if isinstance(candidate, dict) else {}
+    cand_guidance = {str(g.get('title') or ''): g for g in (candidate.get('chapter_guidance') or [])
+                     if isinstance(g, dict)}
+    guidance, seen = {}, []
+    for item in (envelope.get('chapter_guidance') or []):
+        if not isinstance(item, dict): continue
+        title = _plan_match_title(item.get('title'), titles)
+        if not title or title in guidance: continue
+        def _list(key, limit):
+            raw = item.get(key)
+            return ([_plan_cell(v, 240) for v in raw if _plan_cell(v, 240)][:limit]
+                    if isinstance(raw, list) else [])
+        guidance[title] = {'title': title, 'basis': _list('basis', 20),
+                           'scoring_points': _list('scoring_points', 40),
+                           'material_slots': _list('material_slots', 20)}
+        seen.append(title)
+    for title in titles:
+        entry = guidance.get(title)
+        if not entry:
+            fallback = cand_guidance.get(title) or {}
+            entry = guidance[title] = {'title': title,
+                                       'basis': list(fallback.get('basis') or []),
+                                       'scoring_points': list(fallback.get('scoring_points') or []),
+                                       'material_slots': list(fallback.get('material_slots') or [])}
+            seen.append(title)
+        # 落到本章的评分点直接进本章提示词:这才是「本章要拿的分」
+        for score in scores:
+            if score['location'] != title: continue
+            line = score['requirement'] + (('(%s)' % score['score']) if score['score'] != '未知' else '')
+            if line not in entry['scoring_points']: entry['scoring_points'].append(line)
+        entry['scoring_points'] = entry['scoring_points'][:40]
+        if not entry['basis']: entry['basis'] = ['招标文件_解析版.md']
+    if not composition: composition = list(candidate.get('composition') or [])
+    return {'composition': composition, 'scoring_points': scores[:120], 'risks': risks[:160],
+            'chapter_guidance': [guidance[t] for t in seen]}
+
+
+def _start_node_heartbeat(job, node, label='模型生成中'):
+    """生成期间的心跳:一次模型调用可长达数分钟且零事件,以前「静默 180 秒」就被
+    误判成停滞(「模型响应偏慢」),用户读作中断。每 30 秒摸一次节点活动时间
+    并发一行台词,界面上能看到它真的在干活。"""
+    hb_stop = threading.Event()
+    def _heartbeat():
+        waited = 0
+        while not hb_stop.wait(30):
+            waited += 30
+            try: generation_pipeline.touch_node(job, node.get('id'))
+            except Exception: pass
+            emit(job, {'type': 'worklog',
+                       'lines': ['「%s」%s,已进行 %d 秒(连接正常)' % (node.get('title') or node.get('id'), label, waited)]})
+    threading.Thread(target=_heartbeat, daemon=True).start()
+    return hb_stop
+
+
+def _pipeline_model_plan(job, node, model, up, attempt_root, candidate):
+    """请模型逐项核对响应规划。成功返回 {'compact','notes'};任何失败返回 None(沿用本地索引)。
+
+    这一步永远不抛(取消除外):它的存在前提就是「不能再拖垮整单」。"""
+    base = os.path.basename(job)
+    state = generation_pipeline.load(job)
+    titles = [str(item.get('title') or '') for item in (state.get('nodes') or [])
+              if str(item.get('id') or '').startswith('chapter_write:')
+              and not str(item.get('id') or '').endswith((':technical_deviation', ':business_deviation'))
+              and str(item.get('title') or '').strip()]
+    parsed = _pipeline_model_file_text(os.path.join(attempt_root, '招标文件_解析版.md'), 3_000_000)
+    budget = max(20000, int(os.environ.get('BIDDOG_PLAN_CONTEXT_CHARS', 120000)))
+    context = _pipeline_plan_context(parsed, budget)
+    request = _pipeline_model_file_text(os.path.join(attempt_root, '你的要求.md'), 6000)
+    candidate = candidate if isinstance(candidate, dict) else {}
+    cand_scores = [str(s.get('requirement') or '') for s in (candidate.get('scoring_points') or [])
+                   if isinstance(s, dict) and s.get('requirement')][:120]
+    cand_risks = [str(r.get('requirement') or '') for r in (candidate.get('risks') or [])
+                  if isinstance(r, dict) and r.get('requirement')][:160]
+    expected_total = _plan_expected_total(parsed)
+    system = (
+        '你是中标狗的响应规划核对员。任务:从招标文件里逐项提取评分点、废标/否决风险、投标文件组成,'
+        '并把每个评分点落到给定的章节标题上。' + PLAN_OUTPUT_CONTRACT +
+        '规则:1) location 只能从「章节目录」里原样照抄一个标题,确实落不到写空字符串;'
+        '2) score 写「N 分」,原文没有分值写「未知」;各项分值合计应等于评分办法总分%s;'
+        '3) gap 写「无」表示招标要求能被章节正文直接响应,有缺口时写清缺什么证据或素材;'
+        '4) 评分点逐项来自评分办法/评标办法/详细评审表,一项不漏,也不编造;'
+        '5) risks 按初步评审/资格审查/形式评审/响应性评审/否决条款逐行提取,每行一条;'
+        '6) 本地索引候选只供参考,可增删改。不要输出章节正文,不要解释。'
+        % ((',本文件识别到总分 %d 分' % expected_total) if expected_total else ''))
+    user = ('# 章节目录(location 只能用这些标题)\n'
+            + '\n'.join('%d. %s' % (index, title) for index, title in enumerate(titles, 1))
+            + '\n\n# 本地索引候选(仅供核对,可增删改)\n## 评分相关条款\n'
+            + '\n'.join('- ' + line for line in cand_scores)
+            + '\n## 风险相关条款\n' + '\n'.join('- ' + line for line in cand_risks)
+            + (('\n\n# 用户补充要求\n' + request) if request.strip() else '')
+            + '\n\n# 招标文件解析版(节选)\n' + context)
+    payload = {'model': model, 'stream': False,
+               'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
+               'max_tokens': max(1200, min(8000, int(os.environ.get('BIDDOG_PLAN_MAX_TOKENS', 3200)))),
+               'temperature': 0}
+    emit(job, {'type': 'worklog',
+               'lines': ['响应规划:本地索引 %d 条评分候选、%d 条风险候选,正在请模型逐项核对与落位'
+                         % (len(cand_scores), len(cand_risks))]})
+    reason = ''
+    hb_stop = _start_node_heartbeat(job, node, '模型核对评分点与落位中')
+    try:
+        for attempt in range(1, PLAN_MODEL_TRIES + 1):
+            if _cancel_requested(base):
+                raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+            compact = None
+            try:
+                try:
+                    response = _openai_stream_req(
+                        up['base_url'], up['api_key'], payload,
+                        idle_timeout=float(os.environ.get('BIDDOG_STREAM_IDLE_SECONDS', 90)),
+                        total_cap=float(os.environ.get('BIDDOG_MODEL_NODE_TOTAL_SECONDS', 1800)),
+                        verify=up.get('verify_ssl', True),
+                        cancel_check=lambda: _cancel_requested(base))
+                except _StreamCancelled:
+                    raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
+                except urllib.error.HTTPError as exc:
+                    if exc.code not in (400, 404, 405, 422): raise
+                    response = _openai_req(up['base_url'], up['api_key'], '/chat/completions', payload,
+                                           timeout=float(os.environ.get('BIDDOG_MODEL_NODE_TIMEOUT_SECONDS', 240)),
+                                           verify=up.get('verify_ssl', True))
+                _record_model_usage(job, model, payload, response)
+                choice = ((response.get('choices') or [{}])[0] if isinstance(response, dict) else {}) or {}
+                content = ((choice.get('message') or {}).get('content') if isinstance(choice, dict) else '') or ''
+                compact = _pipeline_normalize_plan(_pipeline_json_object(content), titles, candidate)
+                if not compact:
+                    reason = '模型返回 %d 字,未形成可用的规划 JSON' % len(str(content))
+            except generation_pipeline.NodeExecutionError:
+                raise
+            except urllib.error.HTTPError as exc:
+                reason = 'HTTP %s %s' % (exc.code, _http_error_detail(exc, (up.get('api_key'),), 160))
+            except Exception as exc:
+                reason = net_hint(exc, (up.get('api_key'),))[:160]
+            if compact:
+                notes = []
+                total = _plan_score_sum(item['score'] for item in compact['scoring_points'])
+                if expected_total and total and abs(total - expected_total) > max(5, expected_total * 0.1):
+                    notes.append('分值合计 %s 分,与评分办法总分 %d 分不一致,提交前请人工核对评分表'
+                                 % (_fmt_num(total), expected_total))
+                    append_diagnostic(job, 'plan_score_total_mismatch', notes[-1], level='warning',
+                                      node_id=node.get('id'), model=model)
+                located = sum(1 for item in compact['scoring_points'] if item['location'])
+                summary = '评分点 %d 项(已落位 %d)、废标风险 %d 条' % (
+                    len(compact['scoring_points']), located, len(compact['risks']))
+                append_diagnostic(job, 'plan_model_checked', summary, level='info',
+                                  node_id=node.get('id'), model=model)
+                emit(job, {'type': 'worklog', 'lines': ['响应规划:模型核对完成,' + summary
+                                                          + (';' + notes[0] if notes else '')]})
+                return {'compact': compact, 'notes': notes}
+            if attempt < PLAN_MODEL_TRIES:
+                for _ in range(5):
+                    if _cancel_requested(base): break
+                    time.sleep(1)
+    finally:
+        hb_stop.set()
+    append_diagnostic(job, 'plan_model_fallback',
+                      '模型核对未成功(%s),沿用本地索引;评分点覆盖按候选显示' % (reason or '未知原因'),
+                      level='warning', node_id=node.get('id'), model=model)
+    emit(job, {'type': 'worklog',
+               'lines': ['响应规划:模型核对未成功(%s),沿用本地索引,评分点覆盖将按候选显示'
+                         % (reason or '未知原因')[:80]]})
+    return None
 
 
 def _pipeline_complete_truncated_markdown(content, min_chars=0):
@@ -3933,6 +4409,7 @@ def _openai_stream_req(base, key, payload, idle_timeout=90, total_cap=1800,
         except Exception:
             continue
         parts, finish, started = [], '', time.time()
+        usage_seen = None
         try:
             with _retry(lambda: urllib.request.urlopen(req, timeout=idle_timeout, context=ctx)) as r:
                 for raw in r:
@@ -3951,9 +4428,11 @@ def _openai_stream_req(base, key, payload, idle_timeout=90, total_cap=1800,
                         parts.append(str(delta['content']))
                     if isinstance(ch, dict) and ch.get('finish_reason'):
                         finish = str(ch['finish_reason'])
+                    if isinstance(ev, dict) and isinstance(ev.get('usage'), dict):
+                        usage_seen = ev['usage']        # 支持 stream 末尾带 usage 的网关:记真值
             return {'choices': [{'message': {'content': ''.join(parts)},
                                  'finish_reason': finish or ('stop' if parts else '')}],
-                    'model': p2.get('model')}
+                    'model': p2.get('model'), 'usage': usage_seen}
         except _StreamCancelled:
             raise
         except urllib.error.HTTPError:
@@ -3973,6 +4452,69 @@ def _openai_stream_req(base, key, payload, idle_timeout=90, total_cap=1800,
             raise
     raise last
 
+
+# ---------- 用量记账:流水线每次模型调用都记进 usage.json ----------
+# 以前只有 OpenCode 通道从会话消息里汇总 usage,检查点流水线一次都不记——「本次用量」四格永远是「—」。
+# 网关返回 usage 就记真值;没返回就按字数估(中文 ≈ 1 token / 1.5 字),并标 estimated,看板上带 ≈。
+USAGE_CHARS_PER_TOKEN = 1.5
+
+
+def _estimate_tokens(text_or_chars):
+    chars = text_or_chars if isinstance(text_or_chars, (int, float)) else len(str(text_or_chars or ''))
+    return int(chars / USAGE_CHARS_PER_TOKEN + 0.5)
+
+
+def _record_model_usage(job, model, payload, response):
+    try:
+        usage = response.get('usage') if isinstance(response, dict) else None
+        usage = usage if isinstance(usage, dict) else {}
+        prompt_chars = sum(len(str(m.get('content') or '')) for m in (payload or {}).get('messages') or [] if isinstance(m, dict))
+        choices = response.get('choices') if isinstance(response, dict) else None
+        content = ''
+        if choices and isinstance(choices[0], dict):
+            content = str(((choices[0].get('message') or {}).get('content')) or '')
+        real = bool(usage.get('prompt_tokens') or usage.get('completion_tokens') or usage.get('input_tokens') or usage.get('output_tokens'))
+        it = int(usage.get('prompt_tokens') or usage.get('input_tokens') or 0) if real else _estimate_tokens(prompt_chars)
+        ot = int(usage.get('completion_tokens') or usage.get('output_tokens') or 0) if real else _estimate_tokens(content)
+        path = os.path.join(job, 'usage.json')
+        with _json_lock(path):
+            raw = read_json(path, {})
+            raw = raw if isinstance(raw, dict) else {}
+            raw['calls'] = int(raw.get('calls') or 0) + 1
+            raw['input_tokens'] = int(raw.get('input_tokens') or 0) + it
+            raw['output_tokens'] = int(raw.get('output_tokens') or 0) + ot
+            raw['total_tokens'] = raw['input_tokens'] + raw['output_tokens']
+            raw['estimated_calls'] = int(raw.get('estimated_calls') or 0) + (0 if real else 1)
+            raw['estimated'] = raw['estimated_calls'] > 0
+            raw['model'] = str(model or raw.get('model') or '')
+            by_model = raw.get('by_model') if isinstance(raw.get('by_model'), dict) else {}
+            slot = by_model.get(str(model or '')) if isinstance(by_model.get(str(model or '')), dict) else {}
+            by_model[str(model or '')] = {'calls': int(slot.get('calls') or 0) + 1,
+                                          'input_tokens': int(slot.get('input_tokens') or 0) + it,
+                                          'output_tokens': int(slot.get('output_tokens') or 0) + ot}
+            raw['by_model'] = by_model
+            raw['updated_at'] = now()
+            write_json(path, raw)
+    except Exception:
+        pass        # 记账绝不能把生成拖垮
+
+
+def _job_repeat_hits(job):
+    """这一单撞过几次复读循环:章节门禁拦下的(诊断里带「复读」)+ 成品质检报告点名的。"""
+    hits = 0
+    try:
+        for line in open(os.path.join(job, 'diagnostics.jsonl'), encoding='utf-8', errors='ignore').read().splitlines():
+            if '复读' in line or 'degenerate' in line: hits += 1
+    except OSError:
+        pass
+    try:
+        report = open(os.path.join(job, '成品质检报告.md'), encoding='utf-8', errors='ignore').read()
+        hits += len(re.findall(r'复读 \d+ 遍|同一段落重复', report))
+    except OSError:
+        pass
+    return hits
+
+
 def _pipeline_model_runner(job, node, prompt, model):
     """Run a bounded node as one non-stream completion, then atomically promote files.
 
@@ -3990,7 +4532,7 @@ def _pipeline_model_runner(job, node, prompt, model):
         raise generation_pipeline.NodeExecutionError('model_auth_missing', retryable=False)
     _pipeline_validate_execution_contract(job, up)
     attempt_root = generation_pipeline.attempt_directory(job, node)
-    _pipeline_copy_inputs(job, node, str(attempt_root))
+    ordered_inputs = _pipeline_copy_inputs(job, node, str(attempt_root))
     skill_path = os.path.join(str(attempt_root), 'SKILL.md')
     if not os.path.isfile(skill_path):
         raise generation_pipeline.NodeExecutionError('skill_contract_missing', retryable=False)
@@ -4000,23 +4542,35 @@ def _pipeline_model_runner(job, node, prompt, model):
     skill_contract = _pipeline_skill_contract(skill_text)
 
     budget = max(30000, int(os.environ.get('BIDDOG_PIPELINE_CONTEXT_CHARS', 140000)))
-    sections = []
+    # 喂给模型的顺序 = _pipeline_copy_inputs 排好的顺序(声明输入 → 规范素材 → 相关章节模板),
+    # 不再按文件名字母序:以前素材一多,招标解析版都可能被排在后面截掉。
+    candidates = list(ordered_inputs or [])
     for parent, dirs, files in os.walk(str(attempt_root), followlinks=False):
         dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(parent, name))]
         for name in sorted(files):
-            path = os.path.join(parent, name)
-            if os.path.realpath(path) == os.path.realpath(skill_path) or os.path.islink(path): continue
-            if budget <= 0: break
-            text = _pipeline_model_file_text(path, min(budget, 60000))
-            if not text.strip(): continue
-            rel = os.path.relpath(path, str(attempt_root)).replace(os.sep, '/')
-            sections.append('## 输入文件：%s\n%s' % (rel, text))
-            budget -= len(text)
+            rel = os.path.relpath(os.path.join(parent, name), str(attempt_root)).replace(os.sep, '/')
+            if rel not in candidates: candidates.append(rel)
+    sections = []
+    for rel in candidates:
+        path = os.path.join(str(attempt_root), rel)
+        if not os.path.isfile(path) or os.path.islink(path): continue
+        if os.path.realpath(path) == os.path.realpath(skill_path): continue
+        if budget <= 0: break
+        text = _pipeline_model_file_text(path, min(budget, 60000))
+        if not text.strip(): continue
+        sections.append('## 输入文件：%s\n%s' % (rel, text))
+        budget -= len(text)
 
     outputs = [os.path.basename(str(name)) for name in (node.get('outputs') or [])]
     is_plan = node.get('id') == 'response_plan'
     if is_plan:
-        _pipeline_local_response_plan(job, str(attempt_root))
+        # 先写本地索引(保底,永远先落盘);模型只做核对,核对不成也不拖垮整单。
+        candidate = _pipeline_local_response_plan(job, str(attempt_root))
+        if _plan_model_enabled():
+            checked = _pipeline_model_plan(job, node, model, up, str(attempt_root), candidate)
+            if checked:
+                _pipeline_write_response_plan(job, str(attempt_root), checked['compact'],
+                                              source='model', model=model, notes=checked['notes'])
         try:
             with RUNNING_LOCK:
                 owner = RUNNING.get(base)
@@ -4031,23 +4585,26 @@ def _pipeline_model_runner(job, node, prompt, model):
     single_markdown = bool(not is_plan and len(outputs) == 1
                            and os.path.splitext(outputs[0])[1].lower() in ('.md', '.txt'))
     output_contract = (
-        '只返回严格 JSON：{"composition":["文件组成"],'
-        '"scoring_points":[{"requirement":"原要求","score":"分值或未知",'
-        '"location":"建议响应章节","evidence":"所需证据","gap":"缺口"}],'
-        '"risks":[{"category":"类别","requirement":"要求","risk":"风险",'
-        '"action":"提交前动作"}],"chapter_guidance":[{"title":"模板章节原名",'
-        '"basis":["招标依据"],"scoring_points":["评分点"],'
-        '"material_slots":["所需素材"]}]}。每类最多 20 项，不要返回章节正文。'
+        PLAN_OUTPUT_CONTRACT
         if is_plan else (
         '只返回文件“%s”的完整 Markdown 正文，不要 JSON，不要代码围栏，不要解释。' % outputs[0]
         if single_markdown else
         '只返回一个严格 JSON 对象，格式为 {"files":{"文件名":"完整文件正文"}}。'
         'files 必须且只能包含：%s。Markdown 文件值必须是完整 Markdown 字符串；'
         'JSON 文件值可以是对象。' % '、'.join(outputs)))
-    system = (
-        '你是中标狗的有界投标文件节点。以下 SKILL 是本轮必须遵守的写作契约。\n'
-        '<SKILL>\n%s\n</SKILL>\n不要调用工具，不要解释过程。%s'
-        '未知客户事实必须标记〔需补充〕，不得编造。' % (skill_contract, output_contract))
+    node_id_text = str(node.get('id') or '')
+    is_prose_chapter = (node_id_text.startswith('chapter_write:')
+                        and not node_id_text.endswith((':technical_deviation', ':business_deviation')))
+    if is_prose_chapter:
+        # 论述章:用结构化契约(prompts.py)替代被关键词正则打碎的 SKILL 摘要,
+        # 并把其他章已用过的小标题传进去;SKILL 只留事实边界那一小段。
+        system = (prompts.chapter_contract(node.get('title'), _used_chapter_headings(job, node))
+                  + '\n\n<SKILL 事实边界摘要>\n%s\n</SKILL 事实边界摘要>\n%s' % (skill_contract[:2500], output_contract))
+    else:
+        system = (
+            '你是中标狗的有界投标文件节点。以下 SKILL 是本轮必须遵守的写作契约。\n'
+            '<SKILL>\n%s\n</SKILL>\n不要调用工具，不要解释过程。%s'
+            '未知客户事实必须标记〔需补充〕，不得编造。' % (skill_contract, output_contract))
     user = _pipeline_direct_task(job, node) + '\n\n# 已由引擎确定性读取的输入\n' + '\n\n'.join(sections)
     chapter_tokens = max(1200, min(8000, int(
         os.environ.get('BIDDOG_CHAPTER_MAX_TOKENS', 4800))))
@@ -4056,21 +4613,9 @@ def _pipeline_model_runner(job, node, prompt, model):
         'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
         'max_tokens': 3200 if is_plan else (
             2500 if node.get('id') == 'quality_review' else chapter_tokens),
-        'temperature': 0.2,
     }
-    # 生成期间的心跳:一次模型调用可长达数分钟且零事件,以前「静默 180 秒」就被
-    # 误判成停滞(「模型响应偏慢」),用户读作中断。每 30 秒摸一次节点活动时间
-    # 并发一行台词,界面上能看到它真的在干活。
-    hb_stop = threading.Event()
-    def _heartbeat():
-        waited = 0
-        while not hb_stop.wait(30):
-            waited += 30
-            try: generation_pipeline.touch_node(job, node.get('id'))
-            except Exception: pass
-            emit(job, {'type': 'worklog',
-                       'lines': ['「%s」模型生成中,已进行 %d 秒(连接正常)' % (node.get('title') or node.get('id'), waited)]})
-    threading.Thread(target=_heartbeat, daemon=True).start()
+    _apply_generation_params(payload, _generation_params(conf, job))
+    hb_stop = _start_node_heartbeat(job, node)
     try:
         try:
             # 流式优先:非流式要等整段生成完才有首字节,60-100 秒空闲就被网关掐线。
@@ -4110,6 +4655,7 @@ def _pipeline_model_runner(job, node, prompt, model):
     if _cancel_requested(base):
         raise generation_pipeline.NodeExecutionError('cancelled', retryable=False)
     mark_connection_check(job, True, '连接正常,模型按节点生成中')
+    _record_model_usage(job, model, payload, response)
     choices = response.get('choices') if isinstance(response, dict) else None
     if not choices:
         detail = ((response.get('error') or {}).get('message')
@@ -4197,15 +4743,7 @@ def _pipeline_model_runner(job, node, prompt, model):
         else:
             raise generation_pipeline.NodeExecutionError('model_output_truncated', retryable=True,
                                                            detail='finish_reason=%s' % finish)
-    if is_plan:
-        envelope = _pipeline_json_object(content)
-        if not isinstance(envelope, dict):
-            append_diagnostic(job, 'model_output_invalid_json',
-                              '返回 %d 字，未形成节点 JSON' % len(str(content or '')),
-                              level='warning', node_id=node.get('id'), model=model)
-            raise generation_pipeline.NodeExecutionError('model_output_invalid_json', retryable=True)
-        _pipeline_write_response_plan(job, str(attempt_root), envelope)
-    elif single_markdown:
+    if single_markdown:
         text = str(content or '').strip()
         if text.startswith('```'):
             text = re.sub(r'^```(?:markdown|md)?\s*', '', text, flags=re.I)
@@ -4292,14 +4830,12 @@ def _pipeline_prompt(job, node):
             '`废标风险清单.md` 和素材目录。\n'
             '本章规划依据：%s。对应评分点：%s。素材槽位：%s。'
             '前置章节产物：%s，必须读取并保持一致。\n'
-            '唯一输出：`%s`。正文应逐项响应并标注证据来源；素材缺失写〔需补充〕，至少 800 字。' %
+            '唯一输出：`%s`。正文应逐项响应并标注证据来源；素材缺失写〔需补充〕，论述章不少于 %d 个中文字符。' %
             (node.get('title') or '本章', basis, scores, slots, dependency_files,
-             outputs[0] if outputs else '章节.md'))
+             outputs[0] if outputs else '章节.md', prompts.CHAPTER_TARGET_CHARS))
     if node_id == 'quality_review':
         output = outputs[0] if outputs else '模型复核报告.md'
-        return common + (
-            '任务：复核 `投标文件_整册.md` 对评分点、废标项、事实依据和重复内容的覆盖。\n'
-            '唯一输出：`%s`。只给复核结论和明确修订建议，不改正文。' % output)
+        return common + ('任务：%s\n唯一输出：`%s`。' % (prompts.review_task(), output))
     raise generation_pipeline.PipelineError('没有该节点的模型提示：%s' % node_id)
 
 
@@ -4314,6 +4850,8 @@ def _pipeline_event(job, event, node):
             emit(job, {'type': 'artifact', 'name': name})
     elif event == 'retry':
         error_code = str(node.get('error_code') or '')
+        if error_code == 'model_rate_limited':
+            PIPELINE_THROTTLED.add(os.path.basename(job))
         if error_code == 'model_output_truncated':
             reason = '模型输出过长，已缩小本节范围并重试'
         elif error_code in ('model_output_invalid_json', 'model_output_contract_mismatch',
@@ -4327,6 +4865,148 @@ def _pipeline_event(job, event, node):
                    'text': '“%s”%s（已尝试 %d/%d）；前面成果已保留。' %
                            (title, reason, int(node.get('attempt') or 0),
                             int(node.get('max_attempts') or 3))})
+
+
+# ---------- 分册输出:技术标 / 商务标 / 报价标 ----------
+# SKILL 支持分册、流水线以前只出整册。开了 volumes 的任务,汇总时按章节标题归册另出三份正文
+# (空册不出),Word 导出对每份正文各出一个 docx;整册照常,仍是主交付。
+VOLUME_ORDER = ('技术标', '商务标', '报价标')
+_VOL_PRICE_RX = re.compile(r'报价|价格|费用|开标一览|投标函|分项报价|价格表')
+_VOL_BUSINESS_RX = re.compile(r'商务|资格|资质|业绩|证明|承诺|合同|付款|工期|质保|供货|保证金|信誉|财务|法定代表人|授权')
+
+
+def _volume_of(title, output=''):
+    text = str(title or '') + ' ' + str(output or '')
+    if 'technical_deviation' in text or ('技术' in text and '偏离' in text): return '技术标'
+    if 'business_deviation' in text or ('商务' in text and '偏离' in text): return '商务标'
+    if _VOL_PRICE_RX.search(text): return '报价标'
+    if _VOL_BUSINESS_RX.search(text): return '商务标'
+    return '技术标'
+
+
+def _build_volumes(job, chapter_outputs):
+    """返回 {册名: 正文 md};只在任务开了 volumes 时被调用。"""
+    try: state = generation_pipeline.load(job)
+    except Exception: state = {}
+    titles = {}
+    for node in state.get('nodes') or []:
+        outs = node.get('outputs') or []
+        if outs: titles[outs[0]] = (str(node.get('title') or ''), str(node.get('id') or ''))
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    name = str(meta.get('name') or '投标文件')
+    buckets = {vol: [] for vol in VOLUME_ORDER}
+    for output in chapter_outputs:
+        try: text = open(os.path.join(job, output), encoding='utf-8', errors='ignore').read().strip()
+        except OSError: continue
+        if not text: continue
+        title, node_id = titles.get(output, (output, ''))
+        buckets[_volume_of(title, node_id)].append(text)
+    volumes = {}
+    for vol in VOLUME_ORDER:
+        if not buckets[vol]: continue
+        head = '# %s · %s\n\n> 本册由整册按章节归属拆出;评标索引与补料清单见整册。' % (name, vol)
+        volumes[vol] = '\n\n---\n\n'.join([head] + buckets[vol]) + '\n'
+    return volumes
+
+
+def _write_text_atomic(path, text):
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as handle: handle.write(text)
+    os.replace(tmp, path)
+
+
+def _plan_chapter_titles(job):
+    try: state = generation_pipeline.load(job)
+    except Exception: return []
+    return [str(n.get('title') or '') for n in (state.get('nodes') or [])
+            if str(n.get('id') or '').startswith('chapter_write:') and str(n.get('title') or '').strip()]
+
+
+def _build_scoring_index(job):
+    """《评标索引》:评委按它逐项翻——每个评分点对应到具体章节。只有规划经模型核对过才有资格
+    出这张表:本地索引的「落位」是一句常量,印出来就是一张全是〔需补充〕的表。"""
+    plan = read_json(os.path.join(job, 'response_plan.json'), {})
+    if not isinstance(plan, dict) or plan.get('source') != 'model': return ''
+    rows = _md_table_rows(os.path.join(job, '评分点响应矩阵.md'), 6)
+    if not rows: return ''
+    titles = _plan_chapter_titles(job)
+    lines = ['# 评标索引', '',
+             '> 评委按本表逐项翻阅:每个评分点对应到具体章节;页码以最终 Word 目录为准。', '',
+             '| 序号 | 评分项 | 分值 | 评估标准 / 证据 | 对应章节 |', '|---|---|---:|---|---|']
+    for index, row in enumerate(rows, 1):
+        requirement, score, location, evidence = row[1], row[2], row[3], row[4]
+        matched = _plan_match_title(location, titles) or ('' if '需补充' in location else location.strip())
+        lines.append('| %d | %s | %s | %s | %s |' % (
+            index, _pipeline_cell(requirement), _pipeline_cell(score), _pipeline_cell(evidence),
+            _pipeline_cell(matched)))
+    total = _plan_score_sum(row[2] for row in rows)
+    if total: lines.extend(['', '评分点合计 %s 分。' % _fmt_num(total)])
+    return '\n'.join(lines) + '\n'
+
+
+_SUPPLEMENT_RX = re.compile(r'〔(需补充|此处粘贴|参数待核实|配图建议|配图待人工)[:：]?([^〕]{0,120})〕')
+
+
+def _build_supplement_list(job, chapter_outputs):
+    """《投标人补料清单》:正文里的占位(〔需补充〕〔此处粘贴〕〔参数待核实〕〔配图建议〕)按章汇总,
+    加上废标风险清单里的提交前动作,再加固定的人工确认节点。自动初稿 ≠ 直接可投,这张表就是差距清单。"""
+    items = []
+    for name in chapter_outputs:
+        try: text = open(os.path.join(job, name), encoding='utf-8', errors='ignore').read()
+        except OSError: continue
+        head = re.search(r'^#\s+(.+?)\s*$', text, re.M)
+        chapter = head.group(1).strip() if head else os.path.splitext(name)[0]
+        seen = set()
+        for kind, detail in _SUPPLEMENT_RX.findall(text):
+            key = (kind, detail.strip())
+            if key in seen: continue
+            seen.add(key)
+            items.append((chapter, kind, detail.strip() or '—'))
+    risks = _md_table_rows(os.path.join(job, '废标风险清单.md'), 5)
+    lines = ['# 投标人补料清单', '',
+             '> 自动初稿 ≠ 直接可投。下表是正文里留下的占位与提交前必办事项,逐条处理后再提交。', '',
+             '## 一、正文占位(按章节)', '',
+             '| 序号 | 章节 | 类型 | 内容 | 状态 |', '|---|---|---|---|---|']
+    if items:
+        for index, (chapter, kind, detail) in enumerate(items[:200], 1):
+            lines.append('| %d | %s | %s | %s | 待处理 |' % (index, _pipeline_cell(chapter), kind, _pipeline_cell(detail)))
+    else:
+        lines.append('| — | — | — | 正文未留占位 | — |')
+    lines.extend(['', '## 二、废标风险对应动作', '',
+                  '| 序号 | 类别 | 招标要求 | 提交前动作 | 状态 |', '|---|---|---|---|---|'])
+    if risks:
+        for index, row in enumerate(risks[:80], 1):
+            lines.append('| %d | %s | %s | %s | 待核对 |' % (
+                index, _pipeline_cell(row[1]), _pipeline_cell(row[2]), _pipeline_cell(row[4])))
+    else:
+        lines.append('| — | — | 未生成废标风险清单 | 人工对照招标原文核对 | — |')
+    lines.extend(['', '## 三、人工确认节点(不得代填)', '',
+                  '- 投标人名称、报价、资质证书有效期、项目案例、签章/装订/密封/份数要求。',
+                  '- 所有〔需补充〕项完成后,方可作为正式投标文件提交。'])
+    return '\n'.join(lines) + '\n'
+
+
+def _review_report_gaps(job):
+    """把标准模式的《模型复核报告.md》解析成出件前检查里能点的条目:必办 → 红(挂「重做这一章」),
+    建议 → 黄。以前这份报告只是右栏里一个文件,标准模式多花的那份钱没有闭环。"""
+    path = os.path.join(job, '模型复核报告.md')
+    if not os.path.isfile(path): return []
+    titles = _plan_chapter_titles(job)
+    gaps = []
+    for row in _md_table_rows(path, 4)[:40]:
+        chapter, problem, level, advice = row[0].strip(), row[1].strip(), row[2].strip(), row[3].strip()
+        if chapter == '章节' or problem in ('', '无', '—', '-', '无问题'): continue
+        matched = _plan_match_title(chapter, titles)
+        actions = []
+        if matched:
+            actions.append({'act': 'redo', 'label': '重做这一章',
+                            'param': '重写章节「%s」:%s;%s' % (matched, problem[:120], advice[:200])})
+        actions.append({'act': 'open_artifact', 'label': '打开复核报告', 'file': '模型复核报告.md'})
+        gaps.append({'level': 'red' if '必办' in level else 'yellow',
+                     'title': '复核:%s' % problem[:80],
+                     'detail': (('%s · ' % chapter) if chapter else '') + (advice[:200] or '见复核报告'),
+                     'actions': actions})
+    return gaps
 
 
 def _pipeline_complete_local(job, node_id, digest, action, *, retryable=True):
@@ -4389,7 +5069,15 @@ def _parse_confirm_summary(job):
     qual = find_line(r'资质.{0,30}(等级|要求|承包|资格)') or find_line(r'(施工总承包|安全生产许可证)') or unknown
     scoring_rows = _md_table_rows(os.path.join(job, '评分点响应矩阵.md'), 6)
     method_line = find_line(r'(综合评估法|综合评分法|评分办法|经评审的最低投标价)')
-    scoring = ('共 %d 个评分点' % len(scoring_rows)) + ((' · ' + method_line) if method_line else '')
+    plan = read_json(os.path.join(job, 'response_plan.json'), {})
+    if isinstance(plan, dict) and plan.get('source') == 'local':
+        # 本地索引只是按关键词挑出来的候选行,数出来的不是「评分点数」,别把它说成评分点。
+        # 没有 response_plan.json 的是旧版/智能体路径的任务,矩阵本来就是模型写的,照旧。
+        scoring = '识别到 %d 处评分相关条款(候选,待模型核对)' % len(scoring_rows)
+    else:
+        total = _plan_score_sum(row[2] for row in scoring_rows)
+        scoring = ('共 %d 个评分点' % len(scoring_rows)) + ((' · 合计 %s 分' % _fmt_num(total)) if total else '')
+    scoring += (' · ' + method_line) if method_line else ''
     veto_rows = _md_table_rows(os.path.join(job, '废标风险清单.md'), 5)
     cats = []
     for row in veto_rows:
@@ -4488,37 +5176,66 @@ def generation_pipeline_worker(job):
                 on_event=lambda event, current: _pipeline_event(job, event, current))
         # 每次恢复都从 DAG 根节点按序校验摘要；摘要未变的 done 节点会立即复用，
         # 依赖产物变化时下游才会被精确重做。
+        # 持续 N 路在飞(默认 4):一章写完立刻补位,而不是两章一批互相等;撞到限流降到 2 路。
+        PIPELINE_THROTTLED.discard(base)
         completed_ids = set()
         remaining = {node['id']: node for node in chapter_nodes}
-        while remaining:
-            ready = [node for node in remaining.values()
-                     if set(node.get('dependencies') or []) <= completed_ids]
-            if not ready:
-                raise generation_pipeline.PipelineError('章节依赖无法继续执行')
-            batch = ready[:2]
-            with ThreadPoolExecutor(max_workers=len(batch)) as pool:
-                futures = {pool.submit(write_chapter, node): node for node in batch}
-                for future in as_completed(futures):
-                    future.result()
-                    node = futures[future]
-                    completed_ids.add(node['id'])
+        running = {}
+        with ThreadPoolExecutor(max_workers=_chapter_parallelism()) as pool:
+            while remaining or running:
+                in_flight = {item['id'] for item in running.values()}
+                ready = [node for node in remaining.values()
+                         if set(node.get('dependencies') or []) <= completed_ids
+                         and node['id'] not in in_flight]
+                if not ready and not running:
+                    raise generation_pipeline.PipelineError('章节依赖无法继续执行')
+                for node in ready:
+                    if len(running) >= _chapter_slots(base): break
                     remaining.pop(node['id'], None)
+                    running[pool.submit(write_chapter, node)] = node
+                if not running:
+                    continue
+                done, _pending = wait(list(running), return_when=FIRST_COMPLETED)
+                for future in done:
+                    node = running.pop(future)
+                    future.result()
+                    completed_ids.add(node['id'])
 
         emit(job, {'type': 'progress', 'stage': '各章已完成，正在汇总整册',
                    'pct': 78, 'step': 9, 'total': 12})
         state = generation_pipeline.load(job)
         chapter_outputs = [node['outputs'][0] for node in state.get('nodes') or []
                            if str(node.get('id') or '').startswith('chapter_write:')]
-        assemble_digest = generation_pipeline.file_digest([os.path.join(job, name) for name in chapter_outputs])
+        assemble_digest = generation_pipeline.file_digest(
+            [os.path.join(job, name) for name in chapter_outputs]
+            + [os.path.join(job, name) for name in ('评分点响应矩阵.md', '废标风险清单.md', 'response_plan.json')
+               if os.path.isfile(os.path.join(job, name))])
         def assemble(_node):
             pieces = []
             for name in chapter_outputs:
                 text = open(os.path.join(job, name), encoding='utf-8', errors='ignore').read().strip()
                 if text: pieces.append(text)
+            # 整册级产物(SKILL 第 4.5/5 步要求、流水线以前没有):评标索引放整册最前,
+            # 补料清单放最后;都另存一份单独文件,右栏能直接点开。
+            index_md = _build_scoring_index(job)
+            if index_md:
+                _write_text_atomic(os.path.join(job, '评标索引.md'), index_md)
+                emit(job, {'type': 'artifact', 'name': '评标索引.md'})
+                pieces.insert(0, index_md.strip())
+            supplement_md = _build_supplement_list(job, chapter_outputs)
+            if supplement_md:
+                _write_text_atomic(os.path.join(job, '投标人补料清单.md'), supplement_md)
+                emit(job, {'type': 'artifact', 'name': '投标人补料清单.md'})
+                pieces.append(supplement_md.strip())
             target = os.path.join(job, '投标文件_整册.md')
             tmp = target + '.tmp'
             open(tmp, 'w', encoding='utf-8').write('\n\n---\n\n'.join(pieces) + '\n')
             os.replace(tmp, target)
+            # 分册:按章节归属另出技术标 / 商务标 / 报价标(空册不出);Word 导出对每份正文各出一个 docx
+            if read_json(os.path.join(job, '任务.json'), {}).get('volumes'):
+                for vol, text in _build_volumes(job, chapter_outputs).items():
+                    _write_text_atomic(os.path.join(job, '投标文件_%s.md' % vol), text)
+                    emit(job, {'type': 'artifact', 'name': '投标文件_%s.md' % vol})
         _pipeline_complete_local(job, 'assemble', assemble_digest, assemble)
 
         state = generation_pipeline.load(job)
@@ -5285,7 +6002,8 @@ def agent_status():
             's2_defaults': {'base_url': S2_DEFAULT_BASE, 'model': S2_DEFAULT_MODEL},
             's2_borrowed': (not (eng.get('s2_key') or '').strip()) and bool(s2_conf(conf)['api_key']),
             'codex_bundled': bool(bundled_codex()), 'opencode_bundled': bool(bundled_cli('opencode-cli')),
-            's2_model_effective': s2_conf(conf)['model']}
+            's2_model_effective': s2_conf(conf)['model'],
+            'generation_params': _generation_params(conf)}
 
 def config_locked_jobs():
     """只让正在执行或暂停的会话锁住全局模型。
@@ -5331,19 +6049,25 @@ async def set_agent(req: Request):
                       's2_base_url': body.get('s2_base_url', ''), 's2_model': body.get('s2_model', ''),
                       # Key 留空 = 沿用已存的(页面不回显 Key,不能因为"没传"就把它清掉)
                       's2_key': (body.get('s2_key') or '').strip() or old.get('s2_key', ''),
-                      's2_wire': body.get('s2_wire', 'auto'), 's2_verify_ssl': body.get('s2_verify_ssl', True)}
+                      's2_wire': body.get('s2_wire', 'auto'), 's2_verify_ssl': body.get('s2_verify_ssl', True),
+                      # 生成参数:传了就按传的(越界钳到范围内),没传沿用已存的
+                      'generation_params': (_normalize_generation_params(body.get('generation_params'))
+                                            if body.get('generation_params') is not None
+                                            else (old.get('generation_params') or {}))}
     if body.get('cmd_clear'): new_engine['cmd'] = ''
     if body.get('env_clear'): new_engine['env'] = ''
     if body.get('s2_key_clear'): new_engine['s2_key'] = ''
     candidate = dict(conf); candidate['engine'] = new_engine
     new_fingerprint = oc_config_fingerprint(candidate)
-    if config_locked_jobs() and new_fingerprint != old_fingerprint:
+    params_changed = _generation_params(candidate) != _generation_params(conf)
+    if config_locked_jobs() and (new_fingerprint != old_fingerprint or params_changed):
         return JSONResponse({'ok': False,
-                             'error': '还有任务正在生成。为避免同一任务中途换模型，请等任务结束或先停止任务再切换模式。'}, 409)
+                             'error': '还有任务正在生成。为避免同一任务中途换模型或参数，请等任务结束或先停止任务再切换。'}, 409)
     conf['engine'] = new_engine
     write_json(conf_path(), conf)
     if new_fingerprint != old_fingerprint: invalidate_oc_runtime()
-    return {'ok': True, 's2_model_effective': s2_conf(conf)['model']}
+    return {'ok': True, 's2_model_effective': s2_conf(conf)['model'],
+            'generation_params': _generation_params(conf)}
 
 @app.post('/v1/agent/test')
 def agent_test():
@@ -5483,7 +6207,7 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
                      prompt: str = Form(''), name: str = Form(''), mock: str = Form('auto'),
                      start: str = Form('1'), template_id: str = Form(''),
                      project_id: str = Form(''), save_to_assets: str = Form('1'),
-                     confirm_parse: str = Form('0')):
+                     confirm_parse: str = Form('0'), volumes: str = Form('0')):
     """建任务(向导版约定):
     - tender = 招标文件(主件,永远落任务根目录——绝不进 素材/,素材库污染是内容变薄的根源之一)
     - files + relpaths = 参考素材(多文件/整文件夹,保留目录结构,落 素材/;相对路径做穿越防护)
@@ -5596,6 +6320,7 @@ async def create_job(request: Request, tender: UploadFile = File(None), material
                'template_id': template_id, 'template_snapshot': template_snapshot,
                'template_recommendation': template_recommendation,
                'confirm_parse': (confirm_parse or '0') != '0',
+               'volumes': (volumes or '0') != '0',
                'uploaded_materials': uploaded_materials[:200]})
     write_json(os.path.join(job, 'product.json'),
                {'name': name or tname, 'project_id': str(project_id or '').strip()[:120],
@@ -6635,6 +7360,139 @@ async def export_jobs(req: Request):
                                       'Content-Length': str(len(data)),
                                       'X-Deliverable-Count': str(count)})
 
+@app.get('/v1/usage')
+def usage_dashboard(days: int = 30):
+    """用量看板:按任务 / 模型 / 天汇总 token、费用、耗时、复读命中。数据全部来自本机任务目录。"""
+    days = max(1, min(3650, int(days or 30)))
+    since = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+    jobs, by_model, by_day = [], {}, {}
+    totals = {'jobs': 0, 'calls': 0, 'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0,
+              'estimated_cost': 0.0, 'currency': None, 'elapsed_seconds': 0, 'repeat_hits': 0, 'chapters': 0, 'has_cost': False}
+    root = jobs_dir()
+    for jid in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        job = os.path.join(root, jid)
+        meta = read_json(os.path.join(job, '任务.json'), None)
+        if not isinstance(meta, dict): continue
+        created = str(meta.get('created_at') or '')
+        if created and created < since: continue
+        usage = _job_usage(job, meta)
+        outcome = read_json(os.path.join(job, 'outcome.json'), {})
+        state = job_state(job, meta)
+        elapsed = _job_elapsed(job, state, meta, outcome, _job_last_activity(job, meta, None, outcome)) or 0
+        if elapsed > 12 * 3600: elapsed = 0          # 建完没跑 / 半路丢掉的任务会把墙钟算进来:超过 12 小时视为不可信
+        try: pipeline_nodes = generation_pipeline.load(job).get('nodes') or []
+        except Exception: pipeline_nodes = []
+        chapters = sum(1 for n in pipeline_nodes if str(n.get('id') or '').startswith('chapter_write:')
+                       and not str(n.get('id') or '').endswith(('technical_deviation', 'business_deviation')))
+        repeats = _job_repeat_hits(job)
+        product = product_meta(job, meta)
+        row = {'job_id': jid, 'name': product.get('name') or meta.get('name') or jid, 'created_at': created,
+               'state': state, 'archived': bool(product.get('archived_at')), 'model': usage.get('model') or '',
+               'calls': usage['calls'], 'input_tokens': usage['input_tokens'], 'output_tokens': usage['output_tokens'],
+               'total_tokens': usage['total_tokens'], 'estimated_cost': usage.get('estimated_cost'),
+               'currency': usage.get('currency'), 'estimated': bool(usage.get('estimated')),
+               'elapsed_seconds': int(elapsed or 0), 'chapters': chapters, 'repeat_hits': repeats}
+        jobs.append(row)
+        totals['jobs'] += 1
+        for key in ('calls', 'input_tokens', 'output_tokens', 'total_tokens', 'repeat_hits', 'chapters'):
+            totals[key] += int(row[key] or 0)
+        totals['elapsed_seconds'] += int(elapsed or 0)
+        if row['estimated_cost'] is not None:
+            try:
+                totals['estimated_cost'] += float(row['estimated_cost']); totals['has_cost'] = True
+                totals['currency'] = totals['currency'] or row['currency']
+            except (TypeError, ValueError):
+                pass
+        raw_models = read_json(os.path.join(job, 'usage.json'), {}).get('by_model')
+        model_rows = raw_models if isinstance(raw_models, dict) and raw_models else {row['model']: {
+            'calls': row['calls'], 'input_tokens': row['input_tokens'], 'output_tokens': row['output_tokens']}}
+        for model, slot in model_rows.items():
+            agg = by_model.setdefault(str(model or ''), {'model': str(model or ''), 'jobs': 0, 'calls': 0, 'total_tokens': 0,
+                                                            'estimated_cost': None, 'currency': None, 'repeat_hits': 0, 'chapters': 0})
+            agg['jobs'] += 1; agg['calls'] += int(slot.get('calls') or 0)
+            agg['total_tokens'] += int(slot.get('input_tokens') or 0) + int(slot.get('output_tokens') or 0)
+            agg['repeat_hits'] += repeats; agg['chapters'] += chapters
+            if row['estimated_cost'] is not None and len(model_rows) == 1:
+                try:
+                    agg['estimated_cost'] = float(agg['estimated_cost'] or 0) + float(row['estimated_cost'])
+                    agg['currency'] = agg['currency'] or row['currency']
+                except (TypeError, ValueError):
+                    pass
+        day = created[:10] or '未知'
+        d = by_day.setdefault(day, {'day': day, 'jobs': 0, 'calls': 0, 'total_tokens': 0})
+        d['jobs'] += 1; d['calls'] += row['calls']; d['total_tokens'] += row['total_tokens']
+    by_model = {k: v for k, v in by_model.items() if v['calls']}      # 一次都没调过模型的任务不占一行
+    for agg in by_model.values():
+        agg['repeat_rate'] = round(agg['repeat_hits'] / agg['chapters'] * 100, 1) if agg['chapters'] else None
+    if not totals['has_cost']: totals['estimated_cost'] = None
+    totals.pop('has_cost', None)
+    jobs.sort(key=lambda r: r['created_at'], reverse=True)
+    return {'ok': True, 'days': days, 'since': since, 'totals': totals,
+            'by_model': sorted(by_model.values(), key=lambda r: -r['total_tokens']),
+            'by_day': sorted(by_day.values(), key=lambda r: r['day']), 'jobs': jobs}
+
+
+IMPORT_MAX_BYTES = 200 * 1024 * 1024
+IMPORT_MAX_FILES = 2000
+
+
+@app.post('/v1/jobs/import')
+async def import_job(file: UploadFile = File(...)):
+    """导入同事导出的任务包(/v1/jobs/export 的 zip):交付物落成本机一个新任务,接着改、接着交付。
+    只收文件名安全的普通文件,不解压到任务目录之外;不带 Key、不带日志,导入的是内容不是账号。"""
+    blob = await file.read()
+    if len(blob) > IMPORT_MAX_BYTES:
+        return JSONResponse({'ok': False, 'error': '任务包超过 200MB'}, 413)
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(blob))
+    except zipfile.BadZipFile:
+        return JSONResponse({'ok': False, 'error': '不是有效的 zip 任务包'}, 400)
+    members = [m for m in archive.infolist() if not m.is_dir()]
+    if not members or len(members) > IMPORT_MAX_FILES:
+        return JSONResponse({'ok': False, 'error': '任务包是空的或文件太多'}, 400)
+    # 导出包的布局是 <job_id>/<file>;多个任务一起导出的包只取第一个任务
+    first_dir = ''
+    for m in members:
+        parts = [p for p in m.filename.replace('\\', '/').split('/') if p]
+        if len(parts) >= 2: first_dir = parts[0]; break
+    nid = datetime.datetime.now().strftime('%m%d-%H%M%S-') + uuid.uuid4().hex[:4]
+    job = jpath(nid); os.makedirs(job)
+    written, skipped, total = [], 0, 0
+    for m in members:
+        parts = [p for p in m.filename.replace('\\', '/').split('/') if p]
+        if not parts or any(p in ('.', '..') for p in parts): skipped += 1; continue
+        if first_dir and (len(parts) < 2 or parts[0] != first_dir): skipped += 1; continue
+        safe = os.path.basename(parts[-1])
+        if not safe or safe.startswith(('.', '_')) or safe in NOT_DELIVERABLE: skipped += 1; continue
+        if not safe.endswith(DELIVER_EXT) and safe != '任务.json': skipped += 1; continue
+        total += m.file_size
+        if total > IMPORT_MAX_BYTES: skipped += 1; continue
+        target = os.path.realpath(os.path.join(job, safe))
+        if os.path.dirname(target) != os.path.realpath(job): skipped += 1; continue
+        with archive.open(m) as src, open(target, 'wb') as dst: shutil.copyfileobj(src, dst)
+        written.append(safe)
+    if not written:
+        shutil.rmtree(job, ignore_errors=True)
+        return JSONResponse({'ok': False, 'error': '任务包里没有可导入的交付文件'}, 400)
+    imported_meta = read_json(os.path.join(job, '任务.json'), {}) if '任务.json' in written else {}
+    imported_meta = imported_meta if isinstance(imported_meta, dict) else {}
+    name = str(imported_meta.get('name') or os.path.splitext(os.path.basename(file.filename or ''))[0] or first_dir or '导入的任务')
+    write_json(os.path.join(job, '任务.json'), {
+        'name': name + ' · 导入', 'created_at': now(), 'staged': False, 'paused': False, 'tender': '',
+        'prompt': str(imported_meta.get('prompt') or ''), 'imported': True,
+        'imported_from': os.path.basename(file.filename or ''), 'imported_at': now(),
+        'template_snapshot': imported_meta.get('template_snapshot') if isinstance(imported_meta.get('template_snapshot'), dict) else {}})
+    write_json(os.path.join(job, 'product.json'), {'project_id': '', 'version': 1, 'root_job_id': nid, 'created_at': now()})
+    write_json(os.path.join(job, 'outcome.json'), {'state': 'done', 'reason': 'imported', 'at': now()})
+    emit(job, {'type': 'progress', 'stage': '已从任务包导入', 'pct': 100, 'step': 12, 'total': 12})
+    files = [f for f in written if f != '任务.json']
+    for fn in sorted(files):
+        emit(job, {'type': 'artifact', 'name': fn})
+    emit(job, {'type': 'message', 'role': 'agent',
+               'text': '已从任务包导入 %d 个文件。可以直接打开交付物、跑出件前检查;要继续生成或按招标重写,需要把招标文件作为新任务重新开始。' % len(files)})
+    return {'ok': True, 'job_id': nid, 'name': name + ' · 导入', 'files': len(files), 'skipped': skipped}
+
+
 @app.get('/v1/jobs/{jid}/events')
 def events(jid: str, offset: int = 0, follow: bool = True):
     """SSE:从 offset 行起回放并持续跟踪 events.jsonl;
@@ -6948,6 +7806,63 @@ def list_job_revisions(jid: str):
     if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
     root_id = product_meta(job).get('root_job_id') or os.path.basename(jid)
     return _revision_family(root_id)
+
+# ---------- 修改指令路由:指到某一章就只重写那一章,别整单重跑 ----------
+# 「继续修改」以前一律建子任务从头跑全部节点:用户写「第三章售后响应时间改成 2 小时」,
+# 要等 5–12 章全部重写完。现在先判范围:指令指到具体章节(第 N 章 / 章节标题 / 偏离表)
+# 且不涉及整册与版式 → 走单章重写(旧稿进历史版本,汇总与 Word 自动跟着更新);
+# 否则才出整册新版本。判定是确定性的,并把结果先给用户看,由用户最终选。
+REVISION_WHOLE_RX = re.compile(
+    r'(整册|整本|整份|全书|全部章节|所有章节|每一章|各章|全文|从头|重新生成|封面|目录|页眉|页脚|页码'
+    r'|排版|版式|格式|字体|页边距|统一(?:改|换|替换|成|为)|投标人名称|公司名|公司名称)')
+
+
+def _route_revision_instruction(job, instruction):
+    text = str(instruction or '').strip()
+    try:
+        state = generation_pipeline.load(job)
+    except Exception:
+        state = {}
+    if state.get('version') != generation_pipeline.PIPELINE_VERSION:
+        return {'scope': 'whole', 'reason': '这一单用的是旧版生成流程,不支持单章重写', 'chapters': []}
+    nodes = [item for item in (state.get('nodes') or [])
+             if str(item.get('id') or '').startswith('chapter_write:')]
+    chapters = [{'node_id': str(item.get('id') or ''), 'title': str(item.get('title') or '')} for item in nodes]
+    prose = [item for item in chapters if not item['node_id'].endswith((':technical_deviation', ':business_deviation'))]
+    hits = []
+    def add(item):
+        if item and item['node_id'] not in [h['node_id'] for h in hits]: hits.append(item)
+    if re.search(r'技术.{0,4}偏离|技术应答', text):
+        add(next((c for c in chapters if c['node_id'].endswith(':technical_deviation')), None))
+    if re.search(r'商务.{0,4}偏离', text):
+        add(next((c for c in chapters if c['node_id'].endswith(':business_deviation')), None))
+    for m in re.finditer(r'第\s*([0-9０-９零〇一二两三四五六七八九十]+)\s*(?:章|部分|节|篇)', text):
+        idx = _cn_int(m.group(1))
+        if 1 <= idx <= len(prose): add(prose[idx - 1])
+    key = _plan_norm(text)
+    for item in sorted(prose, key=lambda c: -len(c['title'])):
+        nk = _plan_norm(item['title'])
+        if len(nk) >= 2 and (item['title'] in text or nk in key): add(item)
+    whole = bool(REVISION_WHOLE_RX.search(text))
+    if len(hits) == 1 and not whole:
+        return {'scope': 'chapter', 'node_id': hits[0]['node_id'], 'title': hits[0]['title'],
+                'reason': '指令指到了「%s」这一章' % hits[0]['title'], 'chapters': chapters}
+    if len(hits) > 1:
+        return {'scope': 'whole', 'reason': '指令涉及 %d 章(%s),引擎一次只能重写一章;整册新版本会一起改' % (
+            len(hits), '、'.join(h['title'] for h in hits[:4])), 'chapters': chapters, 'hits': hits}
+    if whole:
+        return {'scope': 'whole', 'reason': '指令涉及整册或版式', 'chapters': chapters}
+    return {'scope': 'whole', 'reason': '指令没有指到具体章节;要只改一章,请在下面选章', 'chapters': chapters}
+
+
+@app.post('/v1/jobs/{jid}/revisions/plan')
+async def plan_job_revision(jid: str, req: Request):
+    job = jpath(jid)
+    if not os.path.isdir(job): return JSONResponse({'ok': False, 'error': '任务不存在'}, 404)
+    try: body = await req.json()
+    except Exception: body = {}
+    return {'ok': True, **_route_revision_instruction(job, (body or {}).get('instruction') or '')}
+
 
 @app.post('/v1/jobs/{jid}/revisions')
 async def create_job_revision(jid: str, req: Request):
@@ -7396,6 +8311,9 @@ def _coverage_view(job):
     任务退化为「整册已生成」)。这是给售前汇报用的数字,口径必须经得起追问。"""
     rows = _md_table_rows(os.path.join(job, '评分点响应矩阵.md'), 6)
     if not rows: return None
+    plan = read_json(os.path.join(job, 'response_plan.json'), {})
+    if not isinstance(plan, dict): plan = {}
+    plan_source = str(plan.get('source') or '')
     chapter_state = {}
     try:
         state = generation_pipeline.load(job)
@@ -7410,12 +8328,13 @@ def _coverage_view(job):
     items, covered = [], 0
     for row in rows[:200]:
         requirement, score, location, gap = row[1][:140], row[2][:20], row[3][:80], row[5][:140]
+        evidence = row[4][:140]          # 评估标准/证据:对照阅读器用它切词,「响应时间」才是正文里真正出现的词
         gap_clear = (gap in COVERAGE_CLEAR_GAPS) or not gap.strip()
         located = bool(location.strip()) and '需补充' not in location
         node_id, node_title, chapter_done = '', '', whole_done
         if chapter_state:
-            hit = next(((title, info) for title, info in chapter_state.items()
-                        if title and (title in location or location in title)), None)
+            matched = _plan_match_title(location, [title for title in chapter_state if title])
+            hit = (matched, chapter_state[matched]) if matched else None
             if hit:
                 node_title, node_id = hit[0], str(hit[1].get('id') or '')
                 chapter_done = hit[1].get('state') == 'done'
@@ -7429,10 +8348,14 @@ def _coverage_view(job):
         elif not located: reason = 'unlocated'
         elif not gap_clear: reason = 'gap'
         else: reason = 'chapter_pending'
-        items.append({'requirement': requirement, 'score': score, 'location': location,
+        items.append({'requirement': requirement, 'score': score, 'location': location, 'evidence': evidence,
                       'gap': gap, 'covered': ok, 'node_id': node_id, 'chapter': node_title,
                       'reason': reason})
-    return {'total': len(items), 'covered': covered, 'items': items}
+    # plan_source 让界面分得清「真实覆盖率」和「本地候选」:本地索引里没有一条落到章节,
+    # 显示 0/N 是把一个没有意义的数字当结论。
+    return {'total': len(items), 'covered': covered, 'items': items,
+            'plan_source': plan_source, 'plan_model': str(plan.get('model') or ''),
+            'plan_notes': [str(n) for n in (plan.get('notes') or []) if str(n).strip()]}
 
 @app.get('/v1/jobs/{jid}/coverage')
 def job_coverage(jid: str):
@@ -7964,6 +8887,115 @@ def download(jid: str, fn: str):
     path = _artifact_path(jid, fn)
     if not path: return JSONResponse({'ok': False, 'error': '文件不存在'}, 404)
     return FileResponse(path, filename=os.path.basename(path))
+
+# ---------- Word 真预览:docx → HTML(只读 python-docx,零 token) ----------
+# 以前「预览」是把章节 md 套仿宋体 CSS 假装成 Word;出了 Word 之后用户看到的还是 md。
+# 现在按 docx 的真实内容出 HTML:标题层级、段落对齐、加粗/斜体/下划线、表格(合并格按
+# gridSpan/vMerge 处理)、内嵌图片(data URI,单张 ≤2MB、合计 ≤6MB)、分页符。
+# 页眉页脚与真实分页仍以 Word 为准——预览说清这一点,不冒充。
+DOCX_PREVIEW_IMAGE_BYTES = 2 * 1024 * 1024
+DOCX_PREVIEW_IMAGE_TOTAL = 6 * 1024 * 1024
+DOCX_PREVIEW_MAX_BLOCKS = 6000
+
+
+def _docx_preview_html(path):
+    import base64
+    import html as _html
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.table import Table, _Cell
+    from docx.text.paragraph import Paragraph
+    doc = Document(path)
+    stats = {'paragraphs': 0, 'tables': 0, 'images': 0, 'images_skipped': 0, 'truncated': False}
+    budget = {'images': DOCX_PREVIEW_IMAGE_TOTAL, 'blocks': DOCX_PREVIEW_MAX_BLOCKS}
+    align_names = {WD_ALIGN_PARAGRAPH.CENTER: 'center', WD_ALIGN_PARAGRAPH.RIGHT: 'right',
+                   WD_ALIGN_PARAGRAPH.JUSTIFY: 'justify'}
+    esc = lambda value: _html.escape(str(value or ''), quote=False)
+
+    def run_html(run):
+        out = []
+        if run._element.xpath('.//w:br[@w:type="page"]'):
+            out.append('<hr class="pb">')
+        for blip in run._element.xpath('.//a:blip'):
+            rid = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+            part = run.part.related_parts.get(rid) if rid else None
+            blob = getattr(part, 'blob', b'') if part is not None else b''
+            if not blob: continue
+            if len(blob) > DOCX_PREVIEW_IMAGE_BYTES or len(blob) > budget['images']:
+                stats['images_skipped'] += 1
+                out.append('<span class="img-skip">〔图片较大,预览略过;以 Word 为准〕</span>')
+                continue
+            budget['images'] -= len(blob); stats['images'] += 1
+            mime = str(getattr(part, 'content_type', '') or 'image/png')
+            out.append('<img src="data:%s;base64,%s" alt="">' % (mime, base64.b64encode(blob).decode('ascii')))
+        text = esc(run.text)
+        if text:
+            if run.bold: text = '<b>%s</b>' % text
+            if run.italic: text = '<i>%s</i>' % text
+            if run.underline: text = '<u>%s</u>' % text
+            out.append(text)
+        return ''.join(out)
+
+    def para_html(para, in_cell=False):
+        stats['paragraphs'] += 1
+        try: style = str(para.style.name or '') if para.style is not None else ''
+        except Exception: style = ''
+        m = re.match(r'(?:heading|标题)\s*(\d)', style, re.I)
+        level = int(m.group(1)) if m else (1 if style.lower() == 'title' else 0)
+        inner = ''.join(run_html(r) for r in para.runs)
+        if not re.sub(r'<[^>]+>', '', inner).strip() and para.text.strip():
+            inner = esc(para.text)          # 超链接/域代码不在 runs 里:退回纯文本
+        alignment = para.alignment
+        if alignment is None:
+            try: alignment = para.style.paragraph_format.alignment if para.style is not None else None
+            except Exception: alignment = None
+        align = align_names.get(alignment, '')
+        cls = ' class="a-%s"' % align if align else ''
+        if level:
+            level = min(level, 6)
+            return '<h%d%s>%s</h%d>' % (level, cls, inner, level)
+        if not inner.strip(): return '' if in_cell else '<p class="empty"></p>'
+        return '<p%s>%s</p>' % (cls, inner)
+
+    def table_html(table):
+        stats['tables'] += 1
+        rows = []
+        for row in table.rows:
+            cells = []
+            for tc in row._tr.tc_lst:
+                if getattr(tc, 'vMerge', None) == 'continue': continue     # 纵向合并的续格:内容在上面那格
+                cell = _Cell(tc, table)
+                span = int(getattr(tc, 'grid_span', 1) or 1)
+                inner = ''.join(block_html(b, in_cell=True) for b in cell.iter_inner_content())
+                cells.append('<td%s>%s</td>' % ((' colspan="%d"' % span) if span > 1 else '', inner or '&nbsp;'))
+            rows.append('<tr>%s</tr>' % ''.join(cells))
+        return '<table>%s</table>' % ''.join(rows)
+
+    def block_html(block, in_cell=False):
+        if budget['blocks'] <= 0:
+            stats['truncated'] = True; return ''
+        budget['blocks'] -= 1
+        if isinstance(block, Paragraph): return para_html(block, in_cell)
+        if isinstance(block, Table): return table_html(block)
+        return ''
+
+    pieces = [block_html(block) for block in doc.iter_inner_content()]
+    if stats['truncated']:
+        pieces.append('<p class="a-center img-skip">〔预览到此为止:文档很长,完整内容请打开 Word〕</p>')
+    return ''.join(pieces), stats
+
+
+@app.get('/v1/jobs/{jid}/artifacts/{fn}/html')
+def artifact_html(jid: str, fn: str):
+    path = _artifact_path(jid, fn)
+    if not path: return JSONResponse({'ok': False, 'error': '文件不存在'}, 404)
+    if not path.lower().endswith('.docx'):
+        return JSONResponse({'ok': False, 'error': '只有 Word(.docx)能按真实版式预览'}, 400)
+    try:
+        body, stats = _docx_preview_html(path)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': 'Word 解析失败:%s' % exc}, 422)
+    return {'ok': True, 'name': os.path.basename(path), 'html': body, 'stats': stats}
 
 def _artifact_path(jid, name):
     """只允许访问任务根目录中已登记的交付物，阻止 ../ 与任意本机路径。"""
@@ -9524,10 +10556,345 @@ async def ingest_asset(file: UploadFile = File(...)):
             auto_tagging = try_start_vision(False)
         except Exception:
             pass
+    facts_started = _start_fact_extraction(fn, digest, sections)      # 配了 Key 就顺手抽事实,人工确认后才进规范素材
     rec = {'ts': now(), 'source': fn, 'md5': digest, 'sections': len(sections), 'images': len(images), 'categories': cats}
     open(log_path, 'a', encoding='utf-8').write(json.dumps(rec, ensure_ascii=False) + '\n')
     return {'ok': True, **rec, 'created': created[:50], 'folder': assets_dir(),
-            'engine': 'local-parser', 'auto_tagging': auto_tagging}
+            'engine': 'local-parser', 'auto_tagging': auto_tagging, 'facts': facts_started}
+
+# ---------- 规范素材直接编辑(产品能力表等):读写素材库根目录的 md ----------
+# 能力表是应答判定的第一依据,以前只能在文件夹里用记事本改;现在有表格 UI,读写走这两个端点。
+ASSET_TEXT_NAMES = ('产品能力表.md', '应答要点.md', '公司介绍.md', '产品资料.md', '资质与案例.md')
+ASSET_TEXT_MAX_BYTES = 2 * 1024 * 1024
+CAPABILITY_TEMPLATE = ('# 产品能力表\n\n'
+                       '> 应答判定的第一依据:每一行一个功能点;「支持情况」只能写 支持 / 部分支持 / 不支持 / 可定制;\n'
+                       '> 「证明材料」写素材库里能证明的文件名或页码;「配图」写图片索引里的图片 ID。\n\n'
+                       '| 功能 | 支持情况 | 版本要求 | 证明材料 | 可定制 | 配图 |\n'
+                       '|---|---|---|---|---|---|\n'
+                       '| （示例）用户权限分级管理 | 支持 | V3.0 及以上 | 产品资料.md §2.1 | 是 | IMG-001 |\n')
+
+
+def _asset_text_path(name):
+    safe = os.path.basename(str(name or ''))
+    if safe != name or safe not in ASSET_TEXT_NAMES: return None
+    return os.path.join(assets_dir(), safe)
+
+
+@app.get('/v1/assets/text')
+def asset_text(name: str = '产品能力表.md'):
+    path = _asset_text_path(name)
+    if not path: return JSONResponse({'ok': False, 'error': '只能编辑素材库根目录的规范素材'}, 400)
+    exists = os.path.isfile(path)
+    text = open(path, encoding='utf-8', errors='ignore').read() if exists else ''
+    template = CAPABILITY_TEMPLATE if name == '产品能力表.md' else ''
+    return {'ok': True, 'name': name, 'exists': exists, 'text': text, 'template': template, 'folder': assets_dir()}
+
+
+@app.put('/v1/assets/text')
+async def save_asset_text(req: Request):
+    body = await req.json()
+    path = _asset_text_path(str(body.get('name') or ''))
+    if not path: return JSONResponse({'ok': False, 'error': '只能编辑素材库根目录的规范素材'}, 400)
+    text = str(body.get('text') or '')
+    if len(text.encode('utf-8')) > ASSET_TEXT_MAX_BYTES:
+        return JSONResponse({'ok': False, 'error': '内容超过 2MB'}, 413)
+    os.makedirs(assets_dir(), exist_ok=True)
+    _write_text_atomic(path, text if text.endswith('\n') else text + '\n')
+    return {'ok': True, 'name': os.path.basename(path), 'bytes': len(text.encode('utf-8'))}
+
+
+# ---------- 历史标书事实抽取:入库时抽公司 / 资质 / 业绩 / 人员,人工确认后进规范素材 ----------
+# 以前入库只是本地拆章:公司名、资质、业绩、人员这些「事实」还得人手抄进 公司介绍.md / 资质与案例.md,
+# 不抄的后果就是满篇〔需补充〕。现在小模型抽一遍,写成待确认清单;确认了才落库——不确认永远不进正文。
+FACTS_DIRNAME = '事实抽取'
+FACTS_TEXT_BUDGET = 14000
+FACTS_SCHEMA_HINT = ('{"company": {"name": "", "intro": ""}, '
+                     '"qualifications": [{"name": "", "level": "", "issuer": "", "valid_until": ""}], '
+                     '"performances": [{"project": "", "client": "", "amount": "", "date": "", "role": ""}], '
+                     '"people": [{"name": "", "title": "", "certs": ""}]}')
+
+
+def _facts_dir():
+    path = os.path.join(assets_dir(), FACTS_DIRNAME)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _facts_prompt(source, text):
+    system = ('你是投标资料整理员。从一份历史标书里抽取「可复用的事实」:投标人公司名与一句话介绍、资质证书、'
+              '业绩(项目/业主/金额/时间/角色)、关键人员(姓名/职务/证书)。只抽原文明确写出的,不推断、不补全;'
+              '没有的字段留空字符串,没有的类别给空数组。只返回一个 JSON 对象,结构为:' + FACTS_SCHEMA_HINT)
+    user = '来源文件:%s\n\n正文(节选):\n%s' % (source, text[:FACTS_TEXT_BUDGET])
+    return {'stream': False, 'temperature': 0, 'max_tokens': 1800,
+            'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]}
+
+
+def _normalize_facts(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    def rows(key, fields):
+        out = []
+        for item in raw.get(key) or []:
+            if not isinstance(item, dict): continue
+            row = {f: str(item.get(f) or '').strip()[:200] for f in fields}
+            if any(row.values()): out.append(row)
+        return out[:40]
+    company = raw.get('company') if isinstance(raw.get('company'), dict) else {}
+    return {'company': {'name': str(company.get('name') or '').strip()[:120], 'intro': str(company.get('intro') or '').strip()[:600]},
+            'qualifications': rows('qualifications', ('name', 'level', 'issuer', 'valid_until')),
+            'performances': rows('performances', ('project', 'client', 'amount', 'date', 'role')),
+            'people': rows('people', ('name', 'title', 'certs'))}
+
+
+def _facts_count(facts):
+    return (1 if (facts.get('company') or {}).get('name') else 0) + sum(
+        len(facts.get(k) or []) for k in ('qualifications', 'performances', 'people'))
+
+
+def _facts_to_markdown(facts, source, ts):
+    """确认后写进规范素材的段落:公司/人员 → 公司介绍.md,资质/业绩 → 资质与案例.md。"""
+    head = '\n\n## 来自《%s》 · 人工确认 %s\n\n' % (source, ts)
+    company, people = facts.get('company') or {}, facts.get('people') or []
+    intro = ''
+    if company.get('name') or company.get('intro'):
+        intro += '- 投标人:%s%s\n' % (company.get('name') or '〔需补充〕', ('。' + company['intro']) if company.get('intro') else '')
+    if people:
+        intro += '\n| 姓名 | 职务 | 证书 |\n|---|---|---|\n' + ''.join(
+            '| %s | %s | %s |\n' % (_pipeline_cell(p.get('name')), _pipeline_cell(p.get('title')), _pipeline_cell(p.get('certs'))) for p in people)
+    quals, perfs = facts.get('qualifications') or [], facts.get('performances') or []
+    cases = ''
+    if quals:
+        cases += '### 资质证书\n\n| 资质 | 等级 | 发证机关 | 有效期至 |\n|---|---|---|---|\n' + ''.join(
+            '| %s | %s | %s | %s |\n' % tuple(_pipeline_cell(q.get(f)) for f in ('name', 'level', 'issuer', 'valid_until')) for q in quals)
+    if perfs:
+        cases += ('\n' if cases else '') + '### 业绩\n\n| 项目 | 业主 | 金额 | 时间 | 角色 |\n|---|---|---|---|---|\n' + ''.join(
+            '| %s | %s | %s | %s | %s |\n' % tuple(_pipeline_cell(p.get(f)) for f in ('project', 'client', 'amount', 'date', 'role')) for p in perfs)
+    return {'公司介绍.md': (head + intro) if intro.strip() else '', '资质与案例.md': (head + cases) if cases.strip() else ''}
+
+
+def _facts_json_object(text):
+    """取最外层那个带事实键的对象:规划用的 _pipeline_json_object 会挑「键最多」的字典,
+    在这里会挑中嵌套的某条业绩(5 个键)而不是顶层(4 个键)。"""
+    raw = str(text or '').strip()
+    keys = {'company', 'qualifications', 'performances', 'people'}
+    candidates = []
+    try: candidates.append(json.loads(raw))
+    except (TypeError, ValueError): pass
+    for match in re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.I | re.S):
+        try: candidates.append(json.loads(match.group(1)))
+        except (TypeError, ValueError): pass
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r'\{', raw):
+        try: candidates.append(decoder.raw_decode(raw[match.start():])[0])
+        except (TypeError, ValueError): continue
+    for value in candidates:
+        if isinstance(value, dict) and keys & set(value): return value
+    return None
+
+
+def _extract_facts_now(fid, source, text, up):
+    record = {'id': fid, 'source': source, 'ts': now(), 'status': 'pending', 'model': str(up.get('model') or ''),
+              'facts': None, 'error': ''}
+    try:
+        payload = dict(_facts_prompt(source, text), model=up.get('model') or S2_DEFAULT_MODEL)
+        response = _openai_req(up['base_url'], up['api_key'], '/chat/completions', payload, timeout=150,
+                               verify=up.get('verify_ssl', True))
+        choices = response.get('choices') if isinstance(response, dict) else None
+        content = str(((choices or [{}])[0].get('message') or {}).get('content') or '') if choices else ''
+        parsed = _facts_json_object(content)
+        if not isinstance(parsed, dict):
+            raise ValueError('模型没有返回可解析的 JSON')
+        record['facts'] = _normalize_facts(parsed)
+        record['count'] = _facts_count(record['facts'])
+        if not record['count']: record['status'] = 'empty'
+    except Exception as exc:
+        record['status'] = 'failed'
+        record['error'] = net_hint(exc, (up.get('api_key'),))[:200] if 'net_hint' in globals() else str(exc)[:200]
+    write_json(os.path.join(_facts_dir(), fid + '.json'), record)
+    return record
+
+
+def _start_fact_extraction(source, digest, sections, sync=False):
+    """入库钩子:配了 Key 才抽(没 Key 静默跳过,不打扰);默认后台线程,不拖慢入库响应。"""
+    text = '\n\n'.join('## %s\n%s' % (title, content) for title, content in (sections or []) if str(content or '').strip())
+    if len(text.strip()) < 200: return False
+    up = s2_conf(read_json(conf_path(), {}))
+    if not (up.get('api_key') and up.get('base_url')): return False
+    fid = re.sub(r'[^0-9a-f]', '', str(digest or ''))[:32] or uuid.uuid4().hex
+    if sync:
+        _extract_facts_now(fid, source, text, up); return True
+    write_json(os.path.join(_facts_dir(), fid + '.json'),
+               {'id': fid, 'source': source, 'ts': now(), 'status': 'running', 'facts': None, 'error': ''})
+    threading.Thread(target=_extract_facts_now, args=(fid, source, text, up), daemon=True).start()
+    return True
+
+
+def _facts_list():
+    out = []
+    for fn in sorted(os.listdir(_facts_dir())):
+        if not fn.endswith('.json'): continue
+        record = read_json(os.path.join(_facts_dir(), fn), None)
+        if isinstance(record, dict) and record.get('id'): out.append(record)
+    order = {'pending': 0, 'running': 1, 'failed': 2, 'empty': 3, 'confirmed': 4, 'discarded': 5}
+    out.sort(key=lambda r: (order.get(r.get('status'), 9), str(r.get('ts') or '')), reverse=False)
+    return out
+
+
+@app.get('/v1/assets/facts')
+def assets_facts():
+    records = _facts_list()
+    return {'ok': True, 'items': records, 'pending': sum(1 for r in records if r.get('status') == 'pending')}
+
+
+@app.post('/v1/assets/facts/{fid}')
+async def assets_facts_decide(fid: str, req: Request):
+    safe = re.sub(r'[^0-9a-f]', '', str(fid or ''))[:32]
+    path = os.path.join(_facts_dir(), safe + '.json') if safe else ''
+    record = read_json(path, None) if path else None
+    if not isinstance(record, dict): return JSONResponse({'ok': False, 'error': '没有这条抽取记录'}, 404)
+    body = await req.json()
+    action = str(body.get('action') or '')
+    if action == 'discard':
+        record.update({'status': 'discarded', 'decided_at': now()}); write_json(path, record)
+        return {'ok': True, 'status': 'discarded'}
+    if action != 'confirm': return JSONResponse({'ok': False, 'error': 'action 只能是 confirm 或 discard'}, 400)
+    facts = _normalize_facts(body.get('facts')) if isinstance(body.get('facts'), dict) else (record.get('facts') or {})
+    if not _facts_count(facts): return JSONResponse({'ok': False, 'error': '没有可入库的事实'}, 400)
+    written = []
+    for name, section in _facts_to_markdown(facts, record.get('source') or '', now()).items():
+        if not section: continue
+        target = os.path.join(assets_dir(), name)
+        existing = open(target, encoding='utf-8', errors='ignore').read() if os.path.isfile(target) else ('# %s\n' % name[:-3])
+        _write_text_atomic(target, existing.rstrip('\n') + section)
+        written.append(name)
+    record.update({'status': 'confirmed', 'facts': facts, 'decided_at': now(), 'written': written}); write_json(path, record)
+    return {'ok': True, 'status': 'confirmed', 'written': written}
+
+
+# ---------- A/B 常态化:设置里「试跑对比」,同一份招标文件按变体各起一单,结果表里分得开 ----------
+# tools/model_ab.py 是研发跑批用的 CLI;一线用户要的是按钮。变体语法与 CLI 一致:
+#   model?temperature=0.5&frequency_penalty=0.4 —— 模型必须是已验证过的,参数落在任务自己的 任务.json 里,
+# 流水线按任务读(_generation_params / _initialize_generation_pipeline),全局默认值一个不动。
+AB_MAX_VARIANTS = 4
+
+
+def _ab_dir():
+    path = os.path.join(ws_root(), 'ab_groups'); os.makedirs(path, exist_ok=True); return path
+
+
+def _parse_ab_variant(spec):
+    raw = str(spec or '').strip()
+    if not raw: return None
+    model, _, query = raw.partition('?')
+    params = {}
+    for key, value in urllib.parse.parse_qsl(query, keep_blank_values=False):
+        if key in GEN_PARAM_BOUNDS: params[key] = value
+    params = _normalize_generation_params(params)
+    label = model.strip() + (('?' + '&'.join('%s=%s' % (k, params[k]) for k in sorted(params))) if params else '')
+    return {'model': model.strip(), 'params': params, 'label': label}
+
+
+def _job_ab_overrides(job):
+    meta = read_json(os.path.join(job, '任务.json'), {}) if job else {}
+    ab = meta.get('ab') if isinstance(meta, dict) and isinstance(meta.get('ab'), dict) else {}
+    return {'model': str(ab.get('model') or ''), 'params': _normalize_generation_params(ab.get('params'))}
+
+
+def _quality_level(job):
+    try: text = open(os.path.join(job, '成品质检报告.md'), encoding='utf-8', errors='ignore').read(4000)
+    except OSError: return ''
+    return 'red' if '🔴' in text else ('yellow' if '🟡' in text else ('green' if '✅' in text else ''))
+
+
+def _ab_row(child):
+    job = jpath(child)
+    meta = read_json(os.path.join(job, '任务.json'), {})
+    if not meta: return None
+    state = job_state(job, meta)
+    outcome = read_json(os.path.join(job, 'outcome.json'), {})
+    elapsed = _job_elapsed(job, state, meta, outcome, _job_last_activity(job, meta, None, outcome)) or 0
+    cov = _coverage_view(job) if os.path.isfile(os.path.join(job, '评分点响应矩阵.md')) else {}
+    ab = meta.get('ab') if isinstance(meta.get('ab'), dict) else {}
+    return {'job_id': child, 'name': meta.get('name') or child, 'label': ab.get('label') or '', 'model': ab.get('model') or '',
+            'params': ab.get('params') or {}, 'state': state, 'elapsed_seconds': int(elapsed if elapsed <= 12 * 3600 else 0),
+            'usage': _job_usage(job, meta), 'coverage': {'covered': int(cov.get('covered') or 0), 'total': int(cov.get('total') or 0)}
+            if cov else None, 'quality': _quality_level(job), 'repeat_hits': _job_repeat_hits(job),
+            'has_word': bool(_body_docxs(job))}
+
+
+@app.get('/v1/ab')
+def ab_groups():
+    groups = []
+    for fn in sorted(os.listdir(_ab_dir()), reverse=True):
+        if fn.endswith('.json'):
+            g = read_json(os.path.join(_ab_dir(), fn), None)
+            if isinstance(g, dict): groups.append({k: g.get(k) for k in ('group', 'name', 'created_at', 'source_job', 'variants')})
+    return {'ok': True, 'groups': groups[:20]}
+
+
+@app.get('/v1/ab/{group}')
+def ab_group(group: str):
+    safe = re.sub(r'[^0-9a-zA-Z-]', '', str(group or ''))
+    g = read_json(os.path.join(_ab_dir(), safe + '.json'), None) if safe else None
+    if not isinstance(g, dict): return JSONResponse({'ok': False, 'error': '没有这组对比'}, 404)
+    rows = [r for r in (_ab_row(child) for child in g.get('jobs') or []) if r]
+    return {'ok': True, 'group': g.get('group'), 'name': g.get('name'), 'created_at': g.get('created_at'),
+            'source_job': g.get('source_job'), 'rows': rows,
+            'running': any(r['state'] in ('running', 'staged') for r in rows)}
+
+
+@app.post('/v1/ab/run')
+async def ab_run(req: Request):
+    gate = _generation_gate_response()
+    if gate is not None: return gate
+    body = await req.json()
+    source = str(body.get('job_id') or '')
+    old = jpath(source)
+    meta = read_json(os.path.join(old, '任务.json'), {}) if source and os.path.basename(source) == source else {}
+    tname = str(meta.get('tender') or '')
+    if not (meta and tname and os.path.isfile(os.path.join(old, tname))):
+        return JSONResponse({'ok': False, 'error': '请选一个带招标文件的任务作为对比基准'}, 400)
+    variants = [v for v in (_parse_ab_variant(x) for x in (body.get('variants') or [])) if v]
+    if not variants or len(variants) > AB_MAX_VARIANTS:
+        return JSONResponse({'ok': False, 'error': '请给 1–%d 个变体,如 模型?temperature=0.5' % AB_MAX_VARIANTS}, 400)
+    conf = read_json(conf_path(), {})
+    verified = _verified_model_ids(conf)
+    unknown = sorted({v['model'] for v in variants if v['model'] and v['model'] not in verified})
+    if unknown:
+        return JSONResponse({'ok': False, 'error': '这些模型还没通过连接测试:%s;已验证:%s' % ('、'.join(unknown), '、'.join(verified) or '无')}, 400)
+    group = datetime.datetime.now().strftime('%m%d-%H%M%S-') + uuid.uuid4().hex[:4]
+    old_product = product_meta(old, meta)
+    jobs, errors = [], []
+    for index, variant in enumerate(variants, 1):
+        nid = group + '-' + chr(96 + index)
+        nj = jpath(nid); os.makedirs(nj)
+        try:
+            shutil.copy2(os.path.join(old, tname), os.path.join(nj, tname))
+            for dirname in ('素材', '参考资料'):
+                src = os.path.join(old, dirname)
+                if os.path.isdir(src): shutil.copytree(src, os.path.join(nj, dirname))
+            requirements = os.path.join(old, '你的要求.md')
+            if os.path.isfile(requirements): shutil.copy2(requirements, os.path.join(nj, '你的要求.md'))
+            write_json(os.path.join(nj, '任务.json'), {
+                'name': '%s · A/B %s' % (old_product.get('name') or tname, variant['label']), 'created_at': now(),
+                'paused': False, 'staged': True, 'tender': tname, 'prompt': meta.get('prompt', ''),
+                'template_id': meta.get('template_id', ''), 'template_snapshot': meta.get('template_snapshot') or {},
+                'volumes': bool(meta.get('volumes')), 'confirm_parse': False,
+                'ab': {'group': group, 'label': variant['label'], 'model': variant['model'], 'params': variant['params'],
+                       'source_job': source}})
+            write_json(os.path.join(nj, 'product.json'), {'project_id': old_product.get('project_id') or '', 'version': 1,
+                                                          'root_job_id': nid, 'rerun_of': source, 'created_at': now()})
+            result = _launch_job(nid, nj, 'auto')
+            jobs.append(nid)
+            if result.get('mode') == 'error': errors.append('%s:%s' % (variant['label'], result.get('error') or 'error'))
+        except Exception as exc:
+            shutil.rmtree(nj, ignore_errors=True)
+            errors.append('%s:%s' % (variant['label'], exc))
+    record = {'group': group, 'name': str(body.get('name') or (old_product.get('name') or tname)), 'created_at': now(),
+              'source_job': source, 'variants': [v['label'] for v in variants], 'jobs': jobs, 'errors': errors}
+    write_json(os.path.join(_ab_dir(), group + '.json'), record)
+    if not jobs: return JSONResponse({'ok': False, 'error': '一个变体都没起来:' + '; '.join(errors)}, 500)
+    return {'ok': True, 'group': group, 'jobs': jobs, 'errors': errors}
+
 
 @app.post('/v1/transcribe')
 def transcribe():

@@ -23,8 +23,8 @@ export default function Composer(){
   }
   const menu = {
     items: [
-      { key: 'ref', icon: <PaperClipOutlined />, label: <span><b>加参考资料到当前任务</b><br /><i style={{ color: '#8b8f98', fontStyle: 'normal', fontSize: 12 }}>过往标书/模板,AI 写作时参考它的写法</i></span> },
-      { key: 'new', icon: <FileAddOutlined />, label: <span><b>新建任务</b><br /><i style={{ color: '#8b8f98', fontStyle: 'normal', fontSize: 12 }}>把这份招标文件作为新任务开始</i></span> },
+      { key: 'ref', icon: <PaperClipOutlined />, label: <span><b>加参考资料到当前任务</b><br /><i style={{ color: 'var(--dim)', fontStyle: 'normal', fontSize: 12 }}>过往标书/模板,AI 写作时参考它的写法</i></span> },
+      { key: 'new', icon: <FileAddOutlined />, label: <span><b>新建任务</b><br /><i style={{ color: 'var(--dim)', fontStyle: 'normal', fontSize: 12 }}>把这份招标文件作为新任务开始</i></span> },
     ],
     onClick: ({ key }) => {
       if(key === 'new'){ fileIn.current && fileIn.current.click(); return; }
@@ -48,7 +48,8 @@ export default function Composer(){
     else if(k === 'cmd:rerun') rerunJob();
   }
   return (
-    <div className="compose" id="composer">
+    <div className="compose" id="composer"
+      onKeyDownCapture={e => { if((e.metaKey || e.ctrlKey) && e.key === 'Enter'){ e.preventDefault(); e.stopPropagation(); send(); } }}>
       <div className="cbox">
         {answering && q ? (
           <div className="ansbar" id="ansBar">
@@ -59,7 +60,7 @@ export default function Composer(){
         {/* Ant Design X:快捷提问用 Prompts,输入用 Sender(自带发送键、组合输入法处理、加载态) */}
         <Prompts wrap className="quick" items={quickItems} onItemClick={info => onQuick(info.data.key)} />
         <Sender ref={senderRef} value={draft} onChange={setDraft} onSubmit={send}
-          placeholder={answering ? '把答案打在这里,发出去就回到 AI 那边' : '问问进度、提要求,或把文件拖进来'}
+          placeholder={answering ? '把答案打在这里,发出去就回到 AI 那边' : '问问进度、提要求,或把文件拖进来 · ⌘⏎ 发送'}
           prefix={
             <Dropdown menu={menu} trigger={['click']} placement="topLeft">
               <Button type="text" size="small" icon={<PlusOutlined />} className="plus" title="添加文件" />
