@@ -58,6 +58,7 @@ async function openFixture(page) {
 
 test('the compare reader puts tender text and the chapter side by side and a scoring point locates both', async ({ page }) => {
   await openFixture(page);
+  await page.locator('#moreBtn').click();                       // 对照阅读收进顶栏「···」
   await expect(page.locator('#compareBtn')).toBeVisible();
   await page.locator('#compareBtn').click();
   await expect(page.locator('#compareSheet')).toBeVisible();

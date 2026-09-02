@@ -75,6 +75,7 @@ test('scrolling up to read history is never interrupted by incoming messages', a
 
 test('a few hundred worklog lines stay in a scrollable box pinned to the newest line', async ({ page }) => {
   await openTalkativeJob(page);
+  await page.locator('#midTabs [data-midtab="flow"]').click();   // 0.22.1:工作日志归「执行过程」,对话页签只有对话
   await page.evaluate(() => {
     const id = window.S.active, w = (window.S.worklog[id] = window.S.worklog[id] || []);
     w.push('── 第 1 步 · 检查资料 ──');

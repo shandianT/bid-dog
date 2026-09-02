@@ -39,18 +39,19 @@ export default function Outline(){
         <List.Item className={'outline-row ' + cls} data-pv={out} onClick={() => out && ui.openPreview(out)}
           actions={[
             <span className="outline-w num" key="w">{art ? _fmtWords(art.size_kb) : ''}</span>,
-            canRw ? <Button size="small" key="rw" data-rw={n.id} data-rwt={n.title || ''}
+            canRw ? <Button size="small" type="text" className="ol-rw" key="rw" data-rw={n.id} data-rwt={n.title || ''}
               onClick={e => { e.stopPropagation(); ui.openRewrite(n.id, n.title || ''); }}>
               {n.state === 'done' ? '重写本章' : '重试并调整'}</Button> : <span key="rw" />,
           ]}>
+          {/* 一行一章:序号 + 标题 + 状态,不再两行;字数与重写按钮靠右 */}
           <List.Item.Meta avatar={<ChapterIcon state={cls} />}
-            title={<b>{i + 1}. {n.title || n.id}</b>} description={sub} />
+            title={<span className="ol-line"><b>{i + 1}. {n.title || n.id}</b><span className="ol-sub">{sub}</span></span>} />
         </List.Item>
       );
     });
     return (
       <>
-        <div className="outline-note">已完成 <b>{done}/{nodes.length}</b> 章{totalKb ? ' · 共' + _fmtWords(totalKb) : ''} · 点章节看内容,已完成的章节可以只重写这一章</div>
+        <div className="outline-note" title="点章节看内容;已完成的章节可以只重写这一章">已完成 <b>{done}/{nodes.length}</b> 章{totalKb ? ' · 共' + _fmtWords(totalKb) : ''}</div>
         <List className="outline" split={false} dataSource={rows} renderItem={r => r} />
       </>
     );
@@ -80,7 +81,7 @@ export default function Outline(){
           <List.Item className="outline-row done" data-pv={a.name} onClick={() => ui.openPreview(a.name)}
             actions={[<span className="outline-w num" key="w">{_fmtWords(a.size_kb)}</span>]}>
             <List.Item.Meta avatar={<ChapterIcon state="done" />}
-              title={<b>{i + 1}. {a.name.replace(/^章节_\d*_?/, '').replace(/\.md$/i, '')}</b>} description="已生成" />
+              title={<span className="ol-line"><b>{i + 1}. {a.name.replace(/^章节_\d*_?/, '').replace(/\.md$/i, '')}</b><span className="ol-sub">已生成</span></span>} />
           </List.Item>
         )} />
     </>

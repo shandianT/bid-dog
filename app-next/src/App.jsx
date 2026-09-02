@@ -118,7 +118,7 @@ export default function App(){
   return (
     <>
       {S.demoTag && <div id="demoTag" className="demo-tag" style={{ display: 'block' }}>{S.demoTag}</div>}
-      <div id="app" style={{ gridTemplateColumns: railOn ? '246px minmax(0,1fr) 308px' : '246px minmax(0,1fr)' }}>
+      <div id="app" style={{ gridTemplateColumns: railOn ? '224px minmax(0,1fr) 288px' : '224px minmax(0,1fr)' }}>
         <Sidebar />
         <main>
           <Problem />

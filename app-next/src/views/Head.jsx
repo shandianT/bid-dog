@@ -1,9 +1,9 @@
 // 任务头部:标题/徽章/副题/进度条/动作(暂停·停止·修改·从断点继续·开始·日志·交付结果·覆盖·出件前检查)。
 // 全部判定公式逐字对应经典 renderHead(含 PR #10 的「待处理」徽章与「Word 已生成」lead)。
 import React from 'react';
-import { Tag, Button, Progress, Tooltip } from 'antd';
+import { Tag, Button, Progress, Tooltip, Dropdown } from 'antd';
 import { PauseOutlined, CaretRightOutlined, ReloadOutlined, FileTextOutlined,
-         SafetyCertificateOutlined, StopOutlined, ColumnWidthOutlined } from '@ant-design/icons';
+         SafetyCertificateOutlined, StopOutlined, ColumnWidthOutlined, EllipsisOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { S, ui, jobState, publicTaskState, taskPresentation, taskCapabilities, wordPresence,
          completionGate, deliveryDeadEnd, verdict, timing, fmtDur, knownStep, PUBLIC_TASK_LABELS,
          resumeJob, togglePause, stopJob, deliveryViewModel } from '../core/index.js';
@@ -35,6 +35,7 @@ export default function Head(){
   const deliverable = !!(j && vd.primary && (state === 'completed' || state === 'needs_input'));
   const showResult = deliverable && S.processView[S.active] !== true;
   const cov = S.coverage[S.active];
+  const hasParsed = (S.arts[S.active] || []).some(a => a.name === '招标文件_解析版.md');
 
   // 徽章:PR #10——出了整册 Word 的 failed 不是失败,是待处理
   let badge;
@@ -107,20 +108,24 @@ export default function Head(){
           title="从上次中断的检查点接着往下跑,已完成内容不重写" onClick={resumeJob}>从断点继续</Button>}
       {j && (j.staged || state === 'preparing') && !S._startBusy &&
         <Button type="primary" id="startBtn" className="pill on" icon={<CaretRightOutlined />} onClick={startStaged}>开始生成</Button>}
-      <Button id="logBtn" className="pill" icon={<FileTextOutlined />} onClick={() => ui.openLog()}>运行日志</Button>
       {deliverable && !showResult &&
         <Button type="primary" id="resultTabBtn" className="pill primary"
           onClick={() => { S.processView[S.active] = false; ui.render('main'); }}>交付结果</Button>}
       {covPill}
-      {/* 对照阅读:解析版出来就能左右对照;评分点有了就能点它两边定位 */}
-      {(S.arts[S.active] || []).some(a => a.name === '招标文件_解析版.md') &&
-        <Button id="compareBtn" className="pill" icon={<ColumnWidthOutlined />} title="左招标原文、右标书章节,点评分点两边同时定位"
-          onClick={() => ui.openSheet('compare')}>对照阅读</Button>}
       <Button id="hAct" icon={<SafetyCertificateOutlined />}
         type={(state === 'completed' || state === 'failed' || state === 'needs_input') ? 'primary' : 'default'}
         className={'pill' + ((state === 'completed' || state === 'failed' || state === 'needs_input') ? ' primary' : '')}
         onClick={() => ui.openCheck()}>
         {missingWord ? '查看未完成原因' : (state === 'completed' || state === 'needs_input' ? '查看待确认项' : '出件前检查')}</Button>
+      {/* 次要动作收进「···」:顶栏只留当前状态真正要按的那几颗,不再换行 */}
+      <Dropdown trigger={['click']} placement="bottomRight" menu={{ items: [
+          { key: 'log', icon: <FileTextOutlined />, label: <span id="logBtn">运行日志</span> },
+          { key: 'compare', icon: <ColumnWidthOutlined />, disabled: !hasParsed,
+            label: <span id="compareBtn" title="左招标原文、右标书章节,点评分点两边同时定位">对照阅读</span> },
+          { key: 'folder', icon: <FolderOpenOutlined />, label: '任务文件夹' },
+        ], onClick: ({ key }) => { if(key === 'log') ui.openLog(); else if(key === 'compare') ui.openSheet('compare'); else ui.openJobFolder(); } }}>
+        <Button id="moreBtn" className="pill" icon={<EllipsisOutlined />} title="运行日志 · 对照阅读 · 任务文件夹" />
+      </Dropdown>
     </div></div>
   );
 }
