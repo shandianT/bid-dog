@@ -74,3 +74,17 @@ def chapter_task(node, target_chars=CHAPTER_TARGET_CHARS):
                 '、'.join(str(v) for v in (node.get('material_slots') or [])) or '无指定素材槽位',
                 int(target_chars),
                 ('本次为人工发起的单章重写,用户补充要求(必须落实):%s。' % user_note) if user_note else ''))
+
+
+# ---------- 标准模式的模型复核:输出必须能被引擎解析,否则报告只是个文件 ----------
+REVIEW_TABLE_HEADER = '| 章节 | 问题 | 级别 | 修订建议 |'
+
+
+def review_task():
+    return ('复核《投标文件_整册.md》对评分点、废标风险、偏离表和事实边界的覆盖情况,不改写正文。'
+            '先用一段话给总体结论(可直接提交 / 补料后可提交 / 仅可作初稿);'
+            '然后必须输出一张 Markdown 表,表头固定为 %s ,'
+            '「章节」写章节标题原文,「级别」只能写 必办 或 建议:必办 = 不改不能投(漏答评分点、'
+            '废标条款未响应、事实编造、复读或模板灌水);建议 = 改了更好。每行一个问题,'
+            '「问题」写清缺什么、在哪,「修订建议」写清怎么补。没有问题时表里写一行「无」。'
+            % REVIEW_TABLE_HEADER)

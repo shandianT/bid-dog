@@ -6,7 +6,6 @@ import { installGlobals } from './core/index.js'
 import { installUiBridge } from './ui-bridge.jsx'
 import App from './App.jsx'
 import Showcase from './Showcase.jsx'
-import './app.css'
 import './live.css'
 
 // 设计令牌集中在这里:品牌蓝沿用现产品(#0a63c9 系),中性色转微冷灰,

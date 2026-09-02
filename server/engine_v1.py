@@ -1865,6 +1865,14 @@ def quality_audit(job, known):
                 pass
             except Exception as e:
                 lines.append('⚠ 重建 %s 失败:%s(md 修复稿仍有效)' % (target, e))
+    # 标准模式的模型复核报告:必办 → 红,建议 → 黄,和确定性质检的结论合在同一张出件前检查里
+    review_gaps = _review_report_gaps(job)
+    review_red = [g for g in review_gaps if g['level'] == 'red']
+    if review_gaps:
+        lines.append('🧐 模型复核:必办 %d 项、建议 %d 项(见《模型复核报告.md》)'
+                     % (len(review_red), len(review_gaps) - len(review_red)))
+        if review_red: worst = 'red'
+        elif worst == 'green': worst = 'yellow'
     verdict = {'green': '✅ 成品质检通过', 'yellow': '🟡 成品质检:有建议项(见《成品质检报告.md》)',
                'red': '🔴 成品质检:有必须处理项——按报告处理或对相应章节「定向重做」后再交付'}[worst]
     emit(job, {'type': 'message', 'role': 'agent', 'text': verdict + '\n\n' + '\n'.join(lines[:14]),
@@ -1885,10 +1893,17 @@ def quality_audit(job, known):
                 g['actions'] = [{'act': 'redo', 'label': '重做这一章',
                                  'param': '重写章节「%s」:%s' % (ch.group(1), t)}]
             gaps.append(g)
+        gaps.extend(review_gaps)
         gaps.append({'level': 'yellow', 'title': '也可以对整册不达标章节一起重做',
                      'detail': '只重做这些章节,其余产物保留,完成后自动重新汇总并更新自检',
                      'actions': [{'act': 'open_redo', 'label': '定向重做'}]})
         emit(job, {'type': 'health', 'level': 'red', 'summary': '成品质检有必须处理项', 'gaps': gaps})
+    elif review_gaps:
+        emit(job, {'type': 'health', 'level': 'yellow', 'summary': '模型复核有建议项',
+                   'gaps': review_gaps + [{'level': 'yellow', 'title': '逐项详情见《模型复核报告.md》',
+                                           'detail': '建议项改了更好,不改也能提交',
+                                           'actions': [{'act': 'open_artifact', 'label': '打开复核报告',
+                                                        'file': '模型复核报告.md'}]}]})
     if audit_errors:
         append_diagnostic(job, 'quality_audit_partial_error', '; '.join(audit_errors), level='error')
         return {'status': 'unknown', 'level': 'unknown', 'summary': '部分关键检查没有完成'}
@@ -3535,26 +3550,91 @@ def _pipeline_material_paths(job):
     return result
 
 
+# ---------- 素材按章检索 ----------
+# 以前每个章节节点都把整个 素材/ 拷进尝试目录,再按文件名顺序读到 140k 预算——素材库越大,
+# 排在后面的文件越被截光,而且每一章都在重复读同一堆无关的章节模板(token 成本大头)。
+# 现在:根目录的规范素材(能力表/应答要点/公司介绍/资质案例/图片索引)永远带上;
+# 子目录(章节模板/、任务导入/)按本章标题、素材槽位、评分点的关键词命中排序,装到预算为止;
+# 图片等二进制不进节点目录——模型读不到,导出 Word 时从 job/素材 取。
+MATERIAL_CANONICAL = ('产品能力表.md', '应答要点.md', '公司介绍.md', '产品资料.md', '资质与案例.md',
+                      '图片索引.md', '图片索引.json')
+MATERIAL_TEXT_EXTS = ('.md', '.txt', '.json', '.csv', '.docx', '.pdf', '.html', '.htm', '.doc')
+
+
+def _material_terms(node):
+    raw = [node.get('title')] + list(node.get('material_slots') or []) + \
+          list(node.get('scoring_points') or []) + list(node.get('basis') or [])
+    terms = set()
+    for value in raw:
+        for piece in re.split(r'[\s、,，;；:：()（）/／|｜\-—_.。\d〔〕「」]+', str(value or '')):
+            piece = piece.strip()
+            if len(piece) >= 2: terms.add(piece)
+            # 中文长词整词常撞不上,再切 2-gram
+            for i in range(len(piece) - 1):
+                gram = piece[i:i + 2]
+                if re.fullmatch(r'[\u4e00-\u9fff]{2}', gram): terms.add(gram)
+    return terms
+
+
+def _pipeline_select_materials(job, node, paths):
+    """返回 (按相关性排好序的素材路径, 跳过数)。"""
+    materials = os.path.join(job, '素材')
+    budget = max(10000, int(os.environ.get('BIDDOG_CHAPTER_MATERIAL_CHARS', 60000)))
+    canonical, ranked, skipped = [], [], 0
+    terms = _material_terms(node)
+    for source in paths:
+        rel = os.path.relpath(source, materials).replace(os.sep, '/')
+        name = os.path.basename(source)
+        if os.path.splitext(name)[1].lower() not in MATERIAL_TEXT_EXTS:
+            skipped += 1; continue
+        if '/' not in rel or name in MATERIAL_CANONICAL:
+            canonical.append(source); continue
+        haystack = name + '\n' + _pipeline_model_file_text(source, 2000)
+        score = sum((3 if term in name else 1) for term in terms if term in haystack)
+        ranked.append((score, rel, source))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    chosen, used = list(canonical), 0
+    for score, _rel, source in ranked:
+        if score <= 0:
+            skipped += 1; continue
+        try: size = os.path.getsize(source)
+        except OSError: continue
+        if used + size > budget:
+            skipped += 1; continue
+        chosen.append(source); used += size
+    return chosen, skipped
+
+
 def _pipeline_copy_inputs(job, node, target):
-    """Materialize the exact read set for one model attempt; never use symlinks."""
+    """Materialize the exact read set for one model attempt; never use symlinks.
+
+    返回按「该先给模型看什么」排好的相对路径:声明输入(解析版/要求/规划/前置章节)在前,
+    规范素材其次,按相关性挑出来的章节模板最后——预算不够时被截掉的是最不相干的。"""
     node_id = str(node.get('id') or '')
-    copied = set()
+    copied, ordered = set(), []
     for name in _pipeline_declared_input_names(job, node):
         safe = os.path.basename(str(name or ''))
         if not safe or safe in copied: continue
         source = os.path.join(job, safe)
         if os.path.isfile(source) and not os.path.islink(source):
-            shutil.copy2(source, os.path.join(target, safe)); copied.add(safe)
+            shutil.copy2(source, os.path.join(target, safe)); copied.add(safe); ordered.append(safe)
     skill_file = os.path.join(skill_dir_conf(read_json(conf_path(), {})), 'SKILL.md')
     if os.path.isfile(skill_file) and not os.path.islink(skill_file):
         shutil.copy2(skill_file, os.path.join(target, 'SKILL.md'))
     materials = os.path.join(job, '素材')
     if node_id.startswith('chapter_write:'):
-        for source in _pipeline_material_paths(job):
+        chosen, skipped = _pipeline_select_materials(job, node, _pipeline_material_paths(job))
+        for source in chosen:
             rel = os.path.relpath(source, materials)
             destination = os.path.join(target, '素材', rel)
             os.makedirs(os.path.dirname(destination), exist_ok=True)
             shutil.copy2(source, destination)
+            ordered.append(os.path.join('素材', rel).replace(os.sep, '/'))
+        if skipped:
+            append_diagnostic(job, 'material_selected',
+                              '本章按相关性带入 %d 份素材,跳过 %d 份(二进制或与本章无关)' % (len(chosen), skipped),
+                              level='info', node_id=node_id)
+    return ordered
 
 
 def _pipeline_model_file_text(path, budget):
@@ -3650,8 +3730,7 @@ def _pipeline_direct_task(job, node):
     if node_id.startswith('chapter_write:'):
         return prompts.chapter_task(node)
     if node_id == 'quality_review':
-        return ('复核整册对评分点、废标风险、偏离表和事实边界的覆盖情况，输出明确的质检结论、'
-                '缺口和提交前人工确认项；不改写正文。')
+        return prompts.review_task()
     return '完成节点“%s”，只输出本节点指定文件。' % (node.get('title') or node_id)
 
 
@@ -4377,7 +4456,7 @@ def _pipeline_model_runner(job, node, prompt, model):
         raise generation_pipeline.NodeExecutionError('model_auth_missing', retryable=False)
     _pipeline_validate_execution_contract(job, up)
     attempt_root = generation_pipeline.attempt_directory(job, node)
-    _pipeline_copy_inputs(job, node, str(attempt_root))
+    ordered_inputs = _pipeline_copy_inputs(job, node, str(attempt_root))
     skill_path = os.path.join(str(attempt_root), 'SKILL.md')
     if not os.path.isfile(skill_path):
         raise generation_pipeline.NodeExecutionError('skill_contract_missing', retryable=False)
@@ -4387,18 +4466,24 @@ def _pipeline_model_runner(job, node, prompt, model):
     skill_contract = _pipeline_skill_contract(skill_text)
 
     budget = max(30000, int(os.environ.get('BIDDOG_PIPELINE_CONTEXT_CHARS', 140000)))
-    sections = []
+    # 喂给模型的顺序 = _pipeline_copy_inputs 排好的顺序(声明输入 → 规范素材 → 相关章节模板),
+    # 不再按文件名字母序:以前素材一多,招标解析版都可能被排在后面截掉。
+    candidates = list(ordered_inputs or [])
     for parent, dirs, files in os.walk(str(attempt_root), followlinks=False):
         dirs[:] = [name for name in dirs if not os.path.islink(os.path.join(parent, name))]
         for name in sorted(files):
-            path = os.path.join(parent, name)
-            if os.path.realpath(path) == os.path.realpath(skill_path) or os.path.islink(path): continue
-            if budget <= 0: break
-            text = _pipeline_model_file_text(path, min(budget, 60000))
-            if not text.strip(): continue
-            rel = os.path.relpath(path, str(attempt_root)).replace(os.sep, '/')
-            sections.append('## 输入文件：%s\n%s' % (rel, text))
-            budget -= len(text)
+            rel = os.path.relpath(os.path.join(parent, name), str(attempt_root)).replace(os.sep, '/')
+            if rel not in candidates: candidates.append(rel)
+    sections = []
+    for rel in candidates:
+        path = os.path.join(str(attempt_root), rel)
+        if not os.path.isfile(path) or os.path.islink(path): continue
+        if os.path.realpath(path) == os.path.realpath(skill_path): continue
+        if budget <= 0: break
+        text = _pipeline_model_file_text(path, min(budget, 60000))
+        if not text.strip(): continue
+        sections.append('## 输入文件：%s\n%s' % (rel, text))
+        budget -= len(text)
 
     outputs = [os.path.basename(str(name)) for name in (node.get('outputs') or [])]
     is_plan = node.get('id') == 'response_plan'
@@ -4673,9 +4758,7 @@ def _pipeline_prompt(job, node):
              outputs[0] if outputs else '章节.md', prompts.CHAPTER_TARGET_CHARS))
     if node_id == 'quality_review':
         output = outputs[0] if outputs else '模型复核报告.md'
-        return common + (
-            '任务：复核 `投标文件_整册.md` 对评分点、废标项、事实依据和重复内容的覆盖。\n'
-            '唯一输出：`%s`。只给复核结论和明确修订建议，不改正文。' % output)
+        return common + ('任务：%s\n唯一输出：`%s`。' % (prompts.review_task(), output))
     raise generation_pipeline.PipelineError('没有该节点的模型提示：%s' % node_id)
 
 
@@ -4705,6 +4788,106 @@ def _pipeline_event(job, event, node):
                    'text': '“%s”%s（已尝试 %d/%d）；前面成果已保留。' %
                            (title, reason, int(node.get('attempt') or 0),
                             int(node.get('max_attempts') or 3))})
+
+
+def _write_text_atomic(path, text):
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as handle: handle.write(text)
+    os.replace(tmp, path)
+
+
+def _plan_chapter_titles(job):
+    try: state = generation_pipeline.load(job)
+    except Exception: return []
+    return [str(n.get('title') or '') for n in (state.get('nodes') or [])
+            if str(n.get('id') or '').startswith('chapter_write:') and str(n.get('title') or '').strip()]
+
+
+def _build_scoring_index(job):
+    """《评标索引》:评委按它逐项翻——每个评分点对应到具体章节。只有规划经模型核对过才有资格
+    出这张表:本地索引的「落位」是一句常量,印出来就是一张全是〔需补充〕的表。"""
+    plan = read_json(os.path.join(job, 'response_plan.json'), {})
+    if not isinstance(plan, dict) or plan.get('source') != 'model': return ''
+    rows = _md_table_rows(os.path.join(job, '评分点响应矩阵.md'), 6)
+    if not rows: return ''
+    titles = _plan_chapter_titles(job)
+    lines = ['# 评标索引', '',
+             '> 评委按本表逐项翻阅:每个评分点对应到具体章节;页码以最终 Word 目录为准。', '',
+             '| 序号 | 评分项 | 分值 | 评估标准 / 证据 | 对应章节 |', '|---|---|---:|---|---|']
+    for index, row in enumerate(rows, 1):
+        requirement, score, location, evidence = row[1], row[2], row[3], row[4]
+        matched = _plan_match_title(location, titles) or ('' if '需补充' in location else location.strip())
+        lines.append('| %d | %s | %s | %s | %s |' % (
+            index, _pipeline_cell(requirement), _pipeline_cell(score), _pipeline_cell(evidence),
+            _pipeline_cell(matched)))
+    total = _plan_score_sum(row[2] for row in rows)
+    if total: lines.extend(['', '评分点合计 %s 分。' % _fmt_num(total)])
+    return '\n'.join(lines) + '\n'
+
+
+_SUPPLEMENT_RX = re.compile(r'〔(需补充|此处粘贴|参数待核实|配图建议|配图待人工)[:：]?([^〕]{0,120})〕')
+
+
+def _build_supplement_list(job, chapter_outputs):
+    """《投标人补料清单》:正文里的占位(〔需补充〕〔此处粘贴〕〔参数待核实〕〔配图建议〕)按章汇总,
+    加上废标风险清单里的提交前动作,再加固定的人工确认节点。自动初稿 ≠ 直接可投,这张表就是差距清单。"""
+    items = []
+    for name in chapter_outputs:
+        try: text = open(os.path.join(job, name), encoding='utf-8', errors='ignore').read()
+        except OSError: continue
+        head = re.search(r'^#\s+(.+?)\s*$', text, re.M)
+        chapter = head.group(1).strip() if head else os.path.splitext(name)[0]
+        seen = set()
+        for kind, detail in _SUPPLEMENT_RX.findall(text):
+            key = (kind, detail.strip())
+            if key in seen: continue
+            seen.add(key)
+            items.append((chapter, kind, detail.strip() or '—'))
+    risks = _md_table_rows(os.path.join(job, '废标风险清单.md'), 5)
+    lines = ['# 投标人补料清单', '',
+             '> 自动初稿 ≠ 直接可投。下表是正文里留下的占位与提交前必办事项,逐条处理后再提交。', '',
+             '## 一、正文占位(按章节)', '',
+             '| 序号 | 章节 | 类型 | 内容 | 状态 |', '|---|---|---|---|---|']
+    if items:
+        for index, (chapter, kind, detail) in enumerate(items[:200], 1):
+            lines.append('| %d | %s | %s | %s | 待处理 |' % (index, _pipeline_cell(chapter), kind, _pipeline_cell(detail)))
+    else:
+        lines.append('| — | — | — | 正文未留占位 | — |')
+    lines.extend(['', '## 二、废标风险对应动作', '',
+                  '| 序号 | 类别 | 招标要求 | 提交前动作 | 状态 |', '|---|---|---|---|---|'])
+    if risks:
+        for index, row in enumerate(risks[:80], 1):
+            lines.append('| %d | %s | %s | %s | 待核对 |' % (
+                index, _pipeline_cell(row[1]), _pipeline_cell(row[2]), _pipeline_cell(row[4])))
+    else:
+        lines.append('| — | — | 未生成废标风险清单 | 人工对照招标原文核对 | — |')
+    lines.extend(['', '## 三、人工确认节点(不得代填)', '',
+                  '- 投标人名称、报价、资质证书有效期、项目案例、签章/装订/密封/份数要求。',
+                  '- 所有〔需补充〕项完成后,方可作为正式投标文件提交。'])
+    return '\n'.join(lines) + '\n'
+
+
+def _review_report_gaps(job):
+    """把标准模式的《模型复核报告.md》解析成出件前检查里能点的条目:必办 → 红(挂「重做这一章」),
+    建议 → 黄。以前这份报告只是右栏里一个文件,标准模式多花的那份钱没有闭环。"""
+    path = os.path.join(job, '模型复核报告.md')
+    if not os.path.isfile(path): return []
+    titles = _plan_chapter_titles(job)
+    gaps = []
+    for row in _md_table_rows(path, 4)[:40]:
+        chapter, problem, level, advice = row[0].strip(), row[1].strip(), row[2].strip(), row[3].strip()
+        if chapter == '章节' or problem in ('', '无', '—', '-', '无问题'): continue
+        matched = _plan_match_title(chapter, titles)
+        actions = []
+        if matched:
+            actions.append({'act': 'redo', 'label': '重做这一章',
+                            'param': '重写章节「%s」:%s;%s' % (matched, problem[:120], advice[:200])})
+        actions.append({'act': 'open_artifact', 'label': '打开复核报告', 'file': '模型复核报告.md'})
+        gaps.append({'level': 'red' if '必办' in level else 'yellow',
+                     'title': '复核:%s' % problem[:80],
+                     'detail': (('%s · ' % chapter) if chapter else '') + (advice[:200] or '见复核报告'),
+                     'actions': actions})
+    return gaps
 
 
 def _pipeline_complete_local(job, node_id, digest, action, *, retryable=True):
@@ -4904,12 +5087,27 @@ def generation_pipeline_worker(job):
         state = generation_pipeline.load(job)
         chapter_outputs = [node['outputs'][0] for node in state.get('nodes') or []
                            if str(node.get('id') or '').startswith('chapter_write:')]
-        assemble_digest = generation_pipeline.file_digest([os.path.join(job, name) for name in chapter_outputs])
+        assemble_digest = generation_pipeline.file_digest(
+            [os.path.join(job, name) for name in chapter_outputs]
+            + [os.path.join(job, name) for name in ('评分点响应矩阵.md', '废标风险清单.md', 'response_plan.json')
+               if os.path.isfile(os.path.join(job, name))])
         def assemble(_node):
             pieces = []
             for name in chapter_outputs:
                 text = open(os.path.join(job, name), encoding='utf-8', errors='ignore').read().strip()
                 if text: pieces.append(text)
+            # 整册级产物(SKILL 第 4.5/5 步要求、流水线以前没有):评标索引放整册最前,
+            # 补料清单放最后;都另存一份单独文件,右栏能直接点开。
+            index_md = _build_scoring_index(job)
+            if index_md:
+                _write_text_atomic(os.path.join(job, '评标索引.md'), index_md)
+                emit(job, {'type': 'artifact', 'name': '评标索引.md'})
+                pieces.insert(0, index_md.strip())
+            supplement_md = _build_supplement_list(job, chapter_outputs)
+            if supplement_md:
+                _write_text_atomic(os.path.join(job, '投标人补料清单.md'), supplement_md)
+                emit(job, {'type': 'artifact', 'name': '投标人补料清单.md'})
+                pieces.append(supplement_md.strip())
             target = os.path.join(job, '投标文件_整册.md')
             tmp = target + '.tmp'
             open(tmp, 'w', encoding='utf-8').write('\n\n---\n\n'.join(pieces) + '\n')

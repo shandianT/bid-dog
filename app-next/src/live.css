@@ -638,3 +638,8 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 /* 修改结果:范围控件一行(分段 + 章节选择 + 引擎的判定理由) */
 .rw-scope{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .rw-scope .outline-note{flex-basis:100%;margin-top:-2px}
+
+/* 滚动条(原在 app.css;app.css 现只服务 ?showcase=1 原型) */
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#d7dae0;border-radius:9px;border:2.5px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#c2c6cd;border:2.5px solid transparent;background-clip:content-box}
