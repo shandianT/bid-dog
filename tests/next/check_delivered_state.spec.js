@@ -102,7 +102,7 @@ test('the coverage pill explains why it is short, without opening anything', asy
     renderCovPill();
   });
   const pill = page.locator('#covPill');
-  await expect(pill).toHaveText('评分点覆盖 0/19');
+  await expect(pill).toContainText('0/19');
   await expect(pill).toHaveAttribute('title', /未覆盖 19 项/);
   await expect(pill).toHaveAttribute('title', /还没落到具体章节 15 项/);
   await expect(pill).toHaveAttribute('title', /规划里还留着缺口 4 项/);

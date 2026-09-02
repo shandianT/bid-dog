@@ -1,10 +1,10 @@
 // 中栏:两个页签——「对话」= 聊天(问进度、提要求、回答 AI 的提问,输入框发出去自动切过来);
-// 「展示」= 标书大纲(内容)+ 可收起的执行过程(过程)。流程台视图模型、消息渲染逐字对应经典。
+// 「标书」= 一行可收起的执行过程 + 标书视图(左目录、右正文)。流程台视图模型、消息渲染逐字对应经典。
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { Card, Steps, List, Tag, Button } from 'antd';
 import { ThoughtChain } from '@ant-design/x';
 import { CheckCircleFilled, LoadingOutlined, CloseCircleFilled, ClockCircleOutlined, RightOutlined } from '@ant-design/icons';
-import { S, ui, bump, flowConsoleView, taskPresentation, phaseTimingLabel, timing, fmtDur,
+import { S, ui, bump, flowConsoleView, taskPresentation, phaseTimingLabel, timing, fmtDur, knownStep,
          jobState, publicTaskState, _friendlyText, _friendlyActionLabel, errAction, answer, ASK_SELF } from '../core/index.js';
 import { mdHtml } from '../lib.js';
 import Outline, { _chapterNodes } from './Outline.jsx';
@@ -12,8 +12,8 @@ import ConfirmCard from './ConfirmCard.jsx';
 
 const STATE_LABELS = { done: '已完成', active: '进行中', attention: '需关注', failed: '未完成', pending: '等待中' };
 
-const MID_TABS = [['chat', '对话'], ['show', '展示']];
-const TAB_HINT = { chat: '问进度、提要求;AI 的提问也在这里回答', show: '标书大纲 · 执行过程' };
+const MID_TABS = [['chat', '对话'], ['show', '标书']];
+const TAB_HINT = { chat: '问进度、提要求;AI 的提问也在这里回答', show: '目录在左,正文在右;执行过程收在最上面一行' };
 
 // 默认页签:AI 在等你回答 → 对话;有章节或有流程可看 → 展示;什么都还没有 → 对话。用户点过就记住。
 export function currentMidTab(id){
@@ -34,7 +34,11 @@ function FlowConsole(){
   const selectedId = (S.flowPhaseSelection[id] && vm.phases.some(x => x.id === S.flowPhaseSelection[id])) ? S.flowPhaseSelection[id] : vm.currentPhase;
   const selected = vm.phases.find(x => x.id === selectedId) || vm.phases[0];
   const checks = Array.isArray(selected.checks) ? selected.checks : [];
-  const selectedTiming = phaseTimingLabel(selected), selectedIsCurrent = selected.id === vm.currentPhase;
+  // 任务没在跑,未完成阶段的「已用 / 已超出」只是从开始时刻数到现在的钟,不是真干活的时间:停了就只报常规耗时
+  const frozen = publicTaskState(job) !== 'generating';
+  const timingOf = x => phaseTimingLabel(frozen && String(x.state) !== 'done'
+    ? Object.assign({}, x, { elapsed_seconds: null, overdue_seconds: 0, remaining_seconds: null }) : x);
+  const selectedTiming = timingOf(selected), selectedIsCurrent = selected.id === vm.currentPhase;
   const currentIndex = Math.max(0, vm.phases.findIndex(x => x.id === vm.currentPhase));
   const trackRef = useRef(null);
   // antd Steps 不透传任意 DOM 属性,契约要的 data-phase 在渲染后按顺序打上(幂等)
@@ -69,7 +73,7 @@ function FlowConsole(){
             description: (
               <span className="fp-d">
                 <span title={x.evidence || x.detail}>{x.detail || x.evidence || '等待执行'}</span>
-                {phaseTimingLabel(x) ? <small className="flow-phase-time num">{phaseTimingLabel(x)}</small> : null}
+                {timingOf(x) ? <small className="flow-phase-time num">{timingOf(x)}</small> : null}
               </span>
             ),
           }))} />
@@ -179,7 +183,7 @@ function Worklog(){
   const p0 = S.prog[id] || {};
   const j0 = (S.jobs || []).find(x => x.job_id === id);
   const running = j0 ? jobState(j0) === 'running' : (p0.pct || 0) < 100 && p0.step;
-  const live = (p0.pct || 0) < 100;
+  const live = !!running && (p0.pct || 0) < 100;   // 停下的任务不是「进行中」,是回放
   // 台词按「── 第 N 步 · 名称 ──」分段,正好落成 ThoughtChain 的一节:
   // 标题=这一步在干什么,内容=它逐行报的事实。
   // 量过:492 行分一次 0.047ms,而一次事件驱动的整树提交中位 8.4ms——记忆化省下的是
@@ -224,18 +228,20 @@ function Worklog(){
   );
 }
 
-// 执行过程一行摘要 + 展开/收起:没有章节可看、或任务停了/没完成 → 默认展开;在写/已完成 → 收成一行
+// 执行过程一行摘要 + 展开/收起:没有章节可看、或任务停了/没完成 → 默认展开;在写/已完成 → 收成一行。
+// 这一行只说流程台自己的事(当前阶段 / 第几步 / 断点),状态由顶栏徽章说,不再复读顶栏副题。
 function FlowSection({ id, job, open }){
-  const p = taskPresentation(job);
   const prog = S.prog[id] || {};
-  const step = prog.step ? (prog.step + '/' + (prog.total || 12)) : '';
+  const vm = flowConsoleView(job.flow, S.streamState[id], prog);
+  const cur = vm.phases.find(x => x.id === vm.currentPhase) || vm.phases[0];
+  const k = knownStep(job, prog, 12);
   return (
     <div className={'sec flow-sec' + (open ? ' open' : '')}>
       <button type="button" className="sec-head sec-toggle" id="flowToggle" aria-expanded={open}
         onClick={() => { S.flowOpen[id] = !open; bump(); }}>
         <RightOutlined className={'sec-caret' + (open ? ' open' : '')} />
         <span className="sec-title">执行过程</span>
-        <span className="sec-meta">{[p.currentAction, step, '最近活动 ' + p.lastActivity].filter(Boolean).join(' · ')}</span>
+        <span className="sec-meta">{[cur ? cur.label : '', k ? '第 ' + k + '/12 步' : '', vm.checkpoint].filter(Boolean).join(' · ')}</span>
         <span className="sec-x">{open ? '收起' : '展开'}</span>
       </button>
       {open && <>
@@ -284,8 +290,8 @@ export default function Mid(){
         </div></div>
       )}
       <div className="cwrap"><ConfirmCard /></div>
-      {on && tab === 'show' && <div className="cwrap" id="outlineHost"><Outline /></div>}
       {on && tab === 'show' && <div className="cwrap" id="flowHost"><FlowSection id={id} job={job} open={flowOpen} /></div>}
+      {on && tab === 'show' && <div className="cwrap" id="outlineHost"><Outline /></div>}
       {(!on || tab === 'chat') && <div className="cwrap chat-sec"><ChatMessages /></div>}
     </div>
   );

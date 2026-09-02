@@ -49,38 +49,38 @@ export default function Head(){
     badge = <Badge cls={cls}>{PUBLIC_TASK_LABELS[state] || '未完成'}</Badge>;
   }
 
-  // 副题 lead:PR #10——出了件先说出了件,再说还差什么
-  let lead = present.currentAction;
+  // 副题只说「接下来该做什么」:状态由徽章说,进度与计时由右栏说,三处不再互相复读或打架。
+  // (以前副题直接放引擎的 current_action,重开应用后它还写着「已停止」,徽章却说「需要你确认」。)
+  const chip = S.chips[S.active];
+  let lead;
   if(state === 'failed' && word === 'ready'){
+    // PR #10——出了件先说出了件,再说还差什么
     const open = ((S.health[S.active] || {}).gaps || []).filter(g => g.level !== 'green').length;
     lead = open ? ('Word 已生成 · 提交前需处理 ' + open + ' 项') : 'Word 已生成 · 质检未通过,请看出件前检查';
   }
-  const parts = [lead, '最后活动 ' + present.lastActivity];
-  if(present.eta && present.eta !== '—') parts.push(present.eta);
-  if(t.elapsed && j && j.elapsed_seconds == null && j.elapsed == null) parts.push('已用 ' + fmtDur(t.elapsed));
+  else if(state === 'needs_input') lead = (chip && chip.kind === 'confirm_parse') ? '解析结果等你确认,确认后开始撰写'
+    : chip ? '有一个问题等你回答,在「对话」里' : '等待你的操作';
+  else if(state === 'preparing') lead = '材料已就位,点「开始生成」';
+  else if(state === 'completed') lead = 'Word 已生成 · 请人工复核后提交';
+  else if(state === 'failed') lead = caps.resume ? '中途停下,已完成的内容都保住了,可从断点继续' : present.currentAction;
+  else lead = present.currentAction;   // 生成中:正在做什么
+  const parts = [lead];
+  if(state === 'generating' || state === 'needs_input') parts.push('最后活动 ' + present.lastActivity);
+  if(state === 'generating' && present.eta && present.eta !== '—') parts.push(present.eta);
+  if(state === 'generating' && t.elapsed && j && j.elapsed_seconds == null && j.elapsed == null) parts.push('已用 ' + fmtDur(t.elapsed));
+
+  // 顶栏只有一颗蓝色主按钮,按状态选:还没开始 → 开始生成;出了件 → 交付结果;等确认 → 查看待确认项;
+  // 停了能续 → 从断点继续;其余 → 出件前检查 / 查看未完成原因。其它按钮一律灰底。
+  const primaryKey = (j && (j.staged || state === 'preparing')) ? 'start'
+    : (deliverable && !showResult) ? 'result'
+    : state === 'needs_input' ? 'act'
+    : (state === 'failed' && !missingWord && word !== 'ready' && caps.resume) ? 'resume'
+    : (state === 'completed' || state === 'failed') ? 'act' : '';
 
   // 进度条:重开应用后 SSE 的 pct 是 0,但检查点仍在;取两者较大值,进度条才不会凭空清零。
   const cpPct = Math.round(knownStep(j, p, 12) / 12 * 100);
   const barPct = Math.max(Number(p.pct) || 0, Number(j && j.pct) || 0, delivery.complete ? 0 : cpPct);
   const barW = (missingWord || delivery.checkingWord ? Math.min(barPct, 99) : barPct) + '%';
-
-  // 覆盖仪表(PR #10:title 汇总未覆盖原因)
-  let covPill = null;
-  if(cov && cov.available && cov.plan_source === 'local'){
-    // 本地关键词索引只是候选:一条都没落到章节,0/N 不是事实。说清「待核对」,点开能看候选清单。
-    covPill = <Button id="covPill" className="pill covpill"
-      title="评分点来自本地关键词索引(候选),尚未经模型核对;模型核对成功后这里才是真实覆盖率。点开可看候选清单"
-      onClick={() => ui.openCoverage()}>评分点 <span className="num">{cov.total}</span> 项 · 待核对</Button>;
-  } else if(cov && cov.available){
-    const un = (cov.items || []).filter(x => !x.covered);
-    const names = { unlocated: '还没落到具体章节', gap: '规划里还留着缺口', chapter_pending: '所在章节还没写完' };
-    const tally = {};
-    un.forEach(x => { const r = String(x.reason || '') || 'unlocated'; tally[r] = (tally[r] || 0) + 1; });
-    const tip = !un.length ? '全部评分点都已覆盖'
-      : '未覆盖 ' + un.length + ' 项:' + Object.keys(tally).sort((a, b) => tally[b] - tally[a]).map(r => (names[r] || r) + ' ' + tally[r] + ' 项').join('、') + '。点开逐条查看,可直接补写应答。';
-    covPill = <Button id="covPill" title={tip} className={'pill covpill' + (cov.covered >= cov.total ? ' on' : '')}
-      onClick={() => ui.openCoverage()}>评分点覆盖 <span className="num">{cov.covered}/{cov.total}</span></Button>;
-  }
 
   return (
     <div className="head" id="head"><div className="hwrap">
@@ -104,17 +104,17 @@ export default function Head(){
         <Button id="redoBtn" className="pill" icon={<ReloadOutlined />}
           title="对已生成的结果提修改要求,出一个新版本" onClick={() => ui.openRedo()}>修改结果</Button>}
       {S.online && caps.resume &&
-        <Button id="resumeBtn" className="pill on" icon={<CaretRightOutlined />}
+        <Button id="resumeBtn" type={primaryKey === 'resume' ? 'primary' : 'default'}
+          className={'pill' + (primaryKey === 'resume' ? ' primary' : '')} icon={<CaretRightOutlined />}
           title="从上次中断的检查点接着往下跑,已完成内容不重写" onClick={resumeJob}>从断点继续</Button>}
       {j && (j.staged || state === 'preparing') && !S._startBusy &&
         <Button type="primary" id="startBtn" className="pill on" icon={<CaretRightOutlined />} onClick={startStaged}>开始生成</Button>}
       {deliverable && !showResult &&
         <Button type="primary" id="resultTabBtn" className="pill primary"
           onClick={() => { S.processView[S.active] = false; ui.render('main'); }}>交付结果</Button>}
-      {covPill}
       <Button id="hAct" icon={<SafetyCertificateOutlined />}
-        type={(state === 'completed' || state === 'failed' || state === 'needs_input') ? 'primary' : 'default'}
-        className={'pill' + ((state === 'completed' || state === 'failed' || state === 'needs_input') ? ' primary' : '')}
+        type={primaryKey === 'act' ? 'primary' : 'default'}
+        className={'pill' + (primaryKey === 'act' ? ' primary' : '')}
         onClick={() => ui.openCheck()}>
         {missingWord ? '查看未完成原因' : (state === 'completed' || state === 'needs_input' ? '查看待确认项' : '出件前检查')}</Button>
       {/* 次要动作收进「···」:顶栏只留当前状态真正要按的那几颗,不再换行 */}

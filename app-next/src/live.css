@@ -805,3 +805,39 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relati
 .sec-caret.open{transform:rotate(90deg)}
 .sec-x{font:450 var(--fs-xs)/1 inherit;color:var(--blue);flex:none}
 .chat-sec{padding-top:4px}
+
+/* ============ 0.22.1:标书视图(左目录 + 右正文)· 顶栏/侧栏收拾 ============ */
+.doc{display:grid;grid-template-columns:250px minmax(0,1fr);gap:16px;align-items:start}
+.doc-toc{position:sticky;top:48px;max-height:calc(100vh - 215px);overflow:auto;min-width:0;padding-right:2px}
+.doc-toc .outline{gap:1px}
+.doc-toc .outline .ant-list-item{border:0;background:transparent;padding:5px 8px;border-radius:8px;cursor:pointer;box-shadow:none}
+.doc-toc .outline .ant-list-item:hover{background:var(--hover);border:0;box-shadow:none}
+.doc-toc .outline .ant-list-item.sel{background:var(--blue-weak)}
+.doc-toc .outline .ant-list-item.sel .ol-line b{color:var(--blue)}
+.doc-toc .ol-line{flex-direction:column;align-items:flex-start;gap:1px}
+.doc-toc .ol-line b{white-space:normal;line-height:1.35;overflow:visible}
+.doc-toc .ol-sub{font-size:var(--fs-xs)}
+.doc-toc .outline-w{font-size:var(--fs-xs)}
+.doc-toc .ol-rw{display:none}
+.doc-note{font:400 var(--fs-xs)/1.6 inherit;color:var(--dim);padding:8px 8px 0}
+.doc-pane{background:var(--card);border:1px solid var(--line-soft);border-radius:12px;box-shadow:var(--sh);min-height:420px;padding:18px 26px 30px}
+.doc-head{display:flex;align-items:flex-start;gap:12px;padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid var(--line-soft)}
+.doc-title{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.doc-title b{font:650 var(--fs-lg)/1.35 inherit;letter-spacing:-.01em}
+.doc-meta{font:400 var(--fs-xs)/1.5 inherit;color:var(--dim)}
+.doc-actions{display:flex;gap:6px;flex:none}
+.doc-body{font-size:calc(var(--fs-md) + 1px);line-height:1.9;color:var(--ink);max-width:760px}
+.doc-body h1,.doc-body h2,.doc-body h3{font-size:1.08em;margin:1.1em 0 .45em;font-weight:650}
+.doc-body p{margin:.5em 0}
+.doc-body table{width:100%;font-size:.94em}
+.doc-body td,.doc-body th{border:1px solid var(--line);padding:5px 8px;vertical-align:top}
+.doc-wait{display:flex;align-items:center;gap:8px;color:var(--dim);font:400 var(--fs-sm)/1.7 inherit;padding:28px 0}
+@media (max-width:1180px){.doc{grid-template-columns:1fr}.doc-toc{position:static;max-height:none}}
+/* 侧栏:批量管理不再是一只空白盒子;任务副题一行只放「状态 · 多久前」 */
+.taskbulk.idle{border:0;border-radius:0;padding:0 2px;background:transparent;margin:0 0 -2px}
+.tbrow .tblink{border:0;background:transparent;color:var(--dim);padding:2px 4px;font:450 var(--fs-xs)/1 inherit;border-radius:6px}
+.tbrow .tblink:hover:not(:disabled){color:var(--blue);background:transparent;border:0}
+/* 右栏评分点仪表(从顶栏搬来):标题行常驻 */
+.rcard .ant-btn-link.covpill{padding:0 4px;font:600 var(--fs-sm)/1 inherit;color:var(--blue)}
+.rcard .ant-btn-link.covpill.on{color:var(--green)}
+.rcard .ant-btn-link.covpill .anticon-right{font-size:10px}

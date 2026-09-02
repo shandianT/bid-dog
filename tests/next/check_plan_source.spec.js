@@ -93,7 +93,7 @@ test('a local-index plan is presented as candidates awaiting model check, never 
 
 test('a model-checked plan keeps the real coverage and surfaces plan notes', async ({ page }) => {
   await openJob(page, MODEL_JOB, '模型核对过的任务');
-  await expect(page.locator('#covPill')).toHaveText('评分点覆盖 1/2');
+  await expect(page.locator('#covPill')).toContainText('1/2');
   await page.locator('#covPill').click();
   await expect(page.locator('#covSheet .covlocal')).toHaveCount(0);
   await expect(page.locator('#covSheet .covnote')).toContainText('总分 100 分不一致');
