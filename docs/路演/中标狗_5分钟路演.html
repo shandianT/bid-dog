@@ -166,6 +166,33 @@ h2 em{font-style:normal;color:var(--brand)}
 .pc b{display:block;font-size:19px}
 .pc span{display:block;font-size:15.5px;color:var(--ink2);line-height:1.5;margin-top:6px}
 
+/* ---------- 父子 Agent ---------- */
+.s-agents .hd{margin-bottom:10px}
+.arch .par{fill:#0f1c2e}
+.arch .pt{font-size:27px;font-weight:800;fill:#fff}
+.arch .ps{font-size:15px;fill:#d6e4ff}
+.arch .pm{font-size:13px;fill:#8fa6c6}
+.arch .dut{fill:#1b2a42;stroke:#34486a}
+.arch .dt{font-size:15px;font-weight:700;fill:#fff}
+.arch .dd{font-size:12.5px;fill:#b9c8de}
+.arch .chv{font-size:18px;font-weight:700;fill:#5d7396}
+.arch .bus{fill:none;stroke:#8a98ad;stroke-width:1.6}
+.arch .bus.dash{stroke-dasharray:5 4}
+.arch .card{fill:#fff;stroke:#e9b98a;stroke-width:1.6}
+.arch .card.dash{stroke-dasharray:6 5}
+.arch .step{fill:var(--model-s);stroke:#f3c897}
+.arch .stept{font-size:12px;font-weight:700;fill:var(--model-d)}
+.arch .ct{font-size:18px;font-weight:800;fill:var(--ink)}
+.arch .cnt{font-size:18px;font-weight:800;fill:var(--model)}
+.arch .role{font-size:14px;font-weight:700;fill:var(--ink)}
+.arch .hr{stroke:#eef1f6;stroke-width:1.5}
+.arch .k{font-size:12.5px;font-weight:700;fill:var(--brand)}
+.arch .v{font-size:12.5px;fill:var(--ink2)}
+.arch .rule{fill:var(--brand-s);stroke:#cadcf8}
+.arch .rt{font-size:14.5px;font-weight:800;fill:var(--brand-d)}
+.arch .rd{font-size:13.5px;fill:var(--ink2)}
+#nt-body .qa{font-size:15px;color:#93a4bd}
+
 /* ---------- 结尾 ---------- */
 .end-inner{position:absolute;left:96px;top:92px;right:96px;display:grid;grid-template-columns:1fr 250px;gap:56px;align-items:center}
 .logo.sm{width:72px;height:72px;border-radius:18px}
@@ -388,110 +415,143 @@ body.notes-on #ctl{bottom:calc(36vh + 12px)}
   </aside>
 </section>
 
-<!-- 6 多 Agent 编排 -->
+<!-- 6 多 Agent 编排（父子分工） -->
 <section class="slide s-agents" data-title="多 Agent 编排" data-t="2:35–3:25">
-  <header class="hd"><div class="kicker">多 Agent 编排</div><h2>引擎当主控，每个 Agent <em>只干一件事</em></h2></header>
-  <div class="arch dag">
-    <svg viewBox="0 0 1152 322" role="img" aria-label="多 Agent 编排：本地解析，响应规划 Agent，人工确认（可选），撰写 Agent 并行，本地汇总，模型复核 Agent，出 Word 与交付门禁；复核发现的必办问题回到单章重写">
+  <header class="hd"><div class="kicker">多 Agent 编排 · 一父多子</div><h2>父 Agent 管调度，子 Agent <em>各管一岗</em></h2></header>
+  <div class="arch">
+    <svg viewBox="0 0 1152 470" role="img" aria-label="父 Agent 是中标狗本地引擎，负责解析排班、派活、验收、汇总、出件；子 Agent 共 5 类：规划 Agent 1 个、撰写 Agent 每章 1 个并行、偏离表 Agent 2 个、复核 Agent 1 个、识图 Agent 在素材入库时运行">
       <defs>
-        <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto">
-          <path d="M0,0 L10,5 L0,10 z" fill="#44536a"/>
-        </marker>
-        <marker id="ahm2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
-          <path d="M0,0 L10,5 L0,10 z" fill="#e07a16"/>
+        <marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#8a98ad"/>
         </marker>
       </defs>
 
-      <!-- 图例 -->
-      <rect class="agt" x="1" y="8" width="14" height="14" rx="4"/><text class="s2" x="22" y="20">Agent · 调用模型</text>
-      <rect class="eng" x="150" y="8" width="14" height="14" rx="4"/><text class="s2" x="171" y="20">引擎 · 确定性代码</text>
-      <rect class="hum" x="306" y="8" width="14" height="14" rx="4"/><text class="s2" x="327" y="20">人工</text>
+      <!-- 父 Agent -->
+      <rect class="par" x="0" y="0" width="1152" height="112" rx="16"/>
+      <text class="pt" x="24" y="46">父 Agent</text>
+      <text class="ps" x="24" y="74">主控 = 中标狗本地引擎</text>
+      <text class="pm" x="24" y="96">代码调度，不是大模型</text>
+      <rect class="dut" x="250" y="24" width="166" height="64" rx="10"/>
+      <text class="dt" x="264" y="50">解析 · 排班</text>
+      <text class="dd" x="264" y="74">按章节依赖图</text>
+      <text class="chv" x="423" y="62" text-anchor="middle">›</text>
+      <rect class="dut" x="430" y="24" width="166" height="64" rx="10"/>
+      <text class="dt" x="444" y="50">派活</text>
+      <text class="dd" x="444" y="74">契约 + 输入 · ≤4 路</text>
+      <text class="chv" x="603" y="62" text-anchor="middle">›</text>
+      <rect class="dut" x="610" y="24" width="166" height="64" rx="10"/>
+      <text class="dt" x="624" y="50">验收</text>
+      <text class="dd" x="624" y="74">不合格只重派一个</text>
+      <text class="chv" x="783" y="62" text-anchor="middle">›</text>
+      <rect class="dut" x="790" y="24" width="166" height="64" rx="10"/>
+      <text class="dt" x="804" y="50">汇总</text>
+      <text class="dd" x="804" y="74">拼整册 · 加索引</text>
+      <text class="chv" x="963" y="62" text-anchor="middle">›</text>
+      <rect class="dut" x="970" y="24" width="166" height="64" rx="10"/>
+      <text class="dt" x="984" y="50">出件</text>
+      <text class="dd" x="984" y="74">Word · 自检 · 门禁</text>
 
-      <!-- 本地解析 -->
-      <rect class="eng" x="1" y="122" width="111" height="76" rx="12"/>
-      <text class="h3" x="56" y="154" text-anchor="middle">本地解析</text>
-      <text class="s" x="56" y="175" text-anchor="middle">招标文件 → 文本</text>
-      <line class="ar" x1="112" y1="160" x2="140" y2="160" marker-end="url(#ah2)"/>
+      <!-- 父 → 子：派活 / 交产物 -->
+      <line class="bus" x1="574.5" y1="112" x2="574.5" y2="132"/>
+      <line class="bus" x1="108.5" y1="132" x2="1042" y2="132"/>
+      <text class="lab" x="225" y="156" text-anchor="middle">↓ 派活：岗位契约 + 本岗输入</text>
+      <text class="lab" x="925" y="156" text-anchor="middle">↑ 交产物：父 Agent 验收后才落盘</text>
 
-      <!-- 响应规划 Agent -->
-      <rect class="agt" x="142" y="100" width="156" height="120" rx="12"/>
-      <text class="h3" x="158" y="129">响应规划</text>
-      <rect class="tagb" x="232" y="115" width="50" height="19" rx="6"/>
-      <text class="tagt" x="257" y="128.5" text-anchor="middle">Agent</text>
-      <text class="s" x="158" y="156">组成 · 评分点 · 废标</text>
-      <text class="s" x="158" y="177">输出章节依赖图</text>
-      <text class="s" x="158" y="198">JSON 契约校验</text>
-      <line class="ar" x1="298" y1="160" x2="324" y2="160" marker-end="url(#ah2)"/>
+      <!-- 子 Agent × 5 类 -->
+      <line class="bus" x1="108.5" y1="132" x2="108.5" y2="164" marker-end="url(#ah3)"/>
+      <rect class="card" x="0" y="166" width="217" height="244" rx="14"/>
+      <rect class="step" x="14" y="179" width="62" height="22" rx="11"/>
+      <text class="stept" x="25" y="194">第 1 步</text>
+      <text class="ct" x="16" y="230">规划 Agent</text>
+      <text class="cnt" x="201" y="230" text-anchor="end">×1</text>
+      <text class="role" x="16" y="256">读懂招标，定出目录</text>
+      <line class="hr" x1="16" y1="270" x2="201" y2="270"/>
+      <text class="k" x="16" y="292">输入</text>
+      <text class="v" x="50" y="292">招标解析版 · 你的要求</text>
+      <text class="k" x="16" y="334">产出</text>
+      <text class="v" x="50" y="334">组成 · 评分矩阵 · 废标清单</text>
+      <text class="v" x="50" y="352">章节依赖图（JSON）</text>
+      <text class="k" x="16" y="376">验收</text>
+      <text class="v" x="50" y="376">JSON 合法 · 1–12 章</text>
+      <text class="v" x="50" y="394">依赖无环</text>
+      <line class="bus" x1="341.5" y1="132" x2="341.5" y2="164" marker-end="url(#ah3)"/>
+      <rect class="card" x="233" y="166" width="217" height="244" rx="14"/>
+      <rect class="step" x="247" y="179" width="134" height="22" rx="11"/>
+      <text class="stept" x="258" y="194">第 2 步 · 并行 ≤4 路</text>
+      <text class="ct" x="249" y="230">撰写 Agent</text>
+      <text class="cnt" x="434" y="230" text-anchor="end">×N</text>
+      <text class="role" x="249" y="256">每章一个，只写本章</text>
+      <line class="hr" x1="249" y1="270" x2="434" y2="270"/>
+      <text class="k" x="249" y="292">输入</text>
+      <text class="v" x="283" y="292">本章评分点 · 相关素材</text>
+      <text class="v" x="283" y="310">其他章已用的小标题</text>
+      <text class="k" x="249" y="334">产出</text>
+      <text class="v" x="283" y="334">本章正文（≥3500 字）</text>
+      <text class="k" x="249" y="376">验收</text>
+      <text class="v" x="283" y="376">够长 · 无复读循环</text>
+      <text class="v" x="283" y="394">被截断自动续写</text>
+      <line class="bus" x1="574.5" y1="132" x2="574.5" y2="164" marker-end="url(#ah3)"/>
+      <rect class="card" x="466" y="166" width="217" height="244" rx="14"/>
+      <rect class="step" x="480" y="179" width="98" height="22" rx="11"/>
+      <text class="stept" x="491" y="194">第 2 步 · 并行</text>
+      <text class="ct" x="482" y="230">偏离表 Agent</text>
+      <text class="cnt" x="667" y="230" text-anchor="end">×2</text>
+      <text class="role" x="482" y="256">技术、商务各一个</text>
+      <line class="hr" x1="482" y1="270" x2="667" y2="270"/>
+      <text class="k" x="482" y="292">输入</text>
+      <text class="v" x="516" y="292">招标条款 · 能力表等素材</text>
+      <text class="k" x="482" y="334">产出</text>
+      <text class="v" x="516" y="334">技术应答偏离表</text>
+      <text class="v" x="516" y="352">商务偏离表（逐条成表）</text>
+      <text class="k" x="482" y="376">验收</text>
+      <text class="v" x="516" y="376">交付门禁核两表齐全</text>
+      <line class="bus" x1="807.5" y1="132" x2="807.5" y2="164" marker-end="url(#ah3)"/>
+      <rect class="card" x="699" y="166" width="217" height="244" rx="14"/>
+      <rect class="step" x="713" y="179" width="122" height="22" rx="11"/>
+      <text class="stept" x="724" y="194">第 3 步 · 标准模式</text>
+      <text class="ct" x="715" y="230">复核 Agent</text>
+      <text class="cnt" x="900" y="230" text-anchor="end">×1</text>
+      <text class="role" x="715" y="256">像评委一样挑错</text>
+      <line class="hr" x1="715" y1="270" x2="900" y2="270"/>
+      <text class="k" x="715" y="292">输入</text>
+      <text class="v" x="749" y="292">整册 · 评分矩阵 · 废标清单</text>
+      <text class="k" x="715" y="334">产出</text>
+      <text class="v" x="749" y="334">结论 + 问题表</text>
+      <text class="v" x="749" y="352">（必办 / 建议）</text>
+      <text class="k" x="715" y="376">验收</text>
+      <text class="v" x="749" y="376">必办 → 红牌</text>
+      <text class="v" x="749" y="394">一键只重写那一章</text>
+      <line class="bus dash" x1="1042.0" y1="132" x2="1042.0" y2="164" marker-end="url(#ah3)"/>
+      <rect class="card dash" x="932" y="166" width="220" height="244" rx="14"/>
+      <rect class="step" x="946" y="179" width="146" height="22" rx="11"/>
+      <text class="stept" x="957" y="194">素材入库时 · 每图一次</text>
+      <text class="ct" x="948" y="230">识图 Agent</text>
+      <text class="role" x="948" y="256">看图打标，建图片索引</text>
+      <line class="hr" x1="948" y1="270" x2="1136" y2="270"/>
+      <text class="k" x="948" y="292">输入</text>
+      <text class="v" x="982" y="292">素材库里的每张图</text>
+      <text class="k" x="948" y="334">产出</text>
+      <text class="v" x="982" y="334">类别 · 图注 · OCR</text>
+      <text class="v" x="982" y="352">落位锚点</text>
+      <text class="k" x="948" y="376">验收</text>
+      <text class="v" x="982" y="376">必须是合法 JSON</text>
+      <text class="v" x="982" y="394">坏了换问法重试</text>
 
-      <!-- 人工确认 -->
-      <rect class="hum" x="326" y="128" width="92" height="64" rx="12"/>
-      <text class="h3" x="372" y="156" text-anchor="middle">人工确认</text>
-      <text class="s" x="372" y="177" text-anchor="middle">关键信息·可选</text>
-
-      <!-- 扇出 -->
-      <line class="fan" x1="418" y1="160" x2="428" y2="160"/>
-      <path class="fan" d="M428,160 C442,160 440,69 454,69" marker-end="url(#ah2)"/>
-      <path class="fan" d="M428,160 C442,160 440,115 454,115" marker-end="url(#ah2)"/>
-      <path class="fan" d="M428,160 L454,161" marker-end="url(#ah2)"/>
-      <path class="fan" d="M428,160 C442,160 440,207 454,207" marker-end="url(#ah2)"/>
-      <path class="fan" d="M428,160 C442,160 440,253 454,253" marker-end="url(#ah2)"/>
-
-      <!-- 撰写 Agent × N（并行） -->
-      <text class="labm" x="552" y="38" text-anchor="middle">并行 · 最多 4 路在飞，写完即补位</text>
-      <rect class="agt" x="456" y="50" width="192" height="38" rx="10"/><text class="s2 ink" x="472" y="74">撰写 Agent · 第 1 章</text>
-      <rect class="agt" x="456" y="96" width="192" height="38" rx="10"/><text class="s2 ink" x="472" y="120">撰写 Agent · 第 2 章</text>
-      <rect class="agt dash" x="456" y="142" width="192" height="38" rx="10"/><text class="s2 ink" x="472" y="166">撰写 Agent · 第 3…N 章</text>
-      <rect class="agt" x="456" y="188" width="192" height="38" rx="10"/><text class="s2 ink" x="472" y="212">技术偏离表 Agent</text>
-      <rect class="agt" x="456" y="234" width="192" height="38" rx="10"/><text class="s2 ink" x="472" y="258">商务偏离表 Agent</text>
-
-      <!-- 扇入 -->
-      <path class="fan" d="M648,69 C668,69 666,160 682,160"/>
-      <path class="fan" d="M648,115 C668,115 666,160 682,160"/>
-      <path class="fan" d="M648,161 L682,160"/>
-      <path class="fan" d="M648,207 C668,207 666,160 682,160"/>
-      <path class="fan" d="M648,253 C668,253 666,160 682,160"/>
-      <line class="ar" x1="682" y1="160" x2="690" y2="160" marker-end="url(#ah2)"/>
-
-      <!-- 本地汇总 -->
-      <rect class="eng" x="692" y="110" width="120" height="100" rx="12"/>
-      <text class="h3" x="752" y="138" text-anchor="middle">本地汇总</text>
-      <text class="s" x="752" y="160" text-anchor="middle">拼成整册</text>
-      <text class="s" x="752" y="179" text-anchor="middle">+ 评标索引</text>
-      <text class="s" x="752" y="198" text-anchor="middle">+ 补料清单</text>
-      <line class="ar" x1="812" y1="160" x2="842" y2="160" marker-end="url(#ah2)"/>
-
-      <!-- 模型复核 Agent -->
-      <rect class="agt" x="844" y="110" width="130" height="100" rx="12"/>
-      <text class="h3" x="858" y="138">模型复核</text>
-      <rect class="tagb" x="924" y="124" width="44" height="19" rx="6"/>
-      <text class="tagt" x="946" y="137.5" text-anchor="middle">Agent</text>
-      <text class="s" x="858" y="166">标准模式启用</text>
-      <text class="s" x="858" y="186">列出必办问题</text>
-      <line class="ar" x1="974" y1="160" x2="1002" y2="160" marker-end="url(#ah2)"/>
-
-      <!-- 出 Word + 门禁 -->
-      <rect class="eng" x="1004" y="110" width="147" height="100" rx="12"/>
-      <text class="h3" x="1078" y="138" text-anchor="middle">出 Word</text>
-      <text class="s" x="1078" y="162" text-anchor="middle">格式自检 · 交付门禁</text>
-      <text class="s" x="1078" y="182" text-anchor="middle">没过不算完成</text>
-      <line class="ar" x1="1078" y1="210" x2="1078" y2="226" marker-end="url(#ah2)"/>
-      <rect class="okb" x="1026" y="228" width="104" height="30" rx="15"/>
-      <text class="okt" x="1078" y="248" text-anchor="middle">✓ 可交付</text>
-
-      <!-- 回路：必办问题 → 单章重写 -->
-      <path class="loop" d="M909,210 L909,296 L552,296 L552,277" marker-end="url(#ahm2)"/>
-      <text class="labm" x="730" y="316" text-anchor="middle">必办问题 → 一键只重写那一章，其余章节不动</text>
+      <!-- 三条规则 -->
+      <rect class="rule" x="0.0" y="426" width="373" height="42" rx="12"/>
+      <text x="18.0" y="452"><tspan class="rt">只有一层</tspan><tspan class="rd" dx="12">子 Agent 不能再派子 Agent</tspan></text>
+      <rect class="rule" x="389.5" y="426" width="373" height="42" rx="12"/>
+      <text x="407.5" y="452"><tspan class="rt">不碰文件</tspan><tspan class="rd" dx="12">读写都由父 Agent 代办</tspan></text>
+      <rect class="rule" x="779.0" y="426" width="373" height="42" rx="12"/>
+      <text x="797.0" y="452"><tspan class="rt">互不串台</tspan><tspan class="rd" dx="12">各自独立上下文，只经父 Agent 交接</tspan></text>
     </svg>
   </div>
-  <div class="principles">
-    <div class="pc"><b>① 主控是代码，不是模型</b><span>拆分、依赖、并发、重试都由引擎决定；Agent 只管写好自己那一段</span></div>
-    <div class="pc"><b>② 文件即接口</b><span>只读声明的输入、只写声明的输出；校验通过才交给下一棒</span></div>
-    <div class="pc"><b>③ 上下文不串台</b><span>每个 Agent 独立短会话，只喂本章评分点和相关素材</span></div>
-  </div>
   <aside class="notes">
-    <p>多 Agent 怎么编排？一句话：<b>引擎当主控，每个 Agent 只干一件事。</b></p>
-    <p>本地先解析招标文件；<b>规划 Agent</b> 拆出组成、评分点、废标项，输出一张带依赖的章节图；（可选）人工确认关键信息后，<b>撰写 Agent</b> 按章并行，偏离表也各由一个 Agent 负责——最多 4 路同时在飞，写完一章立刻补位。</p>
-    <p>汇总交给本地脚本；标准模式再加一个<b>复核 Agent</b>，挑出必办问题，一键只重写那一章。Agent 之间不聊天，<b>只通过文件交接</b>，校验通过才交给下一棒。</p>
+    <p>多 Agent 是<b>一父多子</b>。</p>
+    <p><b>父 Agent 就是我们的本地引擎</b>——它是代码，不是大模型：解析、排班、派活、验收，不合格只重派那一个，最后汇总、出 Word。</p>
+    <p><b>子 Agent 有 5 类</b>：<b>规划</b> 1 个，读懂招标、定目录；<b>撰写</b>每章 1 个，最多 4 路并行；<b>偏离表</b>技术、商务各 1 个；<b>复核</b> 1 个，像评委一样挑错；素材入库时还有<b>识图 Agent</b>，看图打标。</p>
+    <p>规则三条：<b>只有一层、不碰文件、互不串台</b>——子 Agent 只交产物，父 Agent 验收通过才落盘。</p>
+    <p class="qa">被问到可答：岗位设计来自技能包 bid-multiagent 的 12 个岗位；产品里汇总、配图复核、出 Word 这些岗位已换成确定性脚本，只有需要“写”和“判断”的岗位交给子 Agent。</p>
   </aside>
 </section>
 
