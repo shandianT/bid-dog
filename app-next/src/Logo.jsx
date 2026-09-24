@@ -2,5 +2,5 @@
 import React from 'react';
 
 export default function Logo({ size = 26, className, title = '中标狗' }){
-  return <img className={className} src="/logo.png" width={size} height={size} alt={title} draggable={false} />;
+  return <img className={className} src={`${import.meta.env.BASE_URL}logo.png`} width={size} height={size} alt={title} draggable={false} />;
 }
